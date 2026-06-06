@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::display::{DisplayRefreshMode, EpaperDisplay, MockDisplay};
 use crate::render::{render_photo_page, RenderInput, RenderStatusHint};
+use std::fmt::Arguments;
 use std::path::Path;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -44,10 +45,23 @@ pub fn run_self_test(config_path: impl AsRef<Path>) -> SelfTestReport {
 }
 
 pub fn print_self_test_report(report: &SelfTestReport) {
-    println!("epaper-album self-test");
-    println!("config: {}", report.config.label());
-    println!("render refresh count: {}", report.render.refresh_count);
-    println!("render sleep: {}", report.render.slept);
+    print_report_line(format_args!("epaper-album self-test"));
+    print_report_line(format_args!("config: {}", report.config.label()));
+    print_report_line(format_args!(
+        "render refresh count: {}",
+        report.render.refresh_count
+    ));
+    print_report_line(format_args!("render sleep: {}", report.render.slept));
+}
+
+#[cfg(target_os = "espidf")]
+fn print_report_line(args: Arguments<'_>) {
+    log::info!(target: "epaper_album", "{}", args);
+}
+
+#[cfg(not(target_os = "espidf"))]
+fn print_report_line(args: Arguments<'_>) {
+    println!("{}", args);
 }
 
 fn probe_config(config_path: &Path) -> ConfigProbe {
