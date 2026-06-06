@@ -1,5 +1,7 @@
 use crate::config::Config;
+#[cfg(not(target_os = "espidf"))]
 use crate::display::{DisplayRefreshMode, EpaperDisplay, MockDisplay};
+#[cfg(not(target_os = "espidf"))]
 use crate::render::{render_photo_page, RenderInput, RenderStatusHint};
 use std::fmt::Arguments;
 use std::path::Path;
@@ -77,19 +79,31 @@ fn probe_config(config_path: &Path) -> ConfigProbe {
 }
 
 fn probe_render() -> RenderProbe {
-    let frame = render_photo_page(
-        &RenderInput::new("SELF TEST", "2026-06-07").with_status_hint(RenderStatusHint::Offline),
-    );
-    let mut display = MockDisplay::new();
-
-    if display.init().is_ok() {
-        let _ = display.refresh(&frame, DisplayRefreshMode::Full);
-        let _ = display.sleep();
+    #[cfg(target_os = "espidf")]
+    {
+        return RenderProbe {
+            refresh_count: 0,
+            slept: false,
+        };
     }
 
-    RenderProbe {
-        refresh_count: display.refresh_count(),
-        slept: display.is_sleeping(),
+    #[cfg(not(target_os = "espidf"))]
+    {
+        let frame = render_photo_page(
+            &RenderInput::new("SELF TEST", "2026-06-07")
+                .with_status_hint(RenderStatusHint::Offline),
+        );
+        let mut display = MockDisplay::new();
+
+        if display.init().is_ok() {
+            let _ = display.refresh(&frame, DisplayRefreshMode::Full);
+            let _ = display.sleep();
+        }
+
+        RenderProbe {
+            refresh_count: display.refresh_count(),
+            slept: display.is_sleeping(),
+        }
     }
 }
 

@@ -64,13 +64,13 @@ cargo +esp run --release --target xtensa-esp32s3-espidf
 cargo +esp espflash flash --release --target xtensa-esp32s3-espidf --monitor --port COM3
 ```
 
-当前固件入口会执行串口自检，输出配置文件探测结果和内存渲染探测结果。烧录后串口监视器会显示类似内容：
+当前固件入口会执行串口自检，输出配置文件探测结果和渲染探测结果。烧录后串口监视器会显示带 ESP-IDF 日志前缀的内容：
 
 ```text
-epaper-album self-test
-config: missing
-render refresh count: 1
-render sleep: true
+I (...) epaper_album: epaper-album self-test
+I (...) epaper_album: config: missing
+I (...) epaper_album: render refresh count: 0
+I (...) epaper_album: render sleep: false
 ```
 
 `config` 的取值包括 `valid`、`incomplete`、`missing`、`parse-error` 和 `read-error`。TF 卡根目录提供 `config.toml` 后，可以通过这一项确认设备端配置文件读取状态。
