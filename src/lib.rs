@@ -1,7 +1,10 @@
 pub mod cache;
 pub mod config;
 pub mod display;
+pub mod epd;
 pub mod error;
+#[cfg(target_os = "espidf")]
+pub mod hardware_selftest;
 pub mod model;
 pub mod power;
 pub mod render;
