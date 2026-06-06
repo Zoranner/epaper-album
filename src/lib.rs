@@ -6,6 +6,7 @@ pub mod model;
 pub mod power;
 pub mod render;
 pub mod schedule;
+pub mod selftest;
 pub mod state;
 
 pub use error::{AlbumError, AlbumResult};
