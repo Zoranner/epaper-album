@@ -68,12 +68,13 @@ cargo +esp espflash flash --release --target xtensa-esp32s3-espidf --monitor --p
 
 ```text
 I (...) epaper_album: epaper-album self-test
+I (...) epaper_album: storage: available
 I (...) epaper_album: config: missing
 I (...) epaper_album: render refresh count: 0
 I (...) epaper_album: render sleep: false
 ```
 
-`config` 的取值包括 `valid`、`incomplete`、`missing`、`parse-error` 和 `read-error`。TF 卡根目录提供 `config.toml` 后，可以通过这一项确认设备端配置文件读取状态。
+`storage` 的取值包括 `available` 和 `mount-error`。`config` 的取值包括 `valid`、`incomplete`、`missing`、`parse-error` 和 `read-error`。TF 卡根目录提供 `config.toml` 后，可以通过这两项确认设备端 TF 卡挂载和配置文件读取状态。
 
 ## 产物说明
 

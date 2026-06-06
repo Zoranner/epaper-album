@@ -3,6 +3,7 @@ use crate::config::Config;
 use crate::display::{DisplayRefreshMode, EpaperDisplay, MockDisplay};
 #[cfg(not(target_os = "espidf"))]
 use crate::render::{render_photo_page, RenderInput, RenderStatusHint};
+use crate::storage::{read_text_file, StorageRead};
 use std::fmt::Arguments;
 use std::path::Path;
 
@@ -28,6 +29,21 @@ impl ConfigProbe {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StorageProbe {
+    Available,
+    MountError,
+}
+
+impl StorageProbe {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::MountError => "mount-error",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RenderProbe {
     pub refresh_count: u32,
     pub slept: bool,
@@ -35,19 +51,27 @@ pub struct RenderProbe {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SelfTestReport {
+    pub storage: StorageProbe,
     pub config: ConfigProbe,
     pub render: RenderProbe,
 }
 
 pub fn run_self_test(config_path: impl AsRef<Path>) -> SelfTestReport {
-    let config = probe_config(config_path.as_ref());
+    let config_read = read_text_file(config_path);
+    let storage = probe_storage(&config_read);
+    let config = probe_config(config_read);
     let render = probe_render();
 
-    SelfTestReport { config, render }
+    SelfTestReport {
+        storage,
+        config,
+        render,
+    }
 }
 
 pub fn print_self_test_report(report: &SelfTestReport) {
     print_report_line(format_args!("epaper-album self-test"));
+    print_report_line(format_args!("storage: {}", report.storage.label()));
     print_report_line(format_args!("config: {}", report.config.label()));
     print_report_line(format_args!(
         "render refresh count: {}",
@@ -66,15 +90,25 @@ fn print_report_line(args: Arguments<'_>) {
     println!("{}", args);
 }
 
-fn probe_config(config_path: &Path) -> ConfigProbe {
-    match std::fs::read_to_string(config_path) {
-        Ok(content) => match toml::from_str::<Config>(&content) {
+fn probe_storage(config_read: &StorageRead) -> StorageProbe {
+    match config_read {
+        StorageRead::MountError => StorageProbe::MountError,
+        StorageRead::Text(_) | StorageRead::Missing | StorageRead::ReadError => {
+            StorageProbe::Available
+        }
+    }
+}
+
+fn probe_config(config_read: StorageRead) -> ConfigProbe {
+    match config_read {
+        StorageRead::Text(content) => match toml::from_str::<Config>(&content) {
             Ok(config) if config.has_required_values() => ConfigProbe::Valid,
             Ok(_) => ConfigProbe::Incomplete,
             Err(_) => ConfigProbe::ParseError,
         },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => ConfigProbe::Missing,
-        Err(_) => ConfigProbe::ReadError,
+        StorageRead::Missing => ConfigProbe::Missing,
+        StorageRead::ReadError => ConfigProbe::ReadError,
+        StorageRead::MountError => ConfigProbe::ReadError,
     }
 }
 
@@ -115,6 +149,7 @@ mod tests {
     fn reports_missing_config_and_keeps_render_probe_ready() {
         let report = run_self_test("missing-config.toml");
 
+        assert_eq!(report.storage, StorageProbe::Available);
         assert_eq!(report.config, ConfigProbe::Missing);
         assert_eq!(report.render.refresh_count, 1);
         assert!(report.render.slept);
@@ -137,6 +172,7 @@ secret-key = "local-secret-key"
 
         let report = run_self_test(&config_path);
 
+        assert_eq!(report.storage, StorageProbe::Available);
         assert_eq!(report.config, ConfigProbe::Valid);
     }
 

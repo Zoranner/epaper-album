@@ -8,5 +8,6 @@ pub mod render;
 pub mod schedule;
 pub mod selftest;
 pub mod state;
+pub mod storage;
 
 pub use error::{AlbumError, AlbumResult};
