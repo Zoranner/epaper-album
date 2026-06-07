@@ -75,7 +75,15 @@ I (...) epaper_album: render refresh count: 0
 I (...) epaper_album: render sleep: false
 ```
 
-`storage` 的取值包括 `available` 和 `mount-error`。`config` 的取值包括 `valid`、`incomplete`、`missing`、`parse-error` 和 `read-error`。`epd` 的取值包括 `refreshed`、`init-error`、`busy-timeout` 和 `transport-error`。TF 卡根目录提供 `config.toml` 后，可以通过串口输出确认设备端 TF 卡挂载、配置文件读取和屏幕刷新状态。
+`storage` 的取值包括 `available` 和 `mount-error`。`config` 的取值包括 `valid`、`incomplete`、`missing`、`parse-error` 和 `read-error`。`epd` 的取值包括 `refreshed`、`photo-refreshed`、`image-format-error`、`image-read-error`、`init-error`、`busy-timeout` 和 `transport-error`。TF 卡根目录提供 `config.toml` 后，可以通过串口输出确认设备端 TF 卡挂载、配置文件读取和屏幕刷新状态。
+
+TF 卡根目录提供 `test.bmp` 后，设备会优先刷这张图片，并输出 `epd: photo-refreshed`。`test.bmp` 使用 `800x480`、24-bit、未压缩 BMP。仓库提供桌面照片处理脚本，可以把桌面 `sample.jpg` 转成六色屏测试图：
+
+```powershell
+.\scripts\prepare-test-bmp.ps1
+```
+
+脚本默认输出到桌面 `test.bmp`，复制到 TF 卡根目录后重新烧录或重启设备即可执行照片刷屏自检。
 
 ## 产物说明
 

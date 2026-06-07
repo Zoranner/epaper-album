@@ -23,6 +23,10 @@ const INIT_SEQUENCE: &[(u8, &[u8])] = &[
 ];
 
 const BOOSTER_SOFT_START: &[u8] = &[0x6F, 0x1F, 0x17, 0x49];
+#[cfg(target_os = "espidf")]
+const BUSY_POLL_INTERVAL_MS: u32 = 10;
+#[cfg(target_os = "espidf")]
+const BUSY_POLL_ATTEMPTS: usize = 18_000;
 const TEST_BARS: [Color; 6] = [
     Color::White,
     Color::Black,
@@ -58,9 +62,11 @@ pub trait EpdBus {
 }
 
 pub fn run_epd_hardware_self_test(bus: &mut impl EpdBus) -> Result<(), EpdError> {
-    init_panel(bus)?;
-    write_test_pattern(bus)?;
-    refresh_and_power_off(bus)
+    run_epd_frame(bus, |panel_y, row| {
+        let source_y = EPD_HEIGHT - 1 - panel_y;
+        fill_test_pattern_row(source_y, row);
+        Ok(())
+    })
 }
 
 pub fn epd_color_code(color: Color) -> u8 {
@@ -91,24 +97,37 @@ fn init_panel(bus: &mut impl EpdBus) -> Result<(), EpdError> {
     }
 
     bus.command(0x04)?;
+    bus.delay_ms(100);
     bus.wait_until_ready()
 }
 
-fn write_test_pattern(bus: &mut impl EpdBus) -> Result<(), EpdError> {
+fn run_epd_frame(
+    bus: &mut impl EpdBus,
+    mut fill_panel_row: impl FnMut(usize, &mut [u8; EPD_ROW_BYTES]) -> Result<(), EpdError>,
+) -> Result<(), EpdError> {
+    init_panel(bus)?;
+
     let mut row = [0u8; EPD_ROW_BYTES];
     bus.command(0x10)?;
 
     for panel_y in 0..EPD_HEIGHT {
-        let source_y = EPD_HEIGHT - 1 - panel_y;
-        fill_test_pattern_row(source_y, &mut row);
+        fill_panel_row(panel_y, &mut row)?;
         bus.data(&row)?;
     }
 
-    Ok(())
+    refresh_and_power_off(bus)
+}
+
+pub fn run_epd_prepacked_frame(
+    bus: &mut impl EpdBus,
+    mut fill_panel_row: impl FnMut(usize, &mut [u8; EPD_ROW_BYTES]) -> Result<(), EpdError>,
+) -> Result<(), EpdError> {
+    run_epd_frame(bus, |panel_y, row| fill_panel_row(panel_y, row))
 }
 
 fn refresh_and_power_off(bus: &mut impl EpdBus) -> Result<(), EpdError> {
     bus.command(0x04)?;
+    bus.delay_ms(100);
     bus.wait_until_ready()?;
 
     bus.command(0x06)?;
@@ -116,10 +135,12 @@ fn refresh_and_power_off(bus: &mut impl EpdBus) -> Result<(), EpdError> {
 
     bus.command(0x12)?;
     bus.data(&[0x00])?;
+    bus.delay_ms(100);
     bus.wait_until_ready()?;
 
     bus.command(0x02)?;
     bus.data(&[0x00])?;
+    bus.delay_ms(100);
     bus.wait_until_ready()
 }
 
@@ -133,7 +154,7 @@ fn fill_test_pattern_row(y: usize, row: &mut [u8; EPD_ROW_BYTES]) {
 
 #[cfg(target_os = "espidf")]
 pub mod espidf {
-    use super::{EpdBus, EpdError};
+    use super::{EpdBus, EpdError, BUSY_POLL_ATTEMPTS, BUSY_POLL_INTERVAL_MS};
     use esp_idf_hal::delay::FreeRtos;
     use esp_idf_hal::gpio::{
         AnyOutputPin, Gpio12, Gpio13, Gpio8, Gpio9, Input, Output, PinDriver, Pull,
@@ -201,12 +222,12 @@ pub mod espidf {
         }
 
         fn wait_until_ready(&mut self) -> Result<(), EpdError> {
-            for _ in 0..3000 {
+            for _ in 0..BUSY_POLL_ATTEMPTS {
                 if self.busy.is_high() {
                     return Ok(());
                 }
 
-                FreeRtos::delay_ms(10);
+                FreeRtos::delay_ms(BUSY_POLL_INTERVAL_MS);
             }
 
             Err(EpdError::BusyTimeout)
@@ -317,9 +338,11 @@ mod tests {
         assert!(bus.events.ends_with(&[
             MockEvent::Command(0x12),
             MockEvent::Data(vec![0x00]),
+            MockEvent::Delay(100),
             MockEvent::Wait,
             MockEvent::Command(0x02),
             MockEvent::Data(vec![0x00]),
+            MockEvent::Delay(100),
             MockEvent::Wait,
         ]));
     }

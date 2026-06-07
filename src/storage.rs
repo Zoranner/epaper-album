@@ -6,6 +6,15 @@ pub enum StorageRead {
     ReadError,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StorageBinaryRead {
+    Bytes(Vec<u8>),
+    Missing,
+    FormatError,
+    MountError,
+    ReadError,
+}
+
 #[cfg(not(target_os = "espidf"))]
 pub fn read_text_file(path: impl AsRef<std::path::Path>) -> StorageRead {
     read_host_text_file(path.as_ref())
@@ -80,7 +89,7 @@ pub fn read_espidf_text_file_with_sdmmc(
 
 #[cfg(target_os = "espidf")]
 #[allow(clippy::too_many_arguments)]
-fn with_mounted_sdcard_parts<T>(
+pub fn with_mounted_sdcard_parts<T>(
     sdmmc: esp_idf_svc::hal::sd::mmc::SDMMC1<'static>,
     cmd: esp_idf_svc::hal::gpio::Gpio41<'static>,
     clk: esp_idf_svc::hal::gpio::Gpio39<'static>,
