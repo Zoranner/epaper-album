@@ -51,6 +51,13 @@ pub struct ImageRemarkPayload {
     pub remark: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct TextImagePayload {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ApiResponse<T: Serialize> {
     pub code: u16,

@@ -34,6 +34,7 @@ async fn main() -> anyhow::Result<()> {
         admin_token: config.admin_token,
         data_dir: "data".into(),
         enqueue_processing: true,
+        text_font_path: config.text_font_path,
     };
     routes::recover_and_enqueue_pending(&state).await?;
     let app = routes::router(state).layer(CorsLayer::permissive());

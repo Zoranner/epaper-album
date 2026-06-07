@@ -28,6 +28,10 @@ struct TestApp {
 }
 
 async fn test_app() -> TestApp {
+    test_app_with_text_font(None).await
+}
+
+async fn test_app_with_text_font(text_font_path: Option<PathBuf>) -> TestApp {
     let id = TEST_ID.fetch_add(1, Ordering::Relaxed);
     let data_dir = std::env::temp_dir().join(format!(
         "epaper-album-server-test-{}-{id}",
@@ -52,6 +56,7 @@ async fn test_app() -> TestApp {
         admin_token: admin_token.clone(),
         data_dir: data_dir.clone(),
         enqueue_processing: false,
+        text_font_path,
     };
 
     TestApp {
@@ -166,6 +171,18 @@ fn multipart_body(boundary: &str, image: &[u8], remark: Option<&str>) -> Vec<u8>
 
 fn write_display_file(data_dir: &Path, sha256: &str, bytes: &[u8]) {
     std::fs::write(data_dir.join("display").join(sha256), bytes).expect("write display file");
+}
+
+fn test_font_path() -> Option<PathBuf> {
+    [
+        r"C:\Windows\Fonts\msyh.ttc",
+        r"C:\Windows\Fonts\simhei.ttf",
+        r"C:\Windows\Fonts\arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .find(|path| path.exists())
 }
 
 #[tokio::test]
@@ -602,4 +619,81 @@ async fn download_returns_ready_bmp_and_404_does_not_change_status() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(value["code"], 404);
     assert_eq!(image_status(&app.pool, &missing_file_sha).await, "ready");
+}
+
+#[tokio::test]
+async fn text_image_requires_configured_font_and_valid_kind() {
+    let app = test_app().await;
+
+    let body = json!({ "type": "title", "text": "测试标题" });
+    let (status, value) = request_json(
+        app.app.clone(),
+        admin_request(&app, "/api/text-images")
+            .method("POST")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(value["code"], 500);
+    assert_eq!(value["data"], Value::Null);
+
+    let app = test_app_with_text_font(Some(PathBuf::from("missing-font.ttf"))).await;
+    let body = json!({ "type": "badge", "text": "测试标题" });
+    let (status, value) = request_json(
+        app.app.clone(),
+        admin_request(&app, "/api/text-images")
+            .method("POST")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(value["code"], 400);
+}
+
+#[tokio::test]
+async fn text_image_returns_bmp_when_font_is_configured() {
+    let Some(font_path) = test_font_path() else {
+        eprintln!("skip text image success test: no known system font");
+        return;
+    };
+    let app = test_app_with_text_font(Some(font_path)).await;
+
+    let response = app
+        .app
+        .clone()
+        .oneshot(
+            user_request("/api/text-images")
+                .method("POST")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "type": "date", "text": "2026-06-07" }).to_string(),
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE),
+        Some(&"image/bmp".parse().expect("content type"))
+    );
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collect body")
+        .to_bytes();
+    assert!(bytes.starts_with(b"BM"));
+
+    let image = image::load_from_memory(&bytes)
+        .expect("decode text image bmp")
+        .to_rgba8();
+    assert!(image
+        .pixels()
+        .all(|pixel| { matches!(pixel.0, [0, 0, 0, 255] | [255, 255, 255, 255]) }));
 }

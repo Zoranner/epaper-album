@@ -7,6 +7,7 @@ edition = "2021"
 anyhow = "1"
 axum = { version = "0.7", features = ["macros", "multipart"] }
 chrono = "0.4"
+fontdue = "0.9"
 hex = "0.4"
 image = { version = "0.25", default-features = false, features = ["bmp", "jpeg", "png"] }
 serde = { version = "1", features = ["derive"] }

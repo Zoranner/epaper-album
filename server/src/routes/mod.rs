@@ -14,8 +14,13 @@ use axum::{
     Json, Router,
 };
 use chrono::{Duration, Local, NaiveDate};
+use fontdue::{
+    layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle},
+    Font, FontSettings,
+};
 use image::{
     imageops::FilterType, DynamicImage, GenericImage, GenericImageView, ImageFormat, Rgba,
+    RgbaImage,
 };
 use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, Mutex};
@@ -26,6 +31,7 @@ use crate::{
     error::AppError,
     models::{
         null_data, ApiResponse, ImageRemarkPayload, LoginRequest, LoginResponse, PlanPayload,
+        TextImagePayload,
     },
 };
 
@@ -41,6 +47,20 @@ pub struct AppState {
     pub admin_token: String,
     pub data_dir: PathBuf,
     pub enqueue_processing: bool,
+    pub text_font_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TextImageKind {
+    Title,
+    Date,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TextImageStyle {
+    font_size: f32,
+    padding_x: u32,
+    padding_y: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -77,6 +97,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/plans/:id", put(update_plan).delete(delete_plan))
         .route("/api/images", get(list_images).post(upload_image))
         .route("/api/images/:sha256", put(update_image))
+        .route("/api/text-images", post(create_text_image))
         .route("/images/:sha256", get(download_image))
         .fallback_service(ServeDir::new("web/dist").append_index_html_on_directories(true))
         .with_state(runtime)
@@ -325,6 +346,28 @@ async fn download_image(
     Ok(([(header::CONTENT_TYPE, "image/bmp")], bytes))
 }
 
+async fn create_text_image(
+    State(state): State<RuntimeState>,
+    headers: HeaderMap,
+    Json(payload): Json<TextImagePayload>,
+) -> Result<impl IntoResponse, AppError> {
+    require_any_permission(&headers, &state.app)?;
+    let kind = validate_text_image_payload(&payload)?;
+    let font_path =
+        state.app.text_font_path.clone().ok_or_else(|| {
+            AppError::Internal(anyhow::anyhow!("TEXT_FONT_PATH is not configured"))
+        })?;
+    let font_bytes = tokio::fs::read(font_path)
+        .await
+        .map_err(|error| AppError::Internal(error.into()))?;
+    let text = payload.text.trim().to_string();
+    let bmp = tokio::task::spawn_blocking(move || render_text_image_bmp(kind, &text, font_bytes))
+        .await
+        .map_err(|error| AppError::Internal(error.into()))??;
+
+    Ok(([(header::CONTENT_TYPE, "image/bmp")], bmp))
+}
+
 async fn enqueue_image(state: &RuntimeState, sha256: String) {
     let Some(queue) = &state.queue else {
         return;
@@ -398,6 +441,90 @@ fn render_display_bmp(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     let mut output = Cursor::new(Vec::new());
     paletted.write_to(&mut output, ImageFormat::Bmp)?;
     Ok(output.into_inner())
+}
+
+fn render_text_image_bmp(
+    kind: TextImageKind,
+    text: &str,
+    font_bytes: Vec<u8>,
+) -> anyhow::Result<Vec<u8>> {
+    let style = text_image_style(kind);
+    let font = Font::from_bytes(font_bytes, FontSettings::default())
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let fonts = &[font];
+    let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
+    layout.reset(&LayoutSettings {
+        x: style.padding_x as f32,
+        y: style.padding_y as f32,
+        ..LayoutSettings::default()
+    });
+    layout.append(fonts, &TextStyle::new(text, style.font_size, 0));
+
+    let glyphs = layout.glyphs();
+    let text_width = glyphs
+        .iter()
+        .map(|glyph| (glyph.x + glyph.width as f32).ceil() as i32)
+        .max()
+        .unwrap_or(style.padding_x as i32);
+    let text_height = glyphs
+        .iter()
+        .map(|glyph| (glyph.y + glyph.height as f32).ceil() as i32)
+        .max()
+        .unwrap_or(style.padding_y as i32);
+    let width = (text_width.max(style.padding_x as i32) as u32 + style.padding_x).max(1);
+    let height = (text_height.max(style.padding_y as i32) as u32 + style.padding_y).max(1);
+    let mut image = RgbaImage::from_pixel(width, height, Rgba([255, 255, 255, 255]));
+
+    for glyph in glyphs {
+        let (metrics, bitmap) = fonts[glyph.font_index].rasterize_config(glyph.key);
+        let left = glyph.x.round() as i32;
+        let top = glyph.y.round() as i32;
+
+        for y in 0..metrics.height {
+            for x in 0..metrics.width {
+                let coverage = bitmap[y * metrics.width + x];
+                if coverage == 0 {
+                    continue;
+                }
+
+                let target_x = left + x as i32;
+                let target_y = top + y as i32;
+                if target_x < 0
+                    || target_y < 0
+                    || target_x >= width as i32
+                    || target_y >= height as i32
+                {
+                    continue;
+                }
+
+                let value = if coverage >= 128 { 0 } else { 255 };
+                image.put_pixel(
+                    target_x as u32,
+                    target_y as u32,
+                    Rgba([value, value, value, 255]),
+                );
+            }
+        }
+    }
+
+    let mut output = Cursor::new(Vec::new());
+    DynamicImage::ImageRgba8(image).write_to(&mut output, ImageFormat::Bmp)?;
+    Ok(output.into_inner())
+}
+
+fn text_image_style(kind: TextImageKind) -> TextImageStyle {
+    match kind {
+        TextImageKind::Title => TextImageStyle {
+            font_size: 36.0,
+            padding_x: 16,
+            padding_y: 10,
+        },
+        TextImageKind::Date => TextImageStyle {
+            font_size: 24.0,
+            padding_x: 10,
+            padding_y: 8,
+        },
+    }
 }
 
 fn fit_to_display(image: DynamicImage) -> DynamicImage {
@@ -545,6 +672,30 @@ fn validate_sha256(value: &str) -> Result<(), AppError> {
     } else {
         Err(AppError::BadRequest(format!("Invalid sha256: {value}")))
     }
+}
+
+fn validate_text_image_payload(payload: &TextImagePayload) -> Result<TextImageKind, AppError> {
+    let kind = match payload.kind.as_str() {
+        "title" => TextImageKind::Title,
+        "date" => TextImageKind::Date,
+        value => {
+            return Err(AppError::BadRequest(format!(
+                "Invalid text image type: {value}"
+            )))
+        }
+    };
+    let text = payload.text.trim();
+    if text.is_empty() {
+        return Err(AppError::BadRequest(
+            "text image text cannot be empty".to_string(),
+        ));
+    }
+    if text.chars().count() > 64 {
+        return Err(AppError::BadRequest(
+            "text image text cannot exceed 64 characters".to_string(),
+        ));
+    }
+    Ok(kind)
 }
 
 fn map_store_error(error: anyhow::Error) -> AppError {

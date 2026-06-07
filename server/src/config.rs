@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, path::PathBuf};
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
@@ -8,6 +8,7 @@ pub struct AppConfig {
     pub admin_username: String,
     pub admin_password: String,
     pub admin_token: String,
+    pub text_font_path: Option<PathBuf>,
 }
 
 impl AppConfig {
@@ -25,6 +26,11 @@ impl AppConfig {
         let admin_password =
             std::env::var("ADMIN_PASSWORD").unwrap_or_else(|_| "admin".to_string());
         let admin_token = uuid::Uuid::new_v4().to_string();
+        let text_font_path = std::env::var("TEXT_FONT_PATH")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from);
 
         Ok(Self {
             listen_addr: SocketAddr::from(([0, 0, 0, 0], port)),
@@ -33,6 +39,7 @@ impl AppConfig {
             admin_username,
             admin_password,
             admin_token,
+            text_font_path,
         })
     }
 }
