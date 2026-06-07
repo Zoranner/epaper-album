@@ -5,15 +5,10 @@ meta {
 }
 
 get {
-  url: {{baseUrl}}/api/sprite
+  url: {{baseUrl}}/api/sprite?type={{spriteType}}&text={{spriteText}}
 }
 
 headers {
   secret-key: {{secretKey}}
   If-None-Match: {{spriteEtag}}
-}
-
-params:query {
-  type: {{spriteType}}
-  text: {{spriteText}}
 }
