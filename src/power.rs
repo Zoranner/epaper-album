@@ -101,3 +101,55 @@ impl SleepPlan {
         }
     }
 }
+
+#[cfg(target_os = "espidf")]
+pub mod espidf {
+    use core::time::Duration;
+
+    use esp_idf_hal::reset::WakeupReason;
+    use esp_idf_hal::sleep::DeepSleep;
+
+    pub const SELF_TEST_TIMER_WAKE_SECONDS: u64 = 20;
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum WakeProbe {
+        Timer,
+        Button,
+        Ulp,
+        Unknown,
+        Other(u32),
+    }
+
+    impl WakeProbe {
+        pub const fn label(self) -> &'static str {
+            match self {
+                Self::Timer => "timer",
+                Self::Button => "button",
+                Self::Ulp => "ulp",
+                Self::Unknown => "unknown",
+                Self::Other(_) => "other",
+            }
+        }
+    }
+
+    impl From<WakeupReason> for WakeProbe {
+        fn from(value: WakeupReason) -> Self {
+            match value {
+                WakeupReason::Timer => Self::Timer,
+                WakeupReason::Button => Self::Button,
+                WakeupReason::ULP => Self::Ulp,
+                WakeupReason::Unknown => Self::Unknown,
+                WakeupReason::Other(value) => Self::Other(value),
+            }
+        }
+    }
+
+    pub fn wake_probe() -> WakeProbe {
+        WakeupReason::get().into()
+    }
+
+    pub fn enter_timer_deep_sleep(seconds: u64) -> Result<(), esp_idf_sys::EspError> {
+        let sleep = DeepSleep::new()?.wakeup_on_timer(Duration::from_secs(seconds))?;
+        sleep.enter()
+    }
+}

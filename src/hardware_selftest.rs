@@ -5,6 +5,7 @@ use crate::epd::{
     EPD_FRAME_BYTES, EPD_ROW_BYTES,
 };
 use crate::pmic::espidf::{chip_id_is_axp2101, init_axp2101_for_photo_painter};
+use crate::power::espidf::WakeProbe;
 use crate::render::{OverlaySlot, TextStyle};
 use crate::selftest::{ConfigProbe, RenderProbe, SelfTestReport, StorageProbe};
 use crate::storage::{with_mounted_sdcard_parts, StorageBinaryRead, StorageRead};
@@ -13,6 +14,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 const TEST_BMP_PATH: &str = "/sdcard/test.bmp";
+const WAKE_TEST_MARKER_PATH: &str = "/sdcard/wake-test.txt";
 const TITLE_TEXT_WIDTH: usize = 89;
 const TITLE_TEXT_HEIGHT: usize = 20;
 const TITLE_TEXT_BYTES_PER_ROW: usize = 12;
@@ -101,9 +103,31 @@ pub struct HardwareSelfTestReport {
     pub epd: EpdProbe,
     pub wifi: WifiProbe,
     pub http: HttpProbe,
+    pub wake_marker: WakeMarkerProbe,
 }
 
-pub fn run_espidf_hardware_self_test() -> HardwareSelfTestReport {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WakeMarkerProbe {
+    Timer,
+    Unknown,
+    Missing,
+    ReadError,
+    WriteError,
+}
+
+impl WakeMarkerProbe {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Timer => "timer",
+            Self::Unknown => "unknown",
+            Self::Missing => "missing",
+            Self::ReadError => "read-error",
+            Self::WriteError => "write-error",
+        }
+    }
+}
+
+pub fn run_espidf_hardware_self_test(wake: WakeProbe) -> HardwareSelfTestReport {
     let peripherals = match esp_idf_svc::hal::peripherals::Peripherals::take() {
         Ok(peripherals) => peripherals,
         Err(_) => {
@@ -119,6 +143,7 @@ pub fn run_espidf_hardware_self_test() -> HardwareSelfTestReport {
                 epd: EpdProbe::InitError,
                 wifi: WifiProbe::InitError,
                 http: HttpProbe::Skipped,
+                wake_marker: WakeMarkerProbe::ReadError,
             };
         }
     };
@@ -140,7 +165,7 @@ pub fn run_espidf_hardware_self_test() -> HardwareSelfTestReport {
         }
     }
 
-    let (config_read, image_read) = match with_mounted_sdcard_parts(
+    let (config_read, image_read, wake_marker) = match with_mounted_sdcard_parts(
         peripherals.sdmmc1,
         pins.gpio41,
         pins.gpio39,
@@ -151,12 +176,21 @@ pub fn run_espidf_hardware_self_test() -> HardwareSelfTestReport {
         || {
             let config_read = read_text_from_mounted_path(Path::new(CONFIG_PATH));
             let image_read = read_epd_frame_from_mounted_bmp(Path::new(TEST_BMP_PATH));
-            Ok((config_read, image_read))
+            let wake_marker = probe_wake_marker(Path::new(WAKE_TEST_MARKER_PATH), wake);
+            Ok((config_read, image_read, wake_marker))
         },
     ) {
         Ok(Ok(files)) => files,
-        Ok(Err(_)) => (StorageRead::ReadError, StorageBinaryRead::ReadError),
-        Err(_) => (StorageRead::MountError, StorageBinaryRead::MountError),
+        Ok(Err(_)) => (
+            StorageRead::ReadError,
+            StorageBinaryRead::ReadError,
+            WakeMarkerProbe::ReadError,
+        ),
+        Err(_) => (
+            StorageRead::MountError,
+            StorageBinaryRead::MountError,
+            WakeMarkerProbe::ReadError,
+        ),
     };
 
     let storage = probe_storage(&config_read);
@@ -187,6 +221,7 @@ pub fn run_espidf_hardware_self_test() -> HardwareSelfTestReport {
         epd,
         wifi: network.wifi,
         http: network.http,
+        wake_marker,
     }
 }
 
@@ -436,6 +471,19 @@ fn read_text_from_mounted_path(path: &Path) -> StorageRead {
     }
 }
 
+fn probe_wake_marker(path: &Path, wake: WakeProbe) -> WakeMarkerProbe {
+    if matches!(wake, WakeProbe::Timer) && std::fs::write(path, wake.label()).is_err() {
+        return WakeMarkerProbe::WriteError;
+    }
+
+    match std::fs::read_to_string(path) {
+        Ok(content) if content.trim() == WakeProbe::Timer.label() => WakeMarkerProbe::Timer,
+        Ok(_) => WakeMarkerProbe::Unknown,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => WakeMarkerProbe::Missing,
+        Err(_) => WakeMarkerProbe::ReadError,
+    }
+}
+
 fn epd_error_probe(error: crate::epd::EpdError) -> EpdProbe {
     match error {
         crate::epd::EpdError::BusyTimeout => EpdProbe::BusyTimeout,
@@ -461,6 +509,11 @@ pub fn print_hardware_self_test_report(report: &HardwareSelfTestReport) {
         target: "epaper_album",
         "http: {}",
         report.http.label()
+    );
+    log::info!(
+        target: "epaper_album",
+        "wake marker: {}",
+        report.wake_marker.label()
     );
     log::info!(
         target: "epaper_album",
