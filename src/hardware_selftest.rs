@@ -8,6 +8,7 @@ use crate::pmic::espidf::{chip_id_is_axp2101, init_axp2101_for_photo_painter};
 use crate::render::{OverlaySlot, TextStyle};
 use crate::selftest::{ConfigProbe, RenderProbe, SelfTestReport, StorageProbe};
 use crate::storage::{with_mounted_sdcard_parts, StorageBinaryRead, StorageRead};
+use crate::wifi::espidf::{probe_test_network, HttpProbe, WifiProbe};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
@@ -98,6 +99,8 @@ impl EpdProbe {
 pub struct HardwareSelfTestReport {
     pub base: SelfTestReport,
     pub epd: EpdProbe,
+    pub wifi: WifiProbe,
+    pub http: HttpProbe,
 }
 
 pub fn run_espidf_hardware_self_test() -> HardwareSelfTestReport {
@@ -114,6 +117,8 @@ pub fn run_espidf_hardware_self_test() -> HardwareSelfTestReport {
                     },
                 },
                 epd: EpdProbe::InitError,
+                wifi: WifiProbe::InitError,
+                http: HttpProbe::Skipped,
             };
         }
     };
@@ -156,6 +161,7 @@ pub fn run_espidf_hardware_self_test() -> HardwareSelfTestReport {
 
     let storage = probe_storage(&config_read);
     let config = probe_config(config_read);
+    let network = probe_test_network(peripherals.modem, config.value.as_ref());
     let epd = match EspEpdBus::new(
         peripherals.spi3,
         pins.gpio10,
@@ -172,13 +178,15 @@ pub fn run_espidf_hardware_self_test() -> HardwareSelfTestReport {
     HardwareSelfTestReport {
         base: SelfTestReport {
             storage,
-            config,
+            config: config.probe,
             render: RenderProbe {
                 refresh_count: 0,
                 slept: false,
             },
         },
         epd,
+        wifi: network.wifi,
+        http: network.http,
     }
 }
 
@@ -446,6 +454,16 @@ pub fn print_hardware_self_test_report(report: &HardwareSelfTestReport) {
     );
     log::info!(
         target: "epaper_album",
+        "wifi: {}",
+        report.wifi.label()
+    );
+    log::info!(
+        target: "epaper_album",
+        "http: {}",
+        report.http.label()
+    );
+    log::info!(
+        target: "epaper_album",
         "render refresh count: {}",
         report.base.render.refresh_count
     );
@@ -465,15 +483,34 @@ fn probe_storage(config_read: &StorageRead) -> StorageProbe {
     }
 }
 
-fn probe_config(config_read: StorageRead) -> ConfigProbe {
+struct ProbedConfig {
+    probe: ConfigProbe,
+    value: Option<Config>,
+}
+
+fn probe_config(config_read: StorageRead) -> ProbedConfig {
     match config_read {
         StorageRead::Text(content) => match toml::from_str::<Config>(&content) {
-            Ok(config) if config.has_required_values() => ConfigProbe::Valid,
-            Ok(_) => ConfigProbe::Incomplete,
-            Err(_) => ConfigProbe::ParseError,
+            Ok(config) if config.has_required_values() => ProbedConfig {
+                probe: ConfigProbe::Valid,
+                value: Some(config),
+            },
+            Ok(_) => ProbedConfig {
+                probe: ConfigProbe::Incomplete,
+                value: None,
+            },
+            Err(_) => ProbedConfig {
+                probe: ConfigProbe::ParseError,
+                value: None,
+            },
         },
-        StorageRead::Missing => ConfigProbe::Missing,
-        StorageRead::ReadError => ConfigProbe::ReadError,
-        StorageRead::MountError => ConfigProbe::ReadError,
+        StorageRead::Missing => ProbedConfig {
+            probe: ConfigProbe::Missing,
+            value: None,
+        },
+        StorageRead::ReadError | StorageRead::MountError => ProbedConfig {
+            probe: ConfigProbe::ReadError,
+            value: None,
+        },
     }
 }

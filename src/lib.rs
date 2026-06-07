@@ -14,5 +14,6 @@ pub mod schedule;
 pub mod selftest;
 pub mod state;
 pub mod storage;
+pub mod wifi;
 
 pub use error::{AlbumError, AlbumResult};
