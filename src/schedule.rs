@@ -1,19 +1,20 @@
-use crate::model::{CloudPlanResponse, DisplayItem, DisplayState, LocalDate, PlanItem};
+use crate::model::{DisplayItem, DisplayState, LocalDate, PlanItem, PlanSnapshot};
 
 pub fn select_plan_for_date(plans: &[PlanItem], date: LocalDate) -> Option<&PlanItem> {
     plans.iter().find(|plan| plan.contains_date(date))
 }
 
 pub fn select_display_item(
-    response: &CloudPlanResponse,
+    snapshot: &PlanSnapshot,
     date: LocalDate,
     rotation_slot: u64,
 ) -> Option<DisplayItem> {
-    let plan = select_plan_for_date(&response.plans, date)?;
+    let plan = select_plan_for_date(&snapshot.plans, date)?;
     let (image_index, image_sha256) = plan.image_at_slot(rotation_slot)?;
 
     Some(DisplayItem {
-        plan_version: response.version.clone(),
+        plan_id: plan.id,
+        plan_content_hash: Some(snapshot.content_hash.clone()),
         date,
         image_sha256: image_sha256.to_string(),
         image_index,
@@ -26,7 +27,7 @@ pub fn display_needs_refresh(previous: Option<&DisplayState>, next: &DisplayItem
         return true;
     };
 
-    previous.plan_version.as_deref() != Some(next.plan_version.as_str())
+    previous.plan_id != Some(next.plan_id)
         || previous.date != Some(next.date)
         || previous.image_sha256.as_deref() != Some(next.image_sha256.as_str())
         || previous.image_index != next.image_index
@@ -63,8 +64,9 @@ mod tests {
         LocalDate::parse(value).unwrap()
     }
 
-    fn plan(start: &str, end: &str, caption: &str, images: &[&str]) -> PlanItem {
+    fn plan(id: i64, start: &str, end: &str, caption: &str, images: &[&str]) -> PlanItem {
         PlanItem {
+            id,
             start: date(start),
             end: date(end),
             caption: caption.to_string(),
@@ -75,8 +77,8 @@ mod tests {
     #[test]
     fn selects_plan_by_inclusive_date_range() {
         let plans = vec![
-            plan("2026-06-01", "2026-06-05", "old", &["old"]),
-            plan("2026-06-06", "2026-06-08", "today", &["today"]),
+            plan(1, "2026-06-01", "2026-06-05", "old", &["old"]),
+            plan(2, "2026-06-06", "2026-06-08", "today", &["today"]),
         ];
 
         let selected = select_plan_for_date(&plans, date("2026-06-06")).unwrap();
@@ -86,28 +88,32 @@ mod tests {
 
     #[test]
     fn selects_image_by_rotation_slot() {
-        let response = CloudPlanResponse {
-            version: "v1".to_string(),
-            plans: vec![plan("2026-06-06", "2026-06-06", "caption", &["a", "b"])],
+        let snapshot = PlanSnapshot {
+            content_hash: "hash-v1".to_string(),
+            plans: vec![plan(5, "2026-06-06", "2026-06-06", "caption", &["a", "b"])],
         };
 
-        let item = select_display_item(&response, date("2026-06-06"), 3).unwrap();
+        let item = select_display_item(&snapshot, date("2026-06-06"), 3).unwrap();
 
+        assert_eq!(item.plan_id, 5);
+        assert_eq!(item.plan_content_hash.as_deref(), Some("hash-v1"));
         assert_eq!(item.image_index, 1);
         assert_eq!(item.image_sha256, "b");
     }
 
     #[test]
-    fn detects_when_display_content_changed() {
+    fn detects_when_display_plan_changed() {
         let next = DisplayItem {
-            plan_version: "v2".to_string(),
+            plan_id: 2,
+            plan_content_hash: Some("hash-v2".to_string()),
             date: date("2026-06-06"),
             image_sha256: "hash".to_string(),
             image_index: 0,
             caption: "caption".to_string(),
         };
         let previous = DisplayState {
-            plan_version: Some("v1".to_string()),
+            plan_id: Some(1),
+            plan_content_hash: Some("hash-v1".to_string()),
             date: Some(date("2026-06-06")),
             image_sha256: Some("hash".to_string()),
             image_index: 0,
@@ -119,10 +125,33 @@ mod tests {
     }
 
     #[test]
+    fn ignores_plan_content_hash_when_display_content_is_unchanged() {
+        let next = DisplayItem {
+            plan_id: 1,
+            plan_content_hash: Some("hash-v2".to_string()),
+            date: date("2026-06-06"),
+            image_sha256: "hash".to_string(),
+            image_index: 0,
+            caption: "caption".to_string(),
+        };
+        let previous = DisplayState {
+            plan_id: Some(1),
+            plan_content_hash: Some("hash-v1".to_string()),
+            date: Some(date("2026-06-06")),
+            image_sha256: Some("hash".to_string()),
+            image_index: 0,
+            caption: Some("caption".to_string()),
+            refreshed_at_unix_secs: Some(1),
+        };
+
+        assert!(!display_needs_refresh(Some(&previous), &next));
+    }
+
+    #[test]
     fn computes_next_plan_change_from_current_plan_end() {
         let plans = vec![
-            plan("2026-06-06", "2026-06-08", "current", &["a"]),
-            plan("2026-06-10", "2026-06-10", "future", &["b"]),
+            plan(1, "2026-06-06", "2026-06-08", "current", &["a"]),
+            plan(2, "2026-06-10", "2026-06-10", "future", &["b"]),
         ];
 
         assert_eq!(

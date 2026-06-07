@@ -1,4 +1,4 @@
-use crate::model::{CachedResource, CloudPlanResponse, DisplayState, ResourceIndex};
+use crate::model::{CachedResource, DisplayState, PlanSnapshot, ResourceIndex};
 use std::collections::BTreeSet;
 
 pub const LOW_SPACE_BYTES: u64 = 1_073_741_824;
@@ -12,8 +12,8 @@ pub struct CacheCleanupCandidate {
     pub free_bytes_after_delete: u64,
 }
 
-pub fn missing_resources(response: &CloudPlanResponse, index: &ResourceIndex) -> Vec<String> {
-    response
+pub fn missing_resources(snapshot: &PlanSnapshot, index: &ResourceIndex) -> Vec<String> {
+    snapshot
         .plans
         .iter()
         .flat_map(|plan| plan.images.iter())
@@ -27,10 +27,10 @@ pub fn missing_resources(response: &CloudPlanResponse, index: &ResourceIndex) ->
 }
 
 pub fn protected_resources(
-    response: &CloudPlanResponse,
+    snapshot: &PlanSnapshot,
     display_state: Option<&DisplayState>,
 ) -> BTreeSet<String> {
-    let mut protected = response.referenced_resources();
+    let mut protected = snapshot.referenced_resources();
 
     if let Some(display_state) = display_state {
         if let Some(image_sha256) = &display_state.image_sha256 {
@@ -85,12 +85,12 @@ pub fn cleanup_candidates(
 }
 
 pub fn cleanup_candidates_for_plan(
-    response: &CloudPlanResponse,
+    snapshot: &PlanSnapshot,
     index: &ResourceIndex,
     display_state: Option<&DisplayState>,
     available_bytes: u64,
 ) -> Vec<CacheCleanupCandidate> {
-    let protected = protected_resources(response, display_state);
+    let protected = protected_resources(snapshot, display_state);
 
     cleanup_candidates(
         index,
@@ -110,10 +110,11 @@ mod tests {
         LocalDate::parse(value).unwrap()
     }
 
-    fn response(images: &[&str]) -> CloudPlanResponse {
-        CloudPlanResponse {
-            version: "v1".to_string(),
+    fn snapshot(images: &[&str]) -> PlanSnapshot {
+        PlanSnapshot {
+            content_hash: "hash-v1".to_string(),
             plans: vec![PlanItem {
+                id: 1,
                 start: date("2026-06-06"),
                 end: date("2026-06-08"),
                 caption: "caption".to_string(),
@@ -132,23 +133,23 @@ mod tests {
 
     #[test]
     fn reports_missing_resources_without_duplicates() {
-        let response = response(&["a", "b", "a", "c"]);
+        let snapshot = snapshot(&["a", "b", "a", "c"]);
         let index = ResourceIndex {
             resources: vec![resource("a", 10, 1), resource("c", 10, 1)],
         };
 
-        assert_eq!(missing_resources(&response, &index), vec!["b"]);
+        assert_eq!(missing_resources(&snapshot, &index), vec!["b"]);
     }
 
     #[test]
     fn protects_plan_resources_and_last_displayed_resource() {
-        let response = response(&["a"]);
+        let snapshot = snapshot(&["a"]);
         let display_state = DisplayState {
             image_sha256: Some("last".to_string()),
             ..DisplayState::default()
         };
 
-        let protected = protected_resources(&response, Some(&display_state));
+        let protected = protected_resources(&snapshot, Some(&display_state));
 
         assert!(protected.contains("a"));
         assert!(protected.contains("last"));

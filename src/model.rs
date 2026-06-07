@@ -152,13 +152,21 @@ impl fmt::Display for DateParseError {
 impl std::error::Error for DateParseError {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CloudPlanResponse {
-    pub version: String,
+pub struct ServerPlanResponse {
+    pub code: u16,
+    pub message: String,
+    #[serde(default)]
+    pub data: Vec<PlanItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanSnapshot {
+    pub content_hash: String,
     #[serde(default)]
     pub plans: Vec<PlanItem>,
 }
 
-impl CloudPlanResponse {
+impl PlanSnapshot {
     pub fn referenced_resources(&self) -> BTreeSet<String> {
         self.plans
             .iter()
@@ -169,6 +177,7 @@ impl CloudPlanResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanItem {
+    pub id: i64,
     pub start: LocalDate,
     pub end: LocalDate,
     #[serde(default)]
@@ -232,7 +241,9 @@ pub struct CachedResource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct DisplayState {
     #[serde(default)]
-    pub plan_version: Option<String>,
+    pub plan_id: Option<i64>,
+    #[serde(default)]
+    pub plan_content_hash: Option<String>,
     #[serde(default)]
     pub date: Option<LocalDate>,
     #[serde(default)]
@@ -247,7 +258,8 @@ pub struct DisplayState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DisplayItem {
-    pub plan_version: String,
+    pub plan_id: i64,
+    pub plan_content_hash: Option<String>,
     pub date: LocalDate,
     pub image_sha256: String,
     pub image_index: usize,
@@ -288,6 +300,7 @@ mod tests {
     #[test]
     fn plan_matches_inclusive_date_range() {
         let plan = PlanItem {
+            id: 7,
             start: LocalDate::parse("2026-06-06").unwrap(),
             end: LocalDate::parse("2026-06-08").unwrap(),
             caption: "caption".to_string(),

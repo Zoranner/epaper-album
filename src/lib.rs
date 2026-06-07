@@ -1,5 +1,7 @@
+pub mod app;
 pub mod bmp;
 pub mod cache;
+pub mod cloud;
 pub mod config;
 pub mod display;
 pub mod epd;
