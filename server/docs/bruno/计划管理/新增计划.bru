@@ -1,15 +1,17 @@
 meta {
-  name: Create Plan
+  name: 新增计划
   type: http
-  seq: 3
+  seq: 1
 }
 
 post {
   url: {{baseUrl}}/api/plans
+  body: none
+  auth: none
 }
 
 headers {
-  Authorization: Bearer {{adminToken}}
+  Authorization: Bearer {{jwtToken}}
   content-type: application/json
 }
 

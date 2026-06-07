@@ -1,0 +1,28 @@
+meta {
+  name: 登录
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/login
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+}
+
+body:json {
+  {
+    "username": "admin",
+    "password": "admin"
+  }
+}
+
+script:post-response {
+  if (res.status === 200 && res.body && res.body.data && res.body.data.jwtToken) {
+    bru.setEnvVar("jwtToken", res.body.data.jwtToken);
+  }
+}

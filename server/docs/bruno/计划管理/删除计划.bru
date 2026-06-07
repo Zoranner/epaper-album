@@ -1,0 +1,17 @@
+meta {
+  name: 删除计划
+  type: http
+  seq: 5
+}
+
+delete {
+  url: {{baseUrl}}/api/plans/:id
+}
+
+headers {
+  Authorization: Bearer {{jwtToken}}
+}
+
+params:path {
+  id: 1
+}

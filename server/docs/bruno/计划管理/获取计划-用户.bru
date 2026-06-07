@@ -1,0 +1,19 @@
+meta {
+  name: 获取计划-用户
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/plans
+  body: none
+  auth: none
+}
+
+params:query {
+  days: 3
+}
+
+headers {
+  secret-key: local-secret-key
+}

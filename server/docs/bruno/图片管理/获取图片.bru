@@ -1,0 +1,19 @@
+meta {
+  name: 获取图片
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/images
+  body: none
+  auth: none
+}
+
+params:query {
+  keyword: 
+}
+
+headers {
+  Authorization: Bearer {{jwtToken}}
+}

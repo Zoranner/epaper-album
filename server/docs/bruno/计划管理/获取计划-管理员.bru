@@ -1,0 +1,19 @@
+meta {
+  name: 获取计划-管理员
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/plans
+  body: none
+  auth: none
+}
+
+params:query {
+  days: 3
+}
+
+headers {
+  Authorization: Bearer {{jwtToken}}
+}

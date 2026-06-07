@@ -1,0 +1,17 @@
+meta {
+  name: 下载显示图片
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/images/:sha256
+}
+
+headers {
+  secret-key: local-secret-key
+}
+
+params:path {
+  sha256: 0000000000000000000000000000000000000000000000000000000000000000
+}

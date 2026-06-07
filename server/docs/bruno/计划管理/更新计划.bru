@@ -1,20 +1,20 @@
 meta {
-  name: Update Plan
+  name: 更新计划
   type: http
   seq: 4
 }
 
 put {
-  url: {{baseUrl}}/api/plans/:planId
+  url: {{baseUrl}}/api/plans/:id
 }
 
 headers {
-  Authorization: Bearer {{adminToken}}
+  Authorization: Bearer {{jwtToken}}
   content-type: application/json
 }
 
 params:path {
-  planId: {{planId}}
+  id: 1
 }
 
 body:json {

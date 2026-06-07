@@ -1,0 +1,20 @@
+meta {
+  name: 上传图片
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/images
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{jwtToken}}
+}
+
+body:multipart-form {
+  image: @file(D:\tmp\epaper-album-sample.jpg)
+  remark: 海边晚风
+}
