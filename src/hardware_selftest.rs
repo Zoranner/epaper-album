@@ -1,8 +1,8 @@
 use crate::config::{Config, CONFIG_PATH};
 use crate::display::{Color, SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::epd::{
-    espidf::EspEpdBus, run_epd_hardware_self_test, run_epd_prepacked_frame, set_packed_frame_pixel,
-    EPD_FRAME_BYTES, EPD_ROW_BYTES,
+    espidf::EspEpdBus, run_epd_hardware_self_test, run_epd_packed_frame,
+    set_logical_packed_frame_pixel, EPD_FRAME_BYTES, EPD_ROW_BYTES,
 };
 use crate::pmic::espidf::{chip_id_is_axp2101, init_axp2101_for_photo_painter};
 use crate::power::espidf::WakeProbe;
@@ -237,7 +237,7 @@ fn refresh_epd_from_self_test_image(
                 frame.len()
             );
 
-            match run_epd_memory_frame(bus, &frame) {
+            match run_epd_packed_frame(bus, &frame) {
                 Ok(()) => EpdProbe::PhotoRefreshed,
                 Err(error) => epd_error_probe(error),
             }
@@ -302,18 +302,6 @@ fn read_epd_frame_from_mounted_bmp_result(image_path: &Path) -> Result<Vec<u8>, 
     draw_self_test_overlay(&mut frame);
 
     Ok(frame)
-}
-
-fn run_epd_memory_frame(bus: &mut EspEpdBus, frame: &[u8]) -> Result<(), crate::epd::EpdError> {
-    if frame.len() != EPD_FRAME_BYTES {
-        return Err(crate::epd::EpdError::Transport);
-    }
-
-    run_epd_prepacked_frame(bus, |panel_y, row| {
-        let row_start = panel_y * EPD_ROW_BYTES;
-        row.copy_from_slice(&frame[row_start..row_start + EPD_ROW_BYTES]);
-        Ok(())
-    })
 }
 
 fn draw_self_test_overlay(frame: &mut [u8]) {
@@ -455,7 +443,7 @@ fn set_overlay_pixel(frame: &mut [u8], x: usize, y: usize, color: Color) -> bool
         return false;
     }
 
-    set_packed_frame_pixel(frame, SCREEN_WIDTH - 1 - x, SCREEN_HEIGHT - 1 - y, color)
+    set_logical_packed_frame_pixel(frame, x, y, color)
 }
 
 enum ReadImageError {

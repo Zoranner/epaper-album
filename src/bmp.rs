@@ -26,20 +26,25 @@ impl std::error::Error for BmpError {}
 pub struct BmpImage<'a> {
     data: &'a [u8],
     pixel_offset: usize,
+    width: usize,
+    height: usize,
+    row_stride: usize,
     top_down: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BmpHeader {
     pub pixel_offset: u64,
+    pub width: usize,
+    pub height: usize,
+    pub row_stride: usize,
     pub top_down: bool,
 }
 
 impl<'a> BmpImage<'a> {
     pub fn parse(data: &'a [u8]) -> Result<Self, BmpError> {
         let header = parse_bmp_header(data, data.len() as u64)?;
-        let row_stride = bmp_24bit_row_stride();
-        let required_len = header.pixel_offset as usize + row_stride * EPD_HEIGHT;
+        let required_len = header.pixel_offset as usize + header.row_stride * header.height;
         if data.len() < required_len {
             return Err(BmpError::UnexpectedEof);
         }
@@ -47,8 +52,19 @@ impl<'a> BmpImage<'a> {
         Ok(Self {
             data,
             pixel_offset: header.pixel_offset as usize,
+            width: header.width,
+            height: header.height,
+            row_stride: header.row_stride,
             top_down: header.top_down,
         })
+    }
+
+    pub const fn width(&self) -> usize {
+        self.width
+    }
+
+    pub const fn height(&self) -> usize {
+        self.height
     }
 
     pub fn fill_epd_row(
@@ -56,18 +72,30 @@ impl<'a> BmpImage<'a> {
         source_y: usize,
         output: &mut [u8; EPD_ROW_BYTES],
     ) -> Result<(), BmpError> {
+        if self.width != EPD_WIDTH || self.height != EPD_HEIGHT {
+            return Err(BmpError::UnsupportedFormat);
+        }
+
         for (x_pair, byte) in output.iter_mut().enumerate() {
-            let left = self.pixel_color(x_pair * 2, source_y)?;
-            let right = self.pixel_color(x_pair * 2 + 1, source_y)?;
+            let left = self.color_at(x_pair * 2, source_y)?;
+            let right = self.color_at(x_pair * 2 + 1, source_y)?;
             *byte = pack_epd_pixels(left, right);
         }
 
         Ok(())
     }
 
-    fn pixel_color(&self, x: usize, y: usize) -> Result<Color, BmpError> {
-        let row = if self.top_down { y } else { EPD_HEIGHT - 1 - y };
-        let row_offset = self.pixel_offset + row * bmp_row_stride(EPD_WIDTH);
+    pub fn color_at(&self, x: usize, y: usize) -> Result<Color, BmpError> {
+        if x >= self.width || y >= self.height {
+            return Err(BmpError::UnexpectedEof);
+        }
+
+        let row = if self.top_down {
+            y
+        } else {
+            self.height - 1 - y
+        };
+        let row_offset = self.pixel_offset + row * self.row_stride;
         let pixel_offset = row_offset + x * 3;
         let blue = self.data[pixel_offset];
         let green = self.data[pixel_offset + 1];
@@ -91,8 +119,8 @@ pub fn parse_bmp_header(data: &[u8], total_len: u64) -> Result<BmpHeader, BmpErr
     let compression = read_u32(data, 30)?;
 
     if dib_size < 40
-        || width != EPD_WIDTH as i32
-        || height.unsigned_abs() != EPD_HEIGHT as u32
+        || width <= 0
+        || height == 0
         || planes != 1
         || bit_count != 24
         || compression != 0
@@ -100,14 +128,21 @@ pub fn parse_bmp_header(data: &[u8], total_len: u64) -> Result<BmpHeader, BmpErr
         return Err(BmpError::UnsupportedFormat);
     }
 
-    let required_len = pixel_offset + (bmp_row_stride(width as usize) * EPD_HEIGHT) as u64;
+    let top_down = height < 0;
+    let width = width as usize;
+    let height = height.unsigned_abs() as usize;
+    let row_stride = bmp_row_stride(width);
+    let required_len = pixel_offset + (row_stride * height) as u64;
     if total_len < required_len {
         return Err(BmpError::UnexpectedEof);
     }
 
     Ok(BmpHeader {
         pixel_offset,
-        top_down: height < 0,
+        width,
+        height,
+        row_stride,
+        top_down,
     })
 }
 
@@ -170,7 +205,7 @@ pub const fn exact_panel_color(red: u8, green: u8, blue: u8) -> Option<Color> {
     }
 }
 
-const fn bmp_row_stride(width: usize) -> usize {
+pub const fn bmp_row_stride(width: usize) -> usize {
     (width * 3).div_ceil(4) * 4
 }
 
@@ -227,7 +262,25 @@ mod tests {
         let header = parse_bmp_header(&bmp[..54], bmp.len() as u64).unwrap();
 
         assert_eq!(header.pixel_offset, 54);
+        assert_eq!(header.width, EPD_WIDTH);
+        assert_eq!(header.height, EPD_HEIGHT);
+        assert_eq!(header.row_stride, bmp_24bit_row_stride());
         assert!(!header.top_down);
+    }
+
+    #[test]
+    fn parses_small_sprite_bmp() {
+        let bmp = sample_sized_bmp(3, 2, true);
+        let image = BmpImage::parse(&bmp).unwrap();
+
+        assert_eq!(image.width(), 3);
+        assert_eq!(image.height(), 2);
+        assert_eq!(image.color_at(0, 0), Ok(Color::Red));
+        assert_eq!(image.color_at(1, 0), Ok(Color::Green));
+        assert_eq!(
+            image.fill_epd_row(0, &mut [0u8; EPD_ROW_BYTES]),
+            Err(BmpError::UnsupportedFormat)
+        );
     }
 
     #[test]
@@ -281,25 +334,29 @@ mod tests {
     }
 
     fn sample_bmp(top_down: bool) -> Vec<u8> {
+        sample_sized_bmp(EPD_WIDTH, EPD_HEIGHT, top_down)
+    }
+
+    fn sample_sized_bmp(width: usize, height: usize, top_down: bool) -> Vec<u8> {
         let pixel_offset = 54usize;
-        let row_stride = bmp_row_stride(EPD_WIDTH);
-        let file_size = pixel_offset + row_stride * EPD_HEIGHT;
+        let row_stride = bmp_row_stride(width);
+        let file_size = pixel_offset + row_stride * height;
         let mut bmp = vec![0u8; file_size];
         bmp[0..2].copy_from_slice(b"BM");
         bmp[2..6].copy_from_slice(&(file_size as u32).to_le_bytes());
         bmp[10..14].copy_from_slice(&(pixel_offset as u32).to_le_bytes());
         bmp[14..18].copy_from_slice(&40u32.to_le_bytes());
-        bmp[18..22].copy_from_slice(&(EPD_WIDTH as i32).to_le_bytes());
-        let height = if top_down {
-            -(EPD_HEIGHT as i32)
+        bmp[18..22].copy_from_slice(&(width as i32).to_le_bytes());
+        let signed_height = if top_down {
+            -(height as i32)
         } else {
-            EPD_HEIGHT as i32
+            height as i32
         };
-        bmp[22..26].copy_from_slice(&height.to_le_bytes());
+        bmp[22..26].copy_from_slice(&signed_height.to_le_bytes());
         bmp[26..28].copy_from_slice(&1u16.to_le_bytes());
         bmp[28..30].copy_from_slice(&24u16.to_le_bytes());
 
-        let file_row = if top_down { 0 } else { EPD_HEIGHT - 1 };
+        let file_row = if top_down { 0 } else { height - 1 };
         let row_offset = pixel_offset + file_row * row_stride;
         bmp[row_offset..row_offset + 3].copy_from_slice(&[0, 0, 255]);
         bmp[row_offset + 3..row_offset + 6].copy_from_slice(&[0, 255, 0]);

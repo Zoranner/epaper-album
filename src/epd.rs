@@ -100,6 +100,14 @@ pub fn set_packed_frame_pixel(frame: &mut [u8], x: usize, y: usize, color: Color
     true
 }
 
+pub fn set_logical_packed_frame_pixel(frame: &mut [u8], x: usize, y: usize, color: Color) -> bool {
+    if x >= EPD_WIDTH || y >= EPD_HEIGHT {
+        return false;
+    }
+
+    set_packed_frame_pixel(frame, EPD_WIDTH - 1 - x, EPD_HEIGHT - 1 - y, color)
+}
+
 fn init_panel(bus: &mut impl EpdBus) -> Result<(), EpdError> {
     bus.reset()?;
     bus.wait_until_ready()?;
@@ -139,6 +147,18 @@ pub fn run_epd_prepacked_frame(
     mut fill_panel_row: impl FnMut(usize, &mut [u8; EPD_ROW_BYTES]) -> Result<(), EpdError>,
 ) -> Result<(), EpdError> {
     run_epd_frame(bus, |panel_y, row| fill_panel_row(panel_y, row))
+}
+
+pub fn run_epd_packed_frame(bus: &mut impl EpdBus, frame: &[u8]) -> Result<(), EpdError> {
+    if frame.len() != EPD_FRAME_BYTES {
+        return Err(EpdError::Transport);
+    }
+
+    run_epd_frame(bus, |panel_y, row| {
+        let row_start = panel_y * EPD_ROW_BYTES;
+        row.copy_from_slice(&frame[row_start..row_start + EPD_ROW_BYTES]);
+        Ok(())
+    })
 }
 
 fn refresh_and_power_off(bus: &mut impl EpdBus) -> Result<(), EpdError> {
@@ -345,6 +365,55 @@ mod tests {
         ));
 
         assert_eq!(frame[0], 0x03);
+    }
+
+    #[test]
+    fn maps_logical_pixel_to_verified_panel_orientation() {
+        let mut frame = vec![0x11; EPD_FRAME_BYTES];
+
+        assert!(set_logical_packed_frame_pixel(
+            &mut frame,
+            0,
+            0,
+            Color::Black
+        ));
+        assert_eq!(frame[EPD_FRAME_BYTES - 1], 0x10);
+
+        assert!(set_logical_packed_frame_pixel(
+            &mut frame,
+            EPD_WIDTH - 1,
+            EPD_HEIGHT - 1,
+            Color::Red
+        ));
+        assert_eq!(frame[0], 0x31);
+    }
+
+    #[test]
+    fn packed_frame_runner_rejects_wrong_frame_length() {
+        let mut bus = MockEpdBus::default();
+
+        let result = run_epd_packed_frame(&mut bus, &[0u8; EPD_ROW_BYTES]);
+
+        assert_eq!(result, Err(EpdError::Transport));
+        assert!(bus.events.is_empty());
+    }
+
+    #[test]
+    fn packed_frame_runner_sends_frame_rows() {
+        let mut bus = MockEpdBus::default();
+        let frame = vec![0x36; EPD_FRAME_BYTES];
+
+        run_epd_packed_frame(&mut bus, &frame).unwrap();
+
+        assert_eq!(
+            bus.events
+                .iter()
+                .filter(
+                    |event| matches!(event, MockEvent::Data(data) if data.len() == EPD_ROW_BYTES && data.iter().all(|byte| *byte == 0x36))
+                )
+                .count(),
+            EPD_HEIGHT
+        );
     }
 
     #[test]
