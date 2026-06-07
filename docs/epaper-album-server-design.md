@@ -451,6 +451,8 @@ Authorization: Bearer <admin-token>
 
 `type` 对齐设备端文字用途：`caption` 对应左下角标题，`date` 对应右下角日期，`notice` 对应左上角通知，`status` 对应后续右上角状态扩展。当前四种类型使用同一套字体、字号、内边距和颜色规则，`type` 用于调用方区分用途和后续扩展。生成结果为白底黑字。字体栅格化后按阈值压成纯黑白像素，不输出灰度抗锯齿像素。
 
+这里的 `status` 指右上角扩展 sprite 类型。图片处理状态使用 `images.status` 字段表达，取值为 `pending`、`processing`、`ready` 和 `failed`。
+
 缓存规则：
 
 - 服务端不做数据库缓存。

@@ -749,7 +749,7 @@ async fn sprite_returns_bmp_and_uses_data_cache() {
 }
 
 #[tokio::test]
-async fn sprite_accepts_status_and_notice_types() {
+async fn sprite_accepts_notice_and_status_types() {
     if !sprite_font_assets_available() {
         eprintln!("skip sprite type test: fixed font files are not installed");
         return;
@@ -757,7 +757,7 @@ async fn sprite_accepts_status_and_notice_types() {
 
     let app = test_app().await;
 
-    for kind in ["status", "notice"] {
+    for kind in ["notice", "status"] {
         let response = app
             .app
             .clone()

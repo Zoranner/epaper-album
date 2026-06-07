@@ -113,13 +113,15 @@ secret-key: local-secret-key
 
 `type` 取值为 `caption`、`date`、`notice` 或 `status`。服务端根据 `server/assets/fonts.toml` 和字体目录生成白底黑字 BMP 小图块，字体、字号、fallback 顺序、内边距和字形栅格化规则由服务端统一管理。设备当前使用 `caption`、`date` 和 `notice`，分别用于左下角标题、右下角日期和左上角通知合成；`status` 作为右上角扩展类型保留。
 
+设备端和服务端按同一组 sprite 术语处理：`caption` 是左下角标题，`date` 是右下角日期，`notice` 是左上角通知，`status` 是右上角扩展。服务端图片处理状态使用 `images.status` 字段表达。
+
 ## 显示资源
 
 云端优先提供已经适配 800 x 480 的图片资源。设备侧以显示为主，减少裁剪、缩放和复杂图像处理。
 
 资源格式按 PhotoPainter 官方资料收敛。参考工程支持 JPG、PNG、BMP，JPG 仅支持 Baseline DCT。云端优先输出 800 x 480 BMP，JPG 和 PNG 作为兼容输入格式。
 
-设备所有正常展示图片都从 TF 卡缓存读取。缓存是正常显示路径，不作为异常状态提示。
+设备所有正常展示图片都从 TF 卡缓存读取。缓存是正常显示路径，不触发异常通知。
 
 文字 sprite 作为显示资源的一部分缓存到 TF 卡。计划同步成功后，设备为当前及未来计划标题预取 `caption` sprite，为显示日期预取 `date` sprite，并为常见通知预取 `notice` sprite。离线运行时优先使用本地已缓存 sprite 合成页面。
 

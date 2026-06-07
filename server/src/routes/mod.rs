@@ -57,8 +57,8 @@ pub struct AppState {
 enum SpriteKind {
     Caption,
     Date,
-    Status,
     Notice,
+    Status,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -90,8 +90,8 @@ impl SpriteKind {
         match self {
             Self::Caption => "caption",
             Self::Date => "date",
-            Self::Status => "status",
             Self::Notice => "notice",
+            Self::Status => "status",
         }
     }
 }
@@ -827,8 +827,8 @@ fn validate_sprite_payload(payload: &SpritePayload) -> Result<SpriteKind, AppErr
     let kind = match payload.kind.as_str() {
         "caption" => SpriteKind::Caption,
         "date" => SpriteKind::Date,
-        "status" => SpriteKind::Status,
         "notice" => SpriteKind::Notice,
+        "status" => SpriteKind::Status,
         value => {
             return Err(AppError::BadRequest(format!(
                 "Invalid sprite type: {value}"
