@@ -134,7 +134,7 @@ POST /api/login
 }
 ```
 
-服务端使用 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD` 校验账号密码。登录成功后返回管理会话或令牌，后续管理操作使用该会话或令牌获得管理员权限。
+服务端使用 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD` 校验账号密码。登录成功后返回 `jwtToken` 和过期时间，后续管理操作使用该 `jwtToken` 获得管理员权限。
 
 成功响应：
 
@@ -143,7 +143,8 @@ POST /api/login
   "code": 0,
   "message": "ok",
   "data": {
-    "token": "admin-token"
+    "jwtToken": "jwtToken",
+    "expiresAt": "2026-06-08T12:00:00Z"
   }
 }
 ```

@@ -216,7 +216,10 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { albumApi, type AdminImage, type AdminPlan, type PlanPayload } from './api';
 import PlanEditor from './components/PlanEditor.vue';
 
-const token = ref(localStorage.getItem('epaper-album-admin-token') || '');
+const tokenStorageKey = 'epaper-album-admin-token';
+const tokenExpiresAtStorageKey = 'epaper-album-admin-token-expires-at';
+
+const token = ref(localStorage.getItem(tokenStorageKey) || '');
 const loginForm = reactive({
   username: '',
   password: '',
@@ -254,8 +257,9 @@ async function login() {
   loggingIn.value = true;
   try {
     const result = await albumApi.login(loginForm.username, loginForm.password);
-    token.value = result.token;
-    localStorage.setItem('epaper-album-admin-token', result.token);
+    token.value = result.jwtToken;
+    localStorage.setItem(tokenStorageKey, result.jwtToken);
+    localStorage.setItem(tokenExpiresAtStorageKey, result.expiresAt);
     loginForm.password = '';
     await loadAll();
     setStatus('已登录');
@@ -268,7 +272,8 @@ async function login() {
 
 function logout() {
   token.value = '';
-  localStorage.removeItem('epaper-album-admin-token');
+  localStorage.removeItem(tokenStorageKey);
+  localStorage.removeItem(tokenExpiresAtStorageKey);
   images.value = [];
   plans.value = [];
   clearPreviews();

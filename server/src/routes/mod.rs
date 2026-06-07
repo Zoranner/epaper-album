@@ -14,7 +14,7 @@ use axum::{
     routing::{get, post, put},
     Json, Router,
 };
-use chrono::{Duration, Local, NaiveDate};
+use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
 use fontdue::{
     layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle},
     Font, FontSettings,
@@ -47,6 +47,7 @@ pub struct AppState {
     pub admin_username: String,
     pub admin_password: String,
     pub admin_token: String,
+    pub admin_token_expires_at: DateTime<Utc>,
     pub data_dir: PathBuf,
     pub enqueue_processing: bool,
     pub text_font_path: Option<PathBuf>,
@@ -165,7 +166,8 @@ async fn login(
     if payload.username == state.app.admin_username && payload.password == state.app.admin_password
     {
         Ok(Json(ApiResponse::ok(LoginResponse {
-            token: state.app.admin_token,
+            jwt_token: state.app.admin_token,
+            expires_at: state.app.admin_token_expires_at.to_rfc3339(),
         })))
     } else {
         Err(AppError::Unauthorized)
@@ -686,6 +688,10 @@ fn require_admin(headers: &HeaderMap, state: &AppState) -> Result<(), AppError> 
 }
 
 fn is_admin(headers: &HeaderMap, state: &AppState) -> bool {
+    if Utc::now() >= state.admin_token_expires_at {
+        return false;
+    }
+
     headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())

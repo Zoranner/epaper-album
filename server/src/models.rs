@@ -34,7 +34,10 @@ pub struct LoginRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LoginResponse {
-    pub token: String,
+    #[serde(rename = "jwtToken")]
+    pub jwt_token: String,
+    #[serde(rename = "expiresAt")]
+    pub expires_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

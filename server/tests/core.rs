@@ -32,6 +32,17 @@ async fn test_app() -> TestApp {
 }
 
 async fn test_app_with_text_font(text_font_path: Option<PathBuf>) -> TestApp {
+    test_app_with_options(
+        text_font_path,
+        chrono::Utc::now() + chrono::Duration::hours(1),
+    )
+    .await
+}
+
+async fn test_app_with_options(
+    text_font_path: Option<PathBuf>,
+    admin_token_expires_at: chrono::DateTime<chrono::Utc>,
+) -> TestApp {
     let id = TEST_ID.fetch_add(1, Ordering::Relaxed);
     let data_dir = std::env::temp_dir().join(format!(
         "epaper-album-server-test-{}-{id}",
@@ -54,6 +65,7 @@ async fn test_app_with_text_font(text_font_path: Option<PathBuf>) -> TestApp {
         admin_username: "admin".to_string(),
         admin_password: "password".to_string(),
         admin_token: admin_token.clone(),
+        admin_token_expires_at,
         data_dir: data_dir.clone(),
         enqueue_processing: false,
         text_font_path,
@@ -209,19 +221,41 @@ async fn app_error_serializes_unified_error_body() {
 }
 
 #[tokio::test]
-async fn login_returns_admin_token_and_rejects_bad_credentials() {
+async fn login_returns_jwt_token_expiration_and_rejects_bad_credentials() {
     let app = test_app().await;
 
     let (status, value) = login(&app, "admin", "password").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(value["code"], 0);
     assert_eq!(value["message"], "ok");
-    assert_eq!(value["data"]["token"], app.admin_token);
+    assert_eq!(value["data"]["jwtToken"], app.admin_token);
+    let expires_at = value["data"]["expiresAt"]
+        .as_str()
+        .expect("expiresAt string");
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(expires_at).expect("expiresAt rfc3339")
+            > chrono::Utc::now()
+    );
 
     let (status, value) = login(&app, "admin", "bad").await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(value["code"], 401);
     assert_eq!(value["data"], Value::Null);
+}
+
+#[tokio::test]
+async fn expired_admin_token_is_rejected() {
+    let app = test_app_with_options(None, chrono::Utc::now() - chrono::Duration::seconds(1)).await;
+
+    let (status, value) = request_json(
+        app.app.clone(),
+        admin_request(&app, "/api/images")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(value["code"], 401);
 }
 
 #[tokio::test]

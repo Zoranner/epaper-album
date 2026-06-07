@@ -32,6 +32,7 @@ async fn main() -> anyhow::Result<()> {
         admin_username: config.admin_username,
         admin_password: config.admin_password,
         admin_token: config.admin_token,
+        admin_token_expires_at: config.admin_token_expires_at,
         data_dir: "data".into(),
         enqueue_processing: true,
         text_font_path: config.text_font_path,

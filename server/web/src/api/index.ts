@@ -21,6 +21,11 @@ export interface PlanPayload {
   images: string[];
 }
 
+export interface LoginResponse {
+  jwtToken: string;
+  expiresAt: string;
+}
+
 interface ApiEnvelope<T> {
   code: number;
   message: string;
@@ -74,7 +79,7 @@ function tokenInit(token: string, init?: RequestInit): RequestInit {
 
 export const albumApi = {
   login(username: string, password: string) {
-    return request<{ token: string }>('/login', {
+    return request<LoginResponse>('/login', {
       method: 'POST',
       body: JSON.stringify({ username, password }),
     });
