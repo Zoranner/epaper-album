@@ -20,6 +20,8 @@
 
 `SECRET_KEY` 用于设备同步计划和下载显示图片。管理员账号密码用于管理台登录和管理接口权限。服务端启动时创建 `data/`、`data/origin/` 和 `data/display/` 目录，初始化 SQLite 表结构，并挂载 API 路由和管理台静态文件。
 
+`server/.env.example` 提供本地和容器部署的环境变量示例。实际部署时复制为 `server/.env` 并调整密钥和管理员密码；`server/.env` 不纳入版本管理。
+
 ## 鉴权规则
 
 除健康检查和静态前端页面外，接口统一鉴权。设备和用户权限使用请求头 `secret-key`，请求头值需要与服务端 `SECRET_KEY` 一致。管理员权限使用管理员账号密码登录后获得的会话或令牌。
@@ -622,7 +624,7 @@ Docker 镜像采用多阶段构建：
 - Rust release 阶段设置 `SKIP_FRONTEND_BUILD=1` 编译后端二进制。
 - runtime 阶段只拷贝 `epaper-album-server` 二进制和 `web/dist`，运行目录为 `/app`。
 
-容器运行时使用 `/app/data` 作为持久数据目录，保存 SQLite 数据库、原图和显示 BMP。`server/docker/docker-compose.yml` 提供基础部署配置，服务名和镜像名均为 `epaper-album-server`，部署时通过环境变量设置 `SECRET_KEY`、`ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。
+容器运行时使用 `/app/data` 作为持久数据目录，保存 SQLite 数据库、原图和显示 BMP。`server/docker/docker-compose.yml` 提供基础部署配置，服务名和镜像名均为 `epaper-album-server`，部署时通过 `server/.env` 设置 `SECRET_KEY`、`ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。
 
 ## 建议验证
 

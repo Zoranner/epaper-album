@@ -5,12 +5,7 @@ services:
     restart: always
     ports:
       - 3000:3000
-    environment:
-      - TZ=Asia/Shanghai
-      - LISTEN_PORT=3000
-      - DATABASE_URL=sqlite:data/epaper-album.db?mode=rwc
-      - SECRET_KEY=local-secret-key
-      - ADMIN_USERNAME=admin
-      - ADMIN_PASSWORD=admin
+    env_file:
+      - ../.env
     volumes:
       - ./data:/app/data

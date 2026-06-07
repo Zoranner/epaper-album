@@ -151,8 +151,9 @@ cd server
 
 `server/docker/docker-compose.yml` 提供基础部署配置，默认暴露 `3000` 端口，并通过环境变量配置设备密钥和管理员账号密码。正式部署时应调整：
 
-```yaml
-SECRET_KEY=local-secret-key
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=admin
+```bash
+cd server
+cp .env.example .env
 ```
+
+然后编辑 `server/.env` 中的 `SECRET_KEY`、`ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。`server/.env` 只用于本地或部署环境，不纳入版本管理。
