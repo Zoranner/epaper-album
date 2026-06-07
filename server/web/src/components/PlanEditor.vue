@@ -1,11 +1,11 @@
 <template>
-  <form class="panel form-panel" @submit.prevent="submit">
-    <div class="section-title">
+  <form class="plan-editor" @submit.prevent="submit">
+    <div class="section-title compact">
       <div>
-        <h2>{{ editing ? '编辑计划' : '新增计划' }}</h2>
-        <p>维护设备按时间生效的图片计划项</p>
+        <h2>{{ plan ? '编辑计划' : '新增计划' }}</h2>
+        <p>计划图片从已上传图片中选择</p>
       </div>
-      <button v-if="editing" class="button ghost" type="button" @click="$emit('cancel')">取消编辑</button>
+      <button v-if="plan" class="button ghost" type="button" @click="$emit('cancel')">取消</button>
     </div>
 
     <div class="form-grid">
@@ -21,82 +21,94 @@
 
     <label>
       <span>标题</span>
-      <input v-model.trim="draft.caption" required maxlength="80" placeholder="例如：春节相册" />
+      <input v-model.trim="draft.caption" required maxlength="80" placeholder="例如：晚风和海" />
     </label>
 
-    <label>
-      <span>图片 sha256 列表</span>
-      <textarea
-        v-model="imagesText"
-        required
-        rows="6"
-        spellcheck="false"
-        placeholder="每行一个 sha256"
-      />
-    </label>
+    <div class="pick-list">
+      <div class="field-head">
+        <span>计划图片</span>
+        <strong>{{ draft.images.length }} 张</strong>
+      </div>
+      <div v-if="images.length === 0" class="empty-state small">暂无可选图片</div>
+      <label v-for="image in images" v-else :key="image.sha256" class="check-row">
+        <input
+          :checked="draft.images.includes(image.sha256)"
+          type="checkbox"
+          @change="toggleImage(image.sha256)"
+        />
+        <span class="status-dot" :class="image.status"></span>
+        <code>{{ shortSha(image.sha256) }}</code>
+        <span class="muted">{{ image.remark || '未填写备注' }}</span>
+      </label>
+    </div>
 
     <div class="form-actions">
-      <button class="button primary" type="submit">{{ editing ? '保存计划' : '添加计划' }}</button>
-      <button class="button secondary" type="button" @click="reset">清空</button>
+      <button class="button primary" type="submit">{{ plan ? '保存计划' : '创建计划' }}</button>
+      <button class="button secondary" type="button" @click="reset">重置</button>
     </div>
   </form>
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
-import type { AlbumPlan } from '../api';
+import { reactive, watch } from 'vue';
+import type { AdminImage, AdminPlan, PlanPayload } from '../api';
 
 const props = defineProps<{
-  plan?: AlbumPlan | null;
-  editing?: boolean;
+  images: AdminImage[];
+  plan?: AdminPlan | null;
 }>();
 
 const emit = defineEmits<{
-  submit: [plan: AlbumPlan];
+  submit: [payload: PlanPayload, id?: number];
   cancel: [];
 }>();
 
-const emptyPlan = (): AlbumPlan => ({
+const draft = reactive<PlanPayload>({
   start: '',
   end: '',
   caption: '',
   images: [],
 });
 
-const draft = reactive<AlbumPlan>(emptyPlan());
-const imagesText = ref('');
-
-const normalizedImages = computed(() =>
-  imagesText.value
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean),
-);
-
-function load(plan?: AlbumPlan | null) {
-  const next = plan ?? emptyPlan();
-  draft.start = next.start;
-  draft.end = next.end;
-  draft.caption = next.caption;
-  draft.images = [...next.images];
-  imagesText.value = next.images.join('\n');
+function reset() {
+  load(props.plan);
 }
 
-function reset() {
-  load(props.editing ? props.plan : null);
+function load(plan?: AdminPlan | null) {
+  draft.start = plan?.start ?? '';
+  draft.end = plan?.end ?? '';
+  draft.caption = plan?.caption ?? '';
+  draft.images = plan?.images.map((image) => image.sha256) ?? [];
+}
+
+function toggleImage(sha256: string) {
+  if (draft.images.includes(sha256)) {
+    draft.images = draft.images.filter((item) => item !== sha256);
+    return;
+  }
+
+  draft.images = [...draft.images, sha256];
 }
 
 function submit() {
-  emit('submit', {
-    start: draft.start,
-    end: draft.end,
-    caption: draft.caption,
-    images: normalizedImages.value,
-  });
+  emit(
+    'submit',
+    {
+      start: draft.start,
+      end: draft.end,
+      caption: draft.caption,
+      images: draft.images,
+    },
+    props.plan?.id,
+  );
 
-  if (!props.editing) {
+  if (!props.plan) {
     load(null);
   }
+}
+
+function shortSha(sha256: string) {
+  return sha256.length > 18 ? `${sha256.slice(0, 12)}...${sha256.slice(-6)}` : sha256;
 }
 
 watch(

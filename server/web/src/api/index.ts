@@ -1,98 +1,164 @@
-export interface AlbumPlan {
+export type ImageStatus = 'pending' | 'processing' | 'ready' | 'failed';
+
+export interface AdminImage {
+  sha256: string;
+  status: ImageStatus;
+  remark: string;
+}
+
+export interface AdminPlan {
+  id: number;
+  start: string;
+  end: string;
+  caption: string;
+  images: AdminImage[];
+}
+
+export interface PlanPayload {
   start: string;
   end: string;
   caption: string;
   images: string[];
 }
 
-export interface Manifest {
-  version: string;
-  plans: AlbumPlan[];
-}
-
-export interface ImageResource {
-  sha256: string;
-  url: string;
-  size?: number;
-  content_type?: string;
-  created_at?: string;
-}
-
-export interface UploadImageResponse {
-  sha256: string;
-  url?: string;
+interface ApiEnvelope<T> {
+  code: number;
+  message: string;
+  data: T;
 }
 
 const apiBase = '/api';
 
-async function request<T>(path: string, init?: RequestInit, secretKey?: string): Promise<T> {
-  const response = await fetch(`${apiBase}${path}`, {
-    ...init,
-    headers: {
-      ...(init?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
-      ...(secretKey ? { 'secret-key': secretKey } : {}),
-      ...init?.headers,
-    },
-  });
+function authHeaders(token: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${token}`,
+  };
+}
 
-  if (!response.ok) {
+async function readJsonEnvelope<T>(response: Response): Promise<ApiEnvelope<T>> {
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
     const text = await response.text();
     throw new Error(text || `请求失败：${response.status}`);
   }
 
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
-  return (await response.json()) as T;
+  return (await response.json()) as ApiEnvelope<T>;
 }
 
-function normalizeImageResource(item: ImageResource | string): ImageResource {
-  if (typeof item === 'string') {
-    return {
-      sha256: item,
-      url: `/images/${item}`,
-    };
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${apiBase}${path}`, {
+    ...init,
+    headers: {
+      ...(init?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+      ...init?.headers,
+    },
+  });
+
+  const envelope = await readJsonEnvelope<T>(response);
+  if (!response.ok || envelope.code !== 0) {
+    throw new Error(envelope.message || `请求失败：${response.status}`);
   }
 
+  return envelope.data;
+}
+
+function tokenInit(token: string, init?: RequestInit): RequestInit {
   return {
-    ...item,
-    url: item.url || `/images/${item.sha256}`,
+    ...init,
+    headers: {
+      ...authHeaders(token),
+      ...init?.headers,
+    },
   };
 }
 
 export const albumApi = {
-  getManifest: (secretKey: string) => request<Manifest>('/manifest', undefined, secretKey),
-  updateManifest: (manifest: Manifest, secretKey: string) =>
-    request<Manifest>('/manifest', {
-      method: 'PUT',
-      body: JSON.stringify(manifest),
-    }, secretKey),
-  uploadImage: (file: File, secretKey: string) => {
+  login(username: string, password: string) {
+    return request<{ token: string }>('/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    });
+  },
+
+  listImages(token: string, keyword = '') {
+    const params = new URLSearchParams();
+    if (keyword.trim()) {
+      params.set('keyword', keyword.trim());
+    }
+    const query = params.toString();
+    return request<AdminImage[]>(`/images${query ? `?${query}` : ''}`, tokenInit(token));
+  },
+
+  uploadImage(token: string, file: File, remark: string) {
     const formData = new FormData();
     formData.append('image', file);
-
-    return request<UploadImageResponse>('/images', {
-      method: 'POST',
-      body: formData,
-    }, secretKey);
-  },
-  async listImages(secretKey: string) {
-    const result = await request<Array<ImageResource | string>>('/images', undefined, secretKey);
-    return result.map(normalizeImageResource);
-  },
-  deleteImage: (sha256: string, secretKey: string) =>
-    request<void>(`/images/${encodeURIComponent(sha256)}`, {
-      method: 'DELETE',
-    }, secretKey),
-  async getImageObjectUrl(sha256: string, secretKey: string) {
-    const response = await fetch(`/images/${encodeURIComponent(sha256)}`, {
-      headers: { 'secret-key': secretKey },
-    });
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text || `图片读取失败：${response.status}`);
+    if (remark.trim()) {
+      formData.append('remark', remark.trim());
     }
+
+    return request<AdminImage>(
+      '/images',
+      tokenInit(token, {
+        method: 'POST',
+        body: formData,
+      }),
+    );
+  },
+
+  updateImageRemark(token: string, sha256: string, remark: string) {
+    return request<AdminImage>(
+      `/images/${encodeURIComponent(sha256)}`,
+      tokenInit(token, {
+        method: 'PUT',
+        body: JSON.stringify({ remark }),
+      }),
+    );
+  },
+
+  listPlans(token: string, days: number) {
+    const params = new URLSearchParams({ days: String(days) });
+    return request<AdminPlan[]>(`/plans?${params.toString()}`, tokenInit(token));
+  },
+
+  createPlan(token: string, payload: PlanPayload) {
+    return request<AdminPlan>(
+      '/plans',
+      tokenInit(token, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    );
+  },
+
+  updatePlan(token: string, id: number, payload: PlanPayload) {
+    return request<AdminPlan>(
+      `/plans/${id}`,
+      tokenInit(token, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    );
+  },
+
+  deletePlan(token: string, id: number) {
+    return request<null>(
+      `/plans/${id}`,
+      tokenInit(token, {
+        method: 'DELETE',
+      }),
+    );
+  },
+
+  async getImageObjectUrl(token: string, sha256: string) {
+    const response = await fetch(`/images/${encodeURIComponent(sha256)}`, {
+      headers: authHeaders(token),
+    });
+
+    if (!response.ok) {
+      const envelope = await readJsonEnvelope<null>(response);
+      throw new Error(envelope.message || `图片读取失败：${response.status}`);
+    }
+
     return URL.createObjectURL(await response.blob());
   },
 };

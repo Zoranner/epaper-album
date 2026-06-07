@@ -3,12 +3,14 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use serde_json::json;
+use serde_json::Value;
 use thiserror::Error;
+
+use crate::models::ApiResponse;
 
 #[derive(Debug, Error)]
 pub enum AppError {
-    #[error("Invalid secret-key")]
+    #[error("Unauthorized")]
     Unauthorized,
     #[error("{0}")]
     BadRequest(String),
@@ -18,14 +20,20 @@ pub enum AppError {
     Internal(#[from] anyhow::Error),
 }
 
-impl IntoResponse for AppError {
-    fn into_response(self) -> Response {
-        let status = match self {
+impl AppError {
+    fn status_code(&self) -> StatusCode {
+        match self {
             AppError::Unauthorized => StatusCode::UNAUTHORIZED,
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        };
+        }
+    }
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let status = self.status_code();
         let message = match self {
             AppError::Internal(error) => {
                 tracing::error!("internal error: {error:?}");
@@ -34,7 +42,15 @@ impl IntoResponse for AppError {
             other => other.to_string(),
         };
 
-        (status, Json(json!({ "error": message }))).into_response()
+        (
+            status,
+            Json(ApiResponse {
+                code: status.as_u16(),
+                message,
+                data: Value::Null,
+            }),
+        )
+            .into_response()
     }
 }
 

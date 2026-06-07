@@ -17,6 +17,8 @@ async fn main() -> anyhow::Result<()> {
 
     let config = AppConfig::from_env()?;
     std::fs::create_dir_all("data")?;
+    std::fs::create_dir_all("data/origin")?;
+    std::fs::create_dir_all("data/display")?;
 
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
@@ -27,7 +29,13 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         store: Store::new(pool),
         secret_key: config.secret_key,
+        admin_username: config.admin_username,
+        admin_password: config.admin_password,
+        admin_token: config.admin_token,
+        data_dir: "data".into(),
+        enqueue_processing: true,
     };
+    routes::recover_and_enqueue_pending(&state).await?;
     let app = routes::router(state).layer(CorsLayer::permissive());
 
     tracing::info!(

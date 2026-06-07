@@ -1,172 +1,175 @@
+use std::{
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
+
 use axum::{
     body::Body,
-    http::{header, Request, StatusCode},
+    http::{header, request::Builder, Request, StatusCode},
     response::IntoResponse,
 };
 use epaper_album_server::{
-    db::{self, NewImage, NewPlanEntry, Store},
+    db::{self, Store},
     error::AppError,
-    models::{PlanEntry, PlanResponse},
     routes::{self, AppState},
 };
 use http_body_util::BodyExt;
-use sqlx::sqlite::SqlitePoolOptions;
+use serde_json::{json, Value};
+use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use tower::ServiceExt;
 
-async fn test_store() -> Store {
+static TEST_ID: AtomicU64 = AtomicU64::new(1);
+
+struct TestApp {
+    app: axum::Router,
+    pool: SqlitePool,
+    data_dir: PathBuf,
+    admin_token: String,
+}
+
+async fn test_app() -> TestApp {
+    let id = TEST_ID.fetch_add(1, Ordering::Relaxed);
+    let data_dir = std::env::temp_dir().join(format!(
+        "epaper-album-server-test-{}-{id}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(data_dir.join("origin")).expect("create origin dir");
+    std::fs::create_dir_all(data_dir.join("display")).expect("create display dir");
+
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
         .await
         .expect("connect in-memory sqlite");
     db::init_schema(&pool).await.expect("init schema");
-    Store::new(pool)
-}
 
-#[test]
-fn plan_response_json_matches_device_contract() {
-    let response = PlanResponse {
-        version: "2026-06-06-001".to_string(),
-        plans: vec![PlanEntry {
-            start: "2026-06-06".to_string(),
-            end: "2026-06-06".to_string(),
-            caption: "晚风和海".to_string(),
-            images: vec![
-                "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069".to_string(),
-            ],
-        }],
+    let admin_token = "test-admin-token".to_string();
+    let state = AppState {
+        store: Store::new(pool.clone()),
+        secret_key: "test-secret".to_string(),
+        admin_username: "admin".to_string(),
+        admin_password: "password".to_string(),
+        admin_token: admin_token.clone(),
+        data_dir: data_dir.clone(),
+        enqueue_processing: false,
     };
 
-    let value = serde_json::to_value(response).expect("serialize plan response");
+    TestApp {
+        app: routes::router(state),
+        pool,
+        data_dir,
+        admin_token,
+    }
+}
 
-    assert_eq!(
-        value,
-        serde_json::json!({
-            "version": "2026-06-06-001",
-            "plans": [
-                {
-                    "start": "2026-06-06",
-                    "end": "2026-06-06",
-                    "caption": "晚风和海",
-                    "images": [
-                        "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
-                    ]
-                }
-            ]
-        })
+async fn request_json(app: axum::Router, request: Request<Body>) -> (StatusCode, Value) {
+    let response = app.oneshot(request).await.expect("response");
+    let status = response.status();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collect body")
+        .to_bytes();
+    let value = serde_json::from_slice(&bytes).expect("json response");
+    (status, value)
+}
+
+fn user_request(uri: &str) -> Builder {
+    Request::builder()
+        .uri(uri)
+        .header("secret-key", "test-secret")
+}
+
+fn admin_request(app: &TestApp, uri: &str) -> Builder {
+    Request::builder()
+        .uri(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {}", app.admin_token))
+}
+
+async fn login(app: &TestApp, username: &str, password: &str) -> (StatusCode, Value) {
+    request_json(
+        app.app.clone(),
+        Request::builder()
+            .method("POST")
+            .uri("/api/login")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({ "username": username, "password": password }).to_string(),
+            ))
+            .expect("request"),
+    )
+    .await
+}
+
+async fn seed_image(pool: &SqlitePool, sha256: &str, status: &str, remark: &str) {
+    sqlx::query("INSERT INTO images (sha256, status, remark) VALUES (?, ?, ?)")
+        .bind(sha256)
+        .bind(status)
+        .bind(remark)
+        .execute(pool)
+        .await
+        .expect("seed image");
+}
+
+async fn image_status(pool: &SqlitePool, sha256: &str) -> String {
+    sqlx::query_scalar("SELECT status FROM images WHERE sha256 = ?")
+        .bind(sha256)
+        .fetch_one(pool)
+        .await
+        .expect("image status")
+}
+
+async fn image_remark(pool: &SqlitePool, sha256: &str) -> String {
+    sqlx::query_scalar("SELECT remark FROM images WHERE sha256 = ?")
+        .bind(sha256)
+        .fetch_one(pool)
+        .await
+        .expect("image remark")
+}
+
+async fn insert_plan(pool: &SqlitePool, start: &str, end: &str, caption: &str, images: Vec<&str>) {
+    sqlx::query("INSERT INTO plans (start_date, end_date, caption, images) VALUES (?, ?, ?, ?)")
+        .bind(start)
+        .bind(end)
+        .bind(caption)
+        .bind(serde_json::to_string(&images).expect("images json"))
+        .execute(pool)
+        .await
+        .expect("insert plan");
+}
+
+fn valid_sha(byte: u8) -> String {
+    format!("{byte:064x}")
+}
+
+fn multipart_body(boundary: &str, image: &[u8], remark: Option<&str>) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        b"Content-Disposition: form-data; name=\"image\"; filename=\"image.bin\"\r\n",
     );
-    assert!(value["plans"][0].get("url").is_none());
-    assert!(value["plans"][0].get("base_url").is_none());
+    body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+    body.extend_from_slice(image);
+    body.extend_from_slice(b"\r\n");
+
+    if let Some(remark) = remark {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(b"Content-Disposition: form-data; name=\"remark\"\r\n\r\n");
+        body.extend_from_slice(remark.as_bytes());
+        body.extend_from_slice(b"\r\n");
+    }
+
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    body
+}
+
+fn write_display_file(data_dir: &Path, sha256: &str, bytes: &[u8]) {
+    std::fs::write(data_dir.join("display").join(sha256), bytes).expect("write display file");
 }
 
 #[tokio::test]
-async fn store_persists_and_loads_plan_response_ordered_by_start() {
-    let store = test_store().await;
-
-    store
-        .replace_plan_entries(
-            "2026-06-06-001",
-            &[
-                NewPlanEntry {
-                    start: "2026-06-07".to_string(),
-                    end: "2026-06-07".to_string(),
-                    caption: "第二天".to_string(),
-                    images: vec!["hash-b".to_string()],
-                },
-                NewPlanEntry {
-                    start: "2026-06-06".to_string(),
-                    end: "2026-06-06".to_string(),
-                    caption: "第一天".to_string(),
-                    images: vec!["hash-a".to_string(), "hash-b".to_string()],
-                },
-            ],
-        )
-        .await
-        .expect("replace plan entries");
-
-    let response = store
-        .load_plan_response()
-        .await
-        .expect("load plan response")
-        .expect("plan response exists");
-
-    assert_eq!(response.version, "2026-06-06-001");
-    assert_eq!(response.plans.len(), 2);
-    assert_eq!(response.plans[0].start, "2026-06-06");
-    assert_eq!(response.plans[0].images, vec!["hash-a", "hash-b"]);
-    assert_eq!(response.plans[1].start, "2026-06-07");
-}
-
-#[tokio::test]
-async fn replacing_plan_entries_removes_stale_plan_rows() {
-    let store = test_store().await;
-
-    store
-        .replace_plan_entries(
-            "old",
-            &[NewPlanEntry {
-                start: "2026-06-06".to_string(),
-                end: "2026-06-06".to_string(),
-                caption: "旧计划".to_string(),
-                images: vec!["old-hash".to_string()],
-            }],
-        )
-        .await
-        .expect("insert old plan");
-    store
-        .replace_plan_entries(
-            "new",
-            &[NewPlanEntry {
-                start: "2026-06-07".to_string(),
-                end: "2026-06-07".to_string(),
-                caption: "新计划".to_string(),
-                images: vec!["new-hash".to_string()],
-            }],
-        )
-        .await
-        .expect("replace with new plan");
-
-    let response = store
-        .load_plan_response()
-        .await
-        .expect("load plan response")
-        .expect("plan response exists");
-
-    assert_eq!(response.version, "new");
-    assert_eq!(response.plans.len(), 1);
-    assert_eq!(response.plans[0].caption, "新计划");
-    assert_eq!(response.plans[0].images, vec!["new-hash"]);
-}
-
-#[tokio::test]
-async fn store_persists_image_metadata_and_blob() {
-    let store = test_store().await;
-
-    store
-        .upsert_image(NewImage {
-            sha256: "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069",
-            content_type: "image/bmp",
-            bytes: &[1, 2, 3, 4],
-        })
-        .await
-        .expect("upsert image");
-
-    let image = store
-        .get_image("7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069")
-        .await
-        .expect("get image")
-        .expect("image exists");
-
-    assert_eq!(
-        image.sha256,
-        "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
-    );
-    assert_eq!(image.content_type, "image/bmp");
-    assert_eq!(image.bytes, vec![1, 2, 3, 4]);
-}
-
-#[tokio::test]
-async fn app_error_serializes_http_error_body() {
+async fn app_error_serializes_unified_error_body() {
     let response = AppError::Unauthorized.into_response();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
@@ -176,120 +179,427 @@ async fn app_error_serializes_http_error_body() {
         .await
         .expect("collect body")
         .to_bytes();
-    let value: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
+    let value: Value = serde_json::from_slice(&bytes).expect("json body");
 
-    assert_eq!(value, serde_json::json!({ "error": "Invalid secret-key" }));
-}
-
-#[tokio::test]
-async fn manifest_route_requires_secret_key_and_returns_device_contract() {
-    let store = test_store().await;
-    store
-        .replace_plan_entries(
-            "2026-06-06-001",
-            &[NewPlanEntry {
-                start: "2026-06-06".to_string(),
-                end: "2026-06-06".to_string(),
-                caption: "晚风和海".to_string(),
-                images: vec![
-                    "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069".to_string(),
-                ],
-            }],
-        )
-        .await
-        .expect("seed plan");
-    let app = routes::router(AppState {
-        store,
-        secret_key: "test-secret".to_string(),
-    });
-
-    let unauthorized = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/manifest")
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("unauthorized response");
-    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
-
-    let authorized = app
-        .oneshot(
-            Request::builder()
-                .uri("/api/manifest")
-                .header("secret-key", "test-secret")
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("authorized response");
-    assert_eq!(authorized.status(), StatusCode::OK);
-
-    let bytes = authorized
-        .into_body()
-        .collect()
-        .await
-        .expect("collect body")
-        .to_bytes();
-    let value: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
-
-    assert_eq!(value["version"], "2026-06-06-001");
-    assert_eq!(value["plans"][0]["caption"], "晚风和海");
-    assert!(value["plans"][0].get("url").is_none());
-}
-
-#[tokio::test]
-async fn image_route_requires_secret_key_and_returns_blob() {
-    let store = test_store().await;
-    let sha256 = "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069";
-    store
-        .upsert_image(NewImage {
-            sha256,
-            content_type: "image/bmp",
-            bytes: &[1, 2, 3, 4],
-        })
-        .await
-        .expect("seed image");
-    let app = routes::router(AppState {
-        store,
-        secret_key: "test-secret".to_string(),
-    });
-
-    let unauthorized = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/images/{sha256}"))
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("unauthorized response");
-    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
-
-    let authorized = app
-        .oneshot(
-            Request::builder()
-                .uri(format!("/images/{sha256}"))
-                .header("secret-key", "test-secret")
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("authorized response");
-    assert_eq!(authorized.status(), StatusCode::OK);
     assert_eq!(
-        authorized.headers().get(header::CONTENT_TYPE),
-        Some(&"image/bmp".parse().expect("content type"))
+        value,
+        json!({
+            "code": 401,
+            "message": "Unauthorized",
+            "data": null
+        })
+    );
+}
+
+#[tokio::test]
+async fn login_returns_admin_token_and_rejects_bad_credentials() {
+    let app = test_app().await;
+
+    let (status, value) = login(&app, "admin", "password").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["code"], 0);
+    assert_eq!(value["message"], "ok");
+    assert_eq!(value["data"]["token"], app.admin_token);
+
+    let (status, value) = login(&app, "admin", "bad").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(value["code"], 401);
+    assert_eq!(value["data"], Value::Null);
+}
+
+#[tokio::test]
+async fn plans_days_parameter_is_lenient_and_clamped() {
+    let app = test_app().await;
+    let today = chrono::Local::now().date_naive();
+    let day0 = today.format("%Y-%m-%d").to_string();
+    let day2 = (today + chrono::Duration::days(2))
+        .format("%Y-%m-%d")
+        .to_string();
+    let day6 = (today + chrono::Duration::days(6))
+        .format("%Y-%m-%d")
+        .to_string();
+    let day7 = (today + chrono::Duration::days(7))
+        .format("%Y-%m-%d")
+        .to_string();
+
+    insert_plan(&app.pool, &day0, &day0, "today", vec![]).await;
+    insert_plan(&app.pool, &day2, &day2, "day2", vec![]).await;
+    insert_plan(&app.pool, &day6, &day6, "day6", vec![]).await;
+    insert_plan(&app.pool, &day7, &day7, "day7", vec![]).await;
+
+    let (_, default_value) = request_json(
+        app.app.clone(),
+        user_request("/api/plans?days=abc")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(default_value["data"].as_array().expect("plans").len(), 2);
+
+    let (_, min_value) = request_json(
+        app.app.clone(),
+        user_request("/api/plans?days=0")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(min_value["data"].as_array().expect("plans").len(), 1);
+
+    let (_, max_value) = request_json(
+        app.app.clone(),
+        user_request("/api/plans?days=99")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+    let captions = max_value["data"]
+        .as_array()
+        .expect("plans")
+        .iter()
+        .map(|item| item["caption"].as_str().expect("caption"))
+        .collect::<Vec<_>>();
+    assert_eq!(captions, vec!["today", "day2", "day6"]);
+}
+
+#[tokio::test]
+async fn plan_create_deduplicates_images_and_rejects_unknown_sha256() {
+    let app = test_app().await;
+    let sha_a = valid_sha(10);
+    let sha_b = valid_sha(11);
+    let sha_unknown = valid_sha(12);
+    seed_image(&app.pool, &sha_a, "ready", "A").await;
+    seed_image(&app.pool, &sha_b, "pending", "B").await;
+
+    let body = json!({
+        "start": "2026-06-06",
+        "end": "2026-06-07",
+        "caption": "去重",
+        "images": [sha_a, sha_b, sha_a]
+    });
+    let (status, value) = request_json(
+        app.app.clone(),
+        admin_request(&app, "/api/plans")
+            .method("POST")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        value["data"]["images"]
+            .as_array()
+            .expect("images")
+            .iter()
+            .map(|item| item["sha256"].as_str().expect("sha"))
+            .collect::<Vec<_>>(),
+        vec![valid_sha(10), valid_sha(11)]
     );
 
-    let bytes = authorized
+    let bad_body = json!({
+        "start": "2026-06-06",
+        "end": "2026-06-07",
+        "caption": "未知",
+        "images": [sha_unknown]
+    });
+    let (status, value) = request_json(
+        app.app.clone(),
+        admin_request(&app, "/api/plans")
+            .method("POST")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(bad_body.to_string()))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(value["code"], 400);
+}
+
+#[tokio::test]
+async fn plan_create_rejects_invalid_date_range() {
+    let app = test_app().await;
+    let sha = valid_sha(13);
+    seed_image(&app.pool, &sha, "ready", "A").await;
+
+    let body = json!({
+        "start": "2026-06-08",
+        "end": "2026-06-07",
+        "caption": "日期错误",
+        "images": [sha]
+    });
+    let (status, value) = request_json(
+        app.app.clone(),
+        admin_request(&app, "/api/plans")
+            .method("POST")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("request"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(value["code"], 400);
+}
+
+#[tokio::test]
+async fn init_schema_replaces_incompatible_legacy_tables() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("connect in-memory sqlite");
+
+    sqlx::query("CREATE TABLE images (sha256 TEXT PRIMARY KEY, content_type TEXT NOT NULL, bytes BLOB NOT NULL)")
+        .execute(&pool)
+        .await
+        .expect("create legacy images");
+    sqlx::query("CREATE TABLE plans (id INTEGER PRIMARY KEY AUTOINCREMENT, caption TEXT NOT NULL)")
+        .execute(&pool)
+        .await
+        .expect("create legacy plans");
+
+    db::init_schema(&pool).await.expect("init schema");
+
+    sqlx::query("INSERT INTO images (sha256, status, remark) VALUES (?, 'pending', '')")
+        .bind(valid_sha(14))
+        .execute(&pool)
+        .await
+        .expect("insert current image");
+    sqlx::query("INSERT INTO plans (start_date, end_date, caption, images) VALUES (?, ?, ?, ?)")
+        .bind("2026-06-06")
+        .bind("2026-06-06")
+        .bind("current")
+        .bind("[]")
+        .execute(&pool)
+        .await
+        .expect("insert current plan");
+}
+
+#[tokio::test]
+async fn plan_update_deduplicates_images_and_returns_404_for_missing_plan() {
+    let app = test_app().await;
+    let sha_a = valid_sha(15);
+    let sha_b = valid_sha(16);
+    seed_image(&app.pool, &sha_a, "ready", "A").await;
+    seed_image(&app.pool, &sha_b, "ready", "B").await;
+    insert_plan(&app.pool, "2026-06-06", "2026-06-06", "old", vec![&sha_a]).await;
+
+    let id: i64 = sqlx::query_scalar("SELECT id FROM plans LIMIT 1")
+        .fetch_one(&app.pool)
+        .await
+        .expect("plan id");
+    let body = json!({
+        "start": "2026-06-07",
+        "end": "2026-06-08",
+        "caption": "updated",
+        "images": [sha_b, sha_a, sha_b]
+    });
+    let (status, value) = request_json(
+        app.app.clone(),
+        admin_request(&app, &format!("/api/plans/{id}"))
+            .method("PUT")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["data"]["caption"], "updated");
+    assert_eq!(
+        value["data"]["images"]
+            .as_array()
+            .expect("images")
+            .iter()
+            .map(|item| item["sha256"].as_str().expect("sha"))
+            .collect::<Vec<_>>(),
+        vec![valid_sha(16), valid_sha(15)]
+    );
+
+    let missing_body = json!({
+        "start": "2026-06-07",
+        "end": "2026-06-08",
+        "caption": "missing",
+        "images": []
+    });
+    let (status, value) = request_json(
+        app.app.clone(),
+        admin_request(&app, "/api/plans/9999")
+            .method("PUT")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(missing_body.to_string()))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(value["code"], 404);
+}
+
+#[tokio::test]
+async fn plans_return_ready_sha256_for_users_and_full_image_state_for_admins() {
+    let app = test_app().await;
+    let ready_sha = valid_sha(1);
+    let failed_sha = valid_sha(2);
+    seed_image(&app.pool, &ready_sha, "ready", "可用").await;
+    seed_image(&app.pool, &failed_sha, "failed", "失败").await;
+    insert_plan(
+        &app.pool,
+        "2026-06-06",
+        "2099-12-31",
+        "权限差异",
+        vec![&ready_sha, &failed_sha],
+    )
+    .await;
+
+    let (_, user_value) = request_json(
+        app.app.clone(),
+        user_request("/api/plans")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(user_value["data"][0]["images"], json!([ready_sha]));
+
+    let (_, admin_value) = request_json(
+        app.app.clone(),
+        admin_request(&app, "/api/plans")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(admin_value["data"][0]["images"][0]["status"], "ready");
+    assert_eq!(admin_value["data"][0]["images"][1]["status"], "failed");
+    assert_eq!(admin_value["data"][0]["images"][1]["remark"], "失败");
+}
+
+#[tokio::test]
+async fn image_list_requires_admin_and_remark_update_returns_updated_image() {
+    let app = test_app().await;
+    let sha = valid_sha(17);
+    seed_image(&app.pool, &sha, "ready", "旧备注").await;
+
+    let (status, value) = request_json(
+        app.app.clone(),
+        user_request("/api/images")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(value["code"], 401);
+
+    let body = json!({ "remark": "新备注" });
+    let (status, value) = request_json(
+        app.app.clone(),
+        admin_request(&app, &format!("/api/images/{sha}"))
+            .method("PUT")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["data"]["remark"], "新备注");
+    assert_eq!(image_remark(&app.pool, &sha).await, "新备注");
+}
+
+#[tokio::test]
+async fn upload_deduplicates_same_image_and_requeues_failed_image() {
+    let app = test_app().await;
+    let image_bytes = b"same-image-content";
+    let expected_sha = "4d61acb7dcd2fe36cf64353d5422105675e6e7eeac7ed960f45d3ca79e358f45";
+    let boundary = "X-BOUNDARY";
+
+    let (status, value) = request_json(
+        app.app.clone(),
+        admin_request(&app, "/api/images")
+            .method("POST")
+            .header(
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(multipart_body(
+                boundary,
+                image_bytes,
+                Some("第一次"),
+            )))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(value["data"]["sha256"], expected_sha);
+    assert_eq!(value["data"]["status"], "pending");
+    assert_eq!(image_remark(&app.pool, expected_sha).await, "第一次");
+    assert!(app.data_dir.join("origin").join(expected_sha).exists());
+
+    sqlx::query("UPDATE images SET status = 'failed' WHERE sha256 = ?")
+        .bind(expected_sha)
+        .execute(&app.pool)
+        .await
+        .expect("mark failed");
+
+    let (status, value) = request_json(
+        app.app.clone(),
+        admin_request(&app, "/api/images")
+            .method("POST")
+            .header(
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(multipart_body(
+                boundary,
+                image_bytes,
+                Some("重试"),
+            )))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(value["data"]["sha256"], expected_sha);
+    assert_eq!(value["data"]["status"], "pending");
+    assert_eq!(image_status(&app.pool, expected_sha).await, "pending");
+    assert_eq!(image_remark(&app.pool, expected_sha).await, "重试");
+}
+
+#[tokio::test]
+async fn download_returns_ready_bmp_and_404_does_not_change_status() {
+    let app = test_app().await;
+    let ready_sha = valid_sha(3);
+    let missing_file_sha = valid_sha(4);
+    seed_image(&app.pool, &ready_sha, "ready", "ready").await;
+    seed_image(&app.pool, &missing_file_sha, "ready", "missing").await;
+    write_display_file(&app.data_dir, &ready_sha, b"BMready");
+
+    let response = app
+        .app
+        .clone()
+        .oneshot(
+            user_request(&format!("/images/{ready_sha}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE),
+        Some(&"image/bmp".parse().expect("content type"))
+    );
+    let bytes = response
         .into_body()
         .collect()
         .await
         .expect("collect body")
         .to_bytes();
-    assert_eq!(bytes.as_ref(), &[1, 2, 3, 4]);
+    assert_eq!(bytes.as_ref(), b"BMready");
+
+    let (status, value) = request_json(
+        app.app.clone(),
+        user_request(&format!("/images/{missing_file_sha}"))
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(value["code"], 404);
+    assert_eq!(image_status(&app.pool, &missing_file_sha).await, "ready");
 }

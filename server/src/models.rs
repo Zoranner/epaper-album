@@ -1,55 +1,73 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PlanResponse {
-    pub version: String,
-    pub plans: Vec<PlanEntry>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
+pub struct ImageRecord {
+    pub sha256: String,
+    pub status: String,
+    pub remark: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PlanEntry {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AdminPlan {
+    pub id: i64,
+    pub start: String,
+    pub end: String,
+    pub caption: String,
+    pub images: Vec<ImageRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UserPlan {
+    pub id: i64,
     pub start: String,
     pub end: String,
     pub caption: String,
     pub images: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
-pub struct ImageRecord {
-    pub sha256: String,
-    pub content_type: String,
-    pub bytes: Vec<u8>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
-pub struct ImageSummary {
-    pub sha256: String,
-    pub content_type: String,
-    pub size: i64,
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct LoginRequest {
+    pub username: String,
+    pub password: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ImageSummaryResponse {
-    pub sha256: String,
-    pub content_type: String,
-    pub size: i64,
-    pub url: String,
+pub struct LoginResponse {
+    pub token: String,
 }
 
-impl From<ImageSummary> for ImageSummaryResponse {
-    fn from(image: ImageSummary) -> Self {
-        let url = format!("/images/{}", image.sha256);
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct PlanPayload {
+    pub start: String,
+    pub end: String,
+    pub caption: String,
+    #[serde(default)]
+    pub images: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ImageRemarkPayload {
+    pub remark: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ApiResponse<T: Serialize> {
+    pub code: u16,
+    pub message: String,
+    pub data: T,
+}
+
+impl<T: Serialize> ApiResponse<T> {
+    pub fn ok(data: T) -> Self {
         Self {
-            sha256: image.sha256,
-            content_type: image.content_type,
-            size: image.size,
-            url,
+            code: 0,
+            message: "ok".to_string(),
+            data,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct UploadImageResponse {
-    pub sha256: String,
-    pub url: String,
+pub fn null_data() -> Value {
+    Value::Null
 }

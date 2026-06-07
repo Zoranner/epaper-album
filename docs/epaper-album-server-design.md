@@ -2,9 +2,9 @@
 
 ## 服务端职责
 
-服务端放在仓库 `server/` 子目录中，作为独立 Rust 工程管理。当前实现提供电子相册设备需要的计划接口和图片资源接口，同时提供一个 Vue 管理台用于维护计划、上传图片和查看资源列表。
+服务端放在仓库 `server/` 子目录中，作为独立工程管理。服务端负责维护照片计划、接收原始图片、排队生成电子墨水屏可直接使用的 BMP 图片，并向设备提供最近几天的计划和显示图片资源。
 
-服务端按设备端现有设计保持最小数据面。设备只关心 `version + plans`，计划项只包含 `start`、`end`、`caption` 和图片 `sha256` 列表。图片下载地址由设备使用本地 `base_url` 和 `sha256` 组合得到，计划响应中不写图片 URL。
+设备端只读取计划和显示图片。计划接口围绕单条计划管理。设备每次同步都按接口结果覆盖本地计划。
 
 ## 运行配置
 
@@ -14,29 +14,85 @@
 | --- | --- | --- |
 | `LISTEN_PORT` | `3000` | HTTP 服务监听端口 |
 | `DATABASE_URL` | `sqlite:data/epaper-album.db?mode=rwc` | SQLite 数据库连接地址 |
-| `EPAPER_ALBUM_SECRET_KEY` | `local-secret-key` | 设备和管理端请求接口时使用的密钥 |
+| `SECRET_KEY` | `local-secret-key` | 设备和用户权限请求接口时使用的密钥 |
+| `ADMIN_USERNAME` | `admin` | 管理员账号 |
+| `ADMIN_PASSWORD` | `admin` | 管理员密码 |
 
-启动时服务端会创建 `data/` 目录，初始化 SQLite 表结构，然后挂载 API 路由和 `web/dist` 静态前端目录。`server/data/`、`server/target/`、`server/web/dist/` 和 `server/web/node_modules/` 已作为本地运行产物忽略。
+`SECRET_KEY` 用于设备同步计划和下载显示图片。管理员账号密码用于管理台登录和管理接口权限。服务端启动时创建 `data/`、`data/origin/` 和 `data/display/` 目录，初始化 SQLite 表结构，并挂载 API 路由和管理台静态文件。
 
 ## 鉴权规则
 
-除健康检查和静态前端页面外，接口统一使用请求头 `secret-key` 鉴权。请求头值需要与服务端 `EPAPER_ALBUM_SECRET_KEY` 一致。
+除健康检查和静态前端页面外，接口统一鉴权。设备和用户权限使用请求头 `secret-key`，请求头值需要与服务端 `SECRET_KEY` 一致。管理员权限使用管理员账号密码登录后获得的会话或令牌。
 
 ```http
 secret-key: local-secret-key
 ```
 
-鉴权失败返回：
+接口 JSON 响应使用统一结构：
 
 ```json
 {
-  "error": "Invalid secret-key"
+  "code": 0,
+  "message": "ok",
+  "data": {}
 }
 ```
 
-对应 HTTP 状态码为 `401 Unauthorized`。当前实现没有多用户、设备绑定和密钥轮换机制，密钥由服务端部署配置统一管理。
+`code = 0` 表示成功，非零表示失败。失败响应同样使用 JSON：
 
-`PUT /api/manifest` 和 `POST /api/images` 分别使用 Axum 的 JSON、multipart extractor 解析请求体。请求体格式或 `Content-Type` 明显不符合 extractor 要求时，框架可能在进入业务 handler 前返回解析错误；鉴权规则适用于成功进入业务 handler 的接口处理流程。
+```json
+{
+  "code": 401,
+  "message": "Unauthorized",
+  "data": null
+}
+```
+
+健康检查和显示图片下载是例外：`GET /api/healthz` 返回纯文本，`GET /images/:sha256` 成功时返回 BMP 二进制。显示图片下载失败时仍返回统一 JSON 错误。鉴权失败返回 `401 Unauthorized`。当前设计按个人相册服务处理，设备使用用户权限读取计划；管理台使用管理员权限维护图片和计划。
+
+接口地址不区分用户端和管理端。同一个接口根据认证结果控制可执行动作和可见字段：用户权限只能读取计划和下载显示图片；管理员权限可以读取完整计划信息、维护计划、维护图片和下载显示图片。
+
+## 数据对象
+
+### 计划
+
+计划描述某个日期范围内设备应显示的标题和图片。计划表直接保存图片 `sha256` 列表。原图保存为 `data/origin/{sha256}`，显示 BMP 保存为 `data/display/{sha256}`。管理台按图片 `status` 显示处理状态；设备接口只返回 `status = 'ready'` 的图片 `sha256`。
+
+```json
+{
+  "id": 1,
+  "start": "2026-06-06",
+  "end": "2026-06-06",
+  "caption": "晚风和海",
+  "images": [
+    "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15..."
+  ]
+}
+```
+
+字段说明：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | integer | 计划主键 |
+| `start` | string | 计划开始日期，格式为 `YYYY-MM-DD` |
+| `end` | string | 计划结束日期，包含当天 |
+| `caption` | string | 设备左下角标题 |
+| `images` | string[] | 图片 `sha256` 列表 |
+
+### 图片
+
+图片上传后先按原始文件内容计算 `sha256`，再检查数据库记录和 `data/origin/{sha256}` 文件。已有图片复用现有记录和文件；新图片保存原始文件，数据库写入 `pending` 状态，并由服务端后台任务生成适配 800 x 480 六色电子墨水屏的 BMP 文件。显示 BMP 保存为 `data/display/{sha256}`。数据库保存图片 `sha256`、处理状态和备注。
+
+```json
+{
+  "sha256": "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15...",
+  "status": "pending",
+  "remark": "海边晚风"
+}
+```
+
+`status` 是图片处理状态的唯一依据。`ready` 表示图片已经处理完成，可以从 `data/display/{sha256}` 下载；`pending` 和 `processing` 表示仍在处理流程中；`failed` 表示处理失败，等待管理员重新上传或后续手动重试。
 
 ## 接口设计
 
@@ -56,89 +112,245 @@ ok
 
 该接口不需要 `secret-key`。
 
+### 管理员登录
+
+```http
+POST /api/login
+```
+
+用途：管理台登录。
+
+请求体：
+
+```json
+{
+  "username": "admin",
+  "password": "admin"
+}
+```
+
+服务端使用 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD` 校验账号密码。登录成功后返回管理会话或令牌，后续管理操作使用该会话或令牌获得管理员权限。
+
+成功响应：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "token": "admin-token"
+  }
+}
+```
+
 ### 获取计划
 
 ```http
-GET /api/manifest
+GET /api/plans?days=3
 ```
 
-用途：设备端同步计划，管理台加载当前计划。
+用途：读取计划。设备和管理台使用同一个接口。
 
-请求头：
+用户权限请求头：
 
 ```http
 secret-key: local-secret-key
 ```
 
-响应：
+管理员权限请求头：
+
+```http
+Authorization: Bearer <admin-token>
+```
+
+查询参数：
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `days` | `3` | 从当前日期开始返回的天数，最大值为 `7` |
+
+服务端按本地日期筛选计划。默认返回今天起三天内的计划，`days=7` 返回今天起七天内的计划；时间范围为 `[today, today + days - 1]`。`days` 统一按宽容规则处理：缺省或不是整数时使用默认值 `3`，小于 `1` 按 `1`，大于 `7` 按 `7`。
+
+用户权限响应：
 
 ```json
 {
-  "version": "2026-06-06-001",
-  "plans": [
+  "code": 0,
+  "message": "ok",
+  "data": [
     {
+      "id": 1,
       "start": "2026-06-06",
       "end": "2026-06-06",
       "caption": "晚风和海",
       "images": [
-        "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
+        "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15..."
       ]
     }
   ]
 }
 ```
 
-字段说明：
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `version` | string | 当前计划版本，设备用于判断计划是否变化 |
-| `plans` | array | 计划列表 |
-| `plans[].start` | string | 计划开始日期，当前按 `YYYY-MM-DD` 字符串处理 |
-| `plans[].end` | string | 计划结束日期，包含当天 |
-| `plans[].caption` | string | 设备左下角标题 |
-| `plans[].images` | string[] | 图片资源 `sha256` 列表 |
-
-数据库没有计划数据时，接口返回：
+管理员权限响应：
 
 ```json
 {
-  "version": "0",
-  "plans": []
+  "code": 0,
+  "message": "ok",
+  "data": [
+    {
+      "id": 1,
+      "start": "2026-06-06",
+      "end": "2026-06-06",
+      "caption": "晚风和海",
+      "images": [
+        {
+          "sha256": "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15...",
+          "status": "pending",
+          "remark": "海边晚风"
+        }
+      ]
+    }
+  ]
 }
 ```
+
+同一个计划接口根据权限返回不同图片结构。用户权限下，`images` 只包含已经生成显示 BMP 的 `sha256`。管理员权限下，`images` 包含 `sha256`、`status` 和 `remark`，用于计划管理页面展示和选择图片。
+
+计划接口用 SQLite `json_each(plans.images)` 展开图片摘要数组，并通过 `images.sha256` 主键关联图片状态和备注。管理员权限下保留全部图片；用户权限下只返回 `status = 'ready'` 的图片。
+
+### 获取图片
+
+```http
+GET /api/images?keyword=海边
+```
+
+用途：图片管理页查看已有图片，计划管理页选择已有图片。该接口需要管理员权限。
+
+管理员权限请求头：
+
+```http
+Authorization: Bearer <admin-token>
+```
+
+查询参数：
+
+| 参数 | 说明 |
+| --- | --- |
+| `keyword` | 可选，按备注进行模糊搜索 |
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": [
+    {
+      "sha256": "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15...",
+      "status": "pending",
+      "remark": "海边晚风"
+    }
+  ]
+}
+```
+
+### 新增计划
+
+```http
+POST /api/plans
+```
+
+用途：新增一条计划。该接口需要管理员权限。
+
+管理员权限请求头：
+
+```http
+Authorization: Bearer <admin-token>
+Content-Type: application/json
+```
+
+请求体：
+
+```json
+{
+  "start": "2026-06-06",
+  "end": "2026-06-06",
+  "caption": "晚风和海",
+  "images": [
+    "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15..."
+  ]
+}
+```
+
+`images` 填写已有图片的 `sha256` 列表。计划管理不上传图片，只从图片管理页已经上传的图片中选择。服务端把这些摘要写入 `plans.images`。计划创建不依赖图片是否已经生成显示 BMP，也允许 `images` 为空数组，便于先维护日期和标题。
+
+成功响应返回创建后的管理台计划视图：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "id": 1,
+    "start": "2026-06-06",
+    "end": "2026-06-06",
+    "caption": "晚风和海",
+    "images": [
+      {
+        "sha256": "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15...",
+        "status": "pending",
+        "remark": "海边晚风"
+      }
+    ]
+  }
+}
+```
+
+服务端校验 `images` 中的每个 `sha256` 已存在于 `images` 表。存在未知图片时返回 `400 Bad Request`。`images` 可以为空数组。服务端按提交顺序自动去重，重复的 `sha256` 只保留第一次出现的位置。
 
 ### 更新计划
 
 ```http
-PUT /api/manifest
+PUT /api/plans/:id
 ```
 
-用途：管理台保存完整计划。当前实现采用整体替换模式，提交的新 manifest 会替换全部计划行和版本号。
+用途：修改单条计划。该接口需要管理员权限。
 
-请求头：
+管理员权限请求头：
 
 ```http
-secret-key: local-secret-key
+Authorization: Bearer <admin-token>
 Content-Type: application/json
 ```
 
-请求体与 `GET /api/manifest` 响应结构一致。
+请求体与新增计划一致。服务端校验 `images` 中的每个 `sha256` 已存在于 `images` 表。成功响应返回更新后的计划。计划不存在返回 `404 Not Found`，存在未知图片时返回 `400 Bad Request`。`images` 可以为空数组。服务端按提交顺序自动去重，重复的 `sha256` 只保留第一次出现的位置。
 
-校验规则：
+### 删除计划
 
-- `version` 去除空白后需要非空。
-- 每个计划项的 `start` 和 `end` 需要非空。
-- 每个计划项至少包含一个图片 `sha256`。
-- 每个 `sha256` 必须是 64 位十六进制字符串。
+```http
+DELETE /api/plans/:id
+```
 
-成功响应返回保存后的 manifest。校验失败返回 `400 Bad Request`，响应体格式为：
+用途：删除单条计划。该接口需要管理员权限。
+
+管理员权限请求头：
+
+```http
+Authorization: Bearer <admin-token>
+```
+
+成功删除返回：
 
 ```json
 {
-  "error": "Invalid sha256: xxx"
+  "code": 0,
+  "message": "ok",
+  "data": null
 }
 ```
+
+计划不存在返回 `404 Not Found`。
 
 ### 上传图片
 
@@ -146,12 +358,12 @@ Content-Type: application/json
 POST /api/images
 ```
 
-用途：管理台上传图片资源。服务端读取 multipart 字段 `image`，按文件内容计算 SHA-256，并把图片内容写入 SQLite。
+用途：图片管理页上传原始图片。该接口需要管理员权限。服务端先按文件内容计算 `sha256`，已有图片直接复用；新图片保存原始文件后，把图片处理任务加入后台队列。
 
-请求头：
+管理员权限请求头：
 
 ```http
-secret-key: local-secret-key
+Authorization: Bearer <admin-token>
 Content-Type: multipart/form-data
 ```
 
@@ -159,142 +371,144 @@ Content-Type: multipart/form-data
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `image` | file | 图片文件内容 |
+| `image` | file | 原始图片文件 |
+| `remark` | string | 可选备注，用于后台搜索和人工识别 |
 
 成功响应状态码为 `201 Created`：
 
 ```json
 {
-  "sha256": "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069",
-  "url": "/images/7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "sha256": "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15...",
+    "status": "pending",
+    "remark": "海边晚风"
+  }
 }
 ```
 
 写入规则：
 
-- 服务端以文件内容计算 `sha256`，不信任客户端传入的文件名或摘要。
-- 同一 `sha256` 重复上传时执行 upsert，更新 `content_type` 和二进制内容。
-- 空文件返回 `400 Bad Request`。
-- 没有 `image` 字段返回 `400 Bad Request`。
+- 服务端按原始文件内容计算 `sha256`，`sha256` 同时作为原始文件名和显示文件名。
+- 先检查 `images.sha256` 记录和 `data/origin/{sha256}` 文件。
+- 已存在相同 `sha256` 时复用已有图片记录；表单提交了 `remark` 时更新备注，未提交时保留原备注；如果 `status` 是 `pending` 或 `processing`，确认图片处理任务已进入队列；如果 `status` 是 `failed`，把状态改回 `pending` 后入队重试。
+- 不存在相同 `sha256` 时，原始图片保存到 `data/origin/{sha256}`，数据库写入 `images(sha256, status, remark)`，初始状态为 `pending`。
+- 后台任务从原始图片生成 800 x 480 BMP。
+- 显示 BMP 保存到 `data/display/{sha256}`。
 
-### 图片列表
-
-```http
-GET /api/images
-```
-
-用途：管理台查看当前已保存资源。
-
-请求头：
+### 更新图片备注
 
 ```http
-secret-key: local-secret-key
+PUT /api/images/:sha256
 ```
 
-响应：
+用途：图片管理页修改图片备注。该接口需要管理员权限。
+
+管理员权限请求头：
+
+```http
+Authorization: Bearer <admin-token>
+Content-Type: application/json
+```
+
+请求体：
 
 ```json
-[
-  {
-    "sha256": "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069",
-    "content_type": "image/bmp",
-    "size": 123456,
-    "url": "/images/7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
+{
+  "remark": "海边晚风"
+}
+```
+
+成功响应返回更新后的图片信息：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "sha256": "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15...",
+    "status": "ready",
+    "remark": "海边晚风"
   }
-]
+}
 ```
 
-列表按 `sha256` 升序返回。`size` 来自 SQLite 中二进制字段的 `length(bytes)`。
-
-### 删除图片
-
-```http
-DELETE /api/images/:sha256
-```
-
-用途：管理台删除未使用或错误上传的图片资源。
-
-请求头：
-
-```http
-secret-key: local-secret-key
-```
-
-路径参数：
-
-| 参数 | 说明 |
-| --- | --- |
-| `sha256` | 64 位十六进制图片摘要 |
-
-成功删除返回 `204 No Content`。资源不存在返回 `404 Not Found`。`sha256` 格式不正确返回 `400 Bad Request`。
-
-### 下载图片
+### 下载显示图片
 
 ```http
 GET /images/:sha256
 ```
 
-用途：设备端按 `sha256` 下载图片资源；管理台预览图片时也使用该接口。
+用途：设备端和管理台按显示图片文件键下载 BMP 文件。
 
-请求头：
+用户权限请求头：
 
 ```http
 secret-key: local-secret-key
+```
+
+管理员权限请求头：
+
+```http
+Authorization: Bearer <admin-token>
 ```
 
 路径参数：
 
 | 参数 | 说明 |
 | --- | --- |
-| `sha256` | 64 位十六进制图片摘要 |
+| `sha256` | 图片内容 SHA-256，也是显示 BMP 的文件键 |
 
-成功响应直接返回图片二进制内容，并设置 `Content-Type` 为上传时记录的 `content_type`。资源不存在返回 `404 Not Found`。`sha256` 格式不正确返回 `400 Bad Request`。
+下载前先查询 `images.status`。只有 `status = 'ready'` 时才返回 `data/display/{sha256}` 对应的 BMP 二进制内容，`Content-Type` 固定为 `image/bmp`。资源不存在、状态不是 `ready`，或 `ready` 但显示文件不存在时，返回 `404 Not Found`。下载接口不修改图片状态。`sha256` 格式不正确返回 `400 Bad Request`。错误响应使用统一 JSON 结构。
 
-### 前端静态页面
+## 图片处理流程
 
-```http
-GET /
-GET /assets/*
-```
+图片处理任务以 `images.status` 作为持久队列状态，内存队列只负责当前进程内的调度。当前按单实例服务设计；如果后续改为多实例部署，需要把任务抢占和状态恢复改为跨实例安全的实现。处理目标是生成设备可直接缓存和显示的 BMP 文件。
 
-用途：访问管理台及其构建产物。服务端把未命中的请求交给 `web/dist` 静态文件服务，并在目录访问时追加 `index.html`。当前实现不是专门的 SPA history fallback，未实际存在的深层路径不保证返回 `index.html`。
+队列规则：
 
-管理台本身不绕过接口鉴权。用户在页面中输入管理密钥后，浏览器把密钥写入本地存储，并在调用 API 时通过 `secret-key` 请求头发送。图片预览不能通过普通 `<img>` 标签携带请求头，因此管理台使用 `fetch` 带密钥读取图片，再生成临时 `blob:` URL 进行预览。
+- `pending` 表示等待处理。
+- `processing` 表示当前进程正在处理。
+- `ready` 表示显示 BMP 已生成，可以下载。
+- `failed` 表示处理失败，不自动反复重试。
+- 单实例服务启动后把上次遗留的 `processing` 改回 `pending`，再扫描 `pending` 图片加入内存队列。
+- 上传图片时按同一规则判断是否需要入队。
+- 内存队列维护当前进程中的待处理 `sha256` 集合，同一个 `sha256` 不重复入队。
+- worker 取出任务前用条件更新抢占任务：`UPDATE images SET status = 'processing' WHERE sha256 = ? AND status = 'pending'`。更新成功才继续处理。
+- 处理成功后先把 BMP 写入临时文件，再原子替换为 `data/display/{sha256}`，最后把状态更新为 `ready`。对外接口以 `status` 为准，不用文件是否存在判断处理状态。
+- 处理失败时保留原图和 `images` 记录，把状态改为 `failed`。管理员重新上传同一图片或后续增加手动重试入口时，再把状态改回 `pending`。
+- 服务重启后不依赖内存队列恢复状态，按 `images.status` 重新恢复未完成任务。
+- 服务启动时执行一致性修复：`ready` 但 `data/display/{sha256}` 不存在时改回 `pending`；`pending`、`processing` 或 `failed` 不返回给用户计划接口。
+
+处理步骤：
+
+- 读取 `data/origin/{sha256}`。
+- 解码原始图片。
+- 按 800 x 480 画布裁剪或居中适配。
+- 转换为六色电子墨水屏可用颜色。
+- 进行抖动处理。
+- 输出 BMP。
+- 写入临时 BMP 文件。
+- 原子替换为 `data/display/{sha256}`。
+
+管理台计划列表按 `status` 判断状态。`pending` 和 `processing` 显示“处理中”；`failed` 显示“处理失败”；`ready` 显示最终图片，并可把该图片纳入设备计划。
 
 ## 数据库设计
 
 当前数据库使用 SQLite，由 `server/src/db.rs` 在启动时自动创建表结构。数据库默认路径为 `server/data/epaper-album.db`。
 
-### `plan_versions`
+### `plans`
 
-保存当前 manifest 的版本号。当前系统只有一个活动 manifest，因此表中固定使用 `id = 1`。
-
-```sql
-CREATE TABLE IF NOT EXISTS plan_versions (
-    id      INTEGER PRIMARY KEY CHECK (id = 1),
-    version TEXT NOT NULL
-);
-```
-
-字段说明：
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `id` | INTEGER | 固定为 `1`，用于约束单一活动版本 |
-| `version` | TEXT | 当前计划版本 |
-
-### `plan_entries`
-
-保存 manifest 中的计划项。每次更新 manifest 时，服务端在事务中清空旧计划项并重新插入新计划项。
+保存计划基本信息。
 
 ```sql
-CREATE TABLE IF NOT EXISTS plan_entries (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    start_date  TEXT NOT NULL,
-    end_date    TEXT NOT NULL,
-    caption     TEXT NOT NULL,
-    images_json TEXT NOT NULL,
-    position    INTEGER NOT NULL
+CREATE TABLE IF NOT EXISTS plans (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    start_date TEXT NOT NULL,
+    end_date   TEXT NOT NULL,
+    caption    TEXT NOT NULL,
+    images     TEXT NOT NULL
 );
 ```
 
@@ -306,26 +520,17 @@ CREATE TABLE IF NOT EXISTS plan_entries (
 | `start_date` | TEXT | 计划开始日期，对应接口字段 `start` |
 | `end_date` | TEXT | 计划结束日期，对应接口字段 `end` |
 | `caption` | TEXT | 标题，对应接口字段 `caption` |
-| `images_json` | TEXT | 图片 `sha256` 字符串数组的 JSON 序列化结果 |
-| `position` | INTEGER | manifest 内原始顺序，用于同一天多条计划的稳定排序 |
-
-读取 manifest 时，服务端按以下规则排序：
-
-```sql
-ORDER BY start_date ASC, position ASC, id ASC
-```
-
-这个排序让设备优先按日期读取计划，同时保留同一开始日期下管理台提交时的顺序。
+| `images` | TEXT | 原始图片摘要数组的 JSON 字符串 |
 
 ### `images`
 
-保存图片资源的摘要、内容类型和二进制内容。
+保存图片摘要、处理状态和备注。
 
 ```sql
 CREATE TABLE IF NOT EXISTS images (
-    sha256       TEXT PRIMARY KEY,
-    content_type TEXT NOT NULL,
-    bytes        BLOB NOT NULL
+    sha256  TEXT PRIMARY KEY,
+    status  TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'ready', 'failed')),
+    remark  TEXT NOT NULL DEFAULT ''
 );
 ```
 
@@ -333,63 +538,62 @@ CREATE TABLE IF NOT EXISTS images (
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `sha256` | TEXT | 图片内容 SHA-256 摘要，作为资源主键 |
-| `content_type` | TEXT | 上传时记录的 MIME 类型 |
-| `bytes` | BLOB | 图片二进制内容 |
+| `sha256` | TEXT | 原始上传图片内容摘要，也是原图和显示 BMP 的文件键 |
+| `status` | TEXT | 图片处理状态：`pending`、`processing`、`ready`、`failed` |
+| `remark` | TEXT | 图片备注，用于管理台搜索和人工识别 |
 
-图片列表接口不直接返回 `bytes`，只通过 `length(bytes)` 计算资源大小。图片下载接口按 `sha256` 查询并返回 `bytes`。
+原始图片和显示 BMP 都保存在文件系统中。数据库保存摘要、处理状态和备注，不保存图片二进制内容。
 
-## 写入流程
+## 读取规则
 
-### 保存 manifest
+### 设备读取计划
 
-管理台提交完整 manifest 后，后端执行一次事务：
+设备调用 `GET /api/plans`。服务端返回从当前日期开始的计划，默认三天，最多七天。返回给设备的 `images` 使用 `status = 'ready'` 的图片 `sha256`。
 
-- 删除 `plan_entries` 中旧计划。
-- 删除 `plan_versions` 中旧版本。
-- 插入 `id = 1` 的新版本。
-- 按请求中的计划顺序写入 `plan_entries`，并保存 `position`。
-- 提交事务。
+如果计划关联的图片仍在处理中，服务端在设备响应中跳过该图片。某条计划下全部图片都未处理完成时，该计划可以保留在响应中并返回空 `images`，设备端按本地缓存和异常策略处理。
 
-该流程保证 manifest 读取时只看到一组完整计划。
+查询时使用 `json_each(plans.images)` 展开计划内的图片摘要，并通过 `images.sha256` 关联状态和备注：
 
-### 上传图片
+```sql
+SELECT
+    p.id,
+    p.start_date,
+    p.end_date,
+    p.caption,
+    image_item.key AS image_index,
+    i.sha256,
+    i.status,
+    i.remark
+FROM plans AS p
+JOIN json_each(p.images) AS image_item
+LEFT JOIN images AS i ON i.sha256 = image_item.value
+WHERE p.start_date <= :end_date
+  AND p.end_date >= :start_date
+ORDER BY p.start_date ASC, p.id ASC, image_item.key ASC;
+```
 
-管理台上传图片后，后端执行以下处理：
+设备响应只收集 `status = 'ready'` 的图片。
 
-- 读取 multipart 字段 `image`。
-- 计算图片内容的 SHA-256 十六进制字符串。
-- 保存 `sha256`、`content_type` 和 `bytes`。
-- 如果 `sha256` 已存在，更新已有记录。
-- 返回 `sha256` 和下载路径。
+用户权限查询在关联图片后增加 `i.status = 'ready'` 过滤。管理员权限不加该过滤，保留计划中的全部图片并返回图片状态。
 
-设备下载后仍需要用本地计算出的 SHA-256 校验图片内容，校验通过后以 `sha256` 作为缓存文件名。
+### 管理台读取计划
+
+管理台调用 `GET /api/plans`，并使用管理员权限。该接口返回每张图片的 `sha256`、`status` 和 `remark`。管理台按 `status` 显示“处理中”“处理失败”或最终图片。
 
 ## 前端管理台
 
 管理台位于 `server/web`，使用 Vue 3、Vite、TypeScript 和 bun。页面是工作台式布局，主要功能包括：
 
 - 配置并保存管理密钥。
-- 查看当前 manifest 的版本号、计划数量和 JSON 预览。
-- 新增、编辑、删除计划项。
-- 上传图片并显示返回的 `sha256`。
-- 查看图片资源列表、大小和预览。
-- 删除图片资源。
+- 图片管理：上传原始图片、填写备注、查看处理状态、搜索图片、预览显示 BMP；`failed` 图片可以通过重新上传同一图片触发重试。
+- 计划管理：按天数查看计划，默认三天，最多七天。
+- 计划管理：新增、编辑、删除计划，并从已有图片中选择计划图片。
 
 前端开发代理在 `server/web/vite.config.ts` 中配置，开发模式下 `/api` 和 `/images` 转发到 `http://localhost:3000`。
 
-## 验证覆盖
+## 建议验证
 
-当前服务端测试位于 `server/tests/core.rs`，覆盖以下内容：
-
-- manifest JSON 结构与设备契约一致，不包含 `url` 和 `base_url`。
-- 计划持久化、读取排序和整体替换行为。
-- 图片元数据和二进制内容持久化。
-- 错误响应 JSON 结构。
-- `/api/manifest` 的 `secret-key` 鉴权和响应结构。
-- `/images/:sha256` 的 `secret-key` 鉴权、`Content-Type` 和二进制内容返回。
-
-建议使用以下命令验证：
+服务端实现调整后建议使用以下命令验证：
 
 ```powershell
 cd server
