@@ -138,15 +138,15 @@ pub fn render_into(buffer: &mut ScreenBuffer, input: &RenderInput<'_>) {
     }
 
     if !input.caption.is_empty() {
-        draw_placeholder_text(buffer, OverlaySlot::BottomLeft, input.caption, &input.style);
+        draw_text(buffer, OverlaySlot::BottomLeft, input.caption, &input.style);
     }
 
     if !input.date.is_empty() {
-        draw_placeholder_text(buffer, OverlaySlot::BottomRight, input.date, &input.style);
+        draw_text(buffer, OverlaySlot::BottomRight, input.date, &input.style);
     }
 
     if let Some(status_hint) = input.status_hint {
-        draw_placeholder_text(
+        draw_text(
             buffer,
             OverlaySlot::TopRight,
             status_hint.text(),
@@ -166,17 +166,20 @@ pub fn draw_solid_block(
     buffer.fill_rect(x, y, width, height, color);
 }
 
-pub fn draw_placeholder_text(
-    buffer: &mut ScreenBuffer,
-    slot: OverlaySlot,
-    text: &str,
-    style: &TextStyle,
-) {
-    let Some((block_width, block_height)) = text_block_size(text, style) else {
+pub fn draw_text(buffer: &mut ScreenBuffer, slot: OverlaySlot, text: &str, style: &TextStyle) {
+    let Some((block_width, block_height)) = text_size(text, style) else {
         return;
     };
 
     let (x, y) = overlay_origin(slot, block_width, block_height, style);
+    draw_text_at(buffer, x, y, text, style);
+}
+
+pub fn draw_text_at(buffer: &mut ScreenBuffer, x: usize, y: usize, text: &str, style: &TextStyle) {
+    let Some((block_width, block_height)) = text_size(text, style) else {
+        return;
+    };
+
     buffer.fill_rect(x, y, block_width, block_height, style.background);
 
     let mut cursor_x = x.saturating_add(style.padding_x);
@@ -189,10 +192,11 @@ pub fn draw_placeholder_text(
             continue;
         }
 
-        draw_placeholder_glyph(
+        draw_glyph(
             buffer,
             cursor_x,
             glyph_y,
+            character,
             style.glyph_width,
             style.glyph_height,
             style.foreground,
@@ -200,6 +204,88 @@ pub fn draw_placeholder_text(
         cursor_x = cursor_x
             .saturating_add(style.glyph_width)
             .saturating_add(style.glyph_gap);
+    }
+}
+
+pub fn draw_placeholder_text(
+    buffer: &mut ScreenBuffer,
+    slot: OverlaySlot,
+    text: &str,
+    style: &TextStyle,
+) {
+    draw_text(buffer, slot, text, style);
+}
+
+fn draw_glyph(
+    buffer: &mut ScreenBuffer,
+    x: usize,
+    y: usize,
+    character: char,
+    width: usize,
+    height: usize,
+    color: Color,
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+
+    let pattern = glyph_pattern(character);
+    for glyph_y in 0..height {
+        let source_y = glyph_y * PLACEHOLDER_GLYPH_HEIGHT / height;
+        let row = pattern[source_y];
+        for glyph_x in 0..width {
+            let source_x = glyph_x * PLACEHOLDER_GLYPH_WIDTH / width;
+            let bit = 1 << (PLACEHOLDER_GLYPH_WIDTH - 1 - source_x);
+            if row & bit != 0 {
+                buffer.set_pixel(x + glyph_x, y + glyph_y, color);
+            }
+        }
+    }
+}
+
+pub fn glyph_pattern(character: char) -> [u8; PLACEHOLDER_GLYPH_HEIGHT] {
+    match character.to_ascii_uppercase() {
+        '0' => [0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E],
+        '1' => [0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E],
+        '2' => [0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F],
+        '3' => [0x1E, 0x01, 0x01, 0x0E, 0x01, 0x01, 0x1E],
+        '4' => [0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02],
+        '5' => [0x1F, 0x10, 0x10, 0x1E, 0x01, 0x01, 0x1E],
+        '6' => [0x0E, 0x10, 0x10, 0x1E, 0x11, 0x11, 0x0E],
+        '7' => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
+        '8' => [0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E],
+        '9' => [0x0E, 0x11, 0x11, 0x0F, 0x01, 0x01, 0x0E],
+        'A' => [0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
+        'B' => [0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E],
+        'C' => [0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E],
+        'D' => [0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E],
+        'E' => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F],
+        'F' => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10],
+        'G' => [0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F],
+        'H' => [0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
+        'I' => [0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E],
+        'J' => [0x07, 0x02, 0x02, 0x02, 0x12, 0x12, 0x0C],
+        'K' => [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
+        'L' => [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F],
+        'M' => [0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11],
+        'N' => [0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11],
+        'O' => [0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
+        'P' => [0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10],
+        'Q' => [0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D],
+        'R' => [0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11],
+        'S' => [0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E],
+        'T' => [0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
+        'U' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
+        'V' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04],
+        'W' => [0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0A],
+        'X' => [0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11],
+        'Y' => [0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04],
+        'Z' => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F],
+        '-' => [0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00],
+        ':' => [0x00, 0x04, 0x04, 0x00, 0x04, 0x04, 0x00],
+        '/' => [0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x10],
+        '.' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C],
+        _ => [0x1F, 0x11, 0x15, 0x15, 0x15, 0x11, 0x1F],
     }
 }
 
@@ -233,7 +319,7 @@ fn draw_centered_image(buffer: &mut ScreenBuffer, image: RenderImage<'_>, backgr
     }
 }
 
-fn text_block_size(text: &str, style: &TextStyle) -> Option<(usize, usize)> {
+pub fn text_size(text: &str, style: &TextStyle) -> Option<(usize, usize)> {
     let glyph_count = text.chars().count();
     if glyph_count == 0 || style.glyph_width == 0 || style.glyph_height == 0 {
         return None;
@@ -275,29 +361,5 @@ fn overlay_origin(
         OverlaySlot::BottomLeft => (left, bottom),
         OverlaySlot::BottomRight => (right, bottom),
         OverlaySlot::TopRight => (right, top),
-    }
-}
-
-fn draw_placeholder_glyph(
-    buffer: &mut ScreenBuffer,
-    x: usize,
-    y: usize,
-    width: usize,
-    height: usize,
-    color: Color,
-) {
-    if width == 0 || height == 0 {
-        return;
-    }
-
-    buffer.fill_rect(x, y, width, 1, color);
-    buffer.fill_rect(x, y + height.saturating_sub(1), width, 1, color);
-    buffer.fill_rect(x, y, 1, height, color);
-    buffer.fill_rect(x + width.saturating_sub(1), y, 1, height, color);
-
-    if width > 2 && height > 2 {
-        let inner_x = x + 1;
-        let inner_y = y + 1;
-        buffer.fill_rect(inner_x, inner_y, width - 2, height - 2, color);
     }
 }

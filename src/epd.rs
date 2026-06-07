@@ -84,6 +84,22 @@ pub fn pack_epd_pixels(left: Color, right: Color) -> u8 {
     (epd_color_code(left) << 4) | epd_color_code(right)
 }
 
+pub fn set_packed_frame_pixel(frame: &mut [u8], x: usize, y: usize, color: Color) -> bool {
+    if frame.len() != EPD_FRAME_BYTES || x >= EPD_WIDTH || y >= EPD_HEIGHT {
+        return false;
+    }
+
+    let byte = &mut frame[y * EPD_ROW_BYTES + x / 2];
+    let code = epd_color_code(color);
+    if x.is_multiple_of(2) {
+        *byte = (*byte & 0x0F) | (code << 4);
+    } else {
+        *byte = (*byte & 0xF0) | code;
+    }
+
+    true
+}
+
 fn init_panel(bus: &mut impl EpdBus) -> Result<(), EpdError> {
     bus.reset()?;
     bus.wait_until_ready()?;
@@ -313,6 +329,22 @@ mod tests {
     fn packs_two_pixels_into_high_and_low_nibbles() {
         assert_eq!(pack_epd_pixels(Color::White, Color::Black), 0x10);
         assert_eq!(pack_epd_pixels(Color::Red, Color::Green), 0x36);
+    }
+
+    #[test]
+    fn sets_pixel_in_prepacked_frame() {
+        let mut frame = vec![0x11; EPD_FRAME_BYTES];
+
+        assert!(set_packed_frame_pixel(&mut frame, 0, 0, Color::Black));
+        assert!(set_packed_frame_pixel(&mut frame, 1, 0, Color::Red));
+        assert!(!set_packed_frame_pixel(
+            &mut frame,
+            EPD_WIDTH,
+            0,
+            Color::Black
+        ));
+
+        assert_eq!(frame[0], 0x03);
     }
 
     #[test]
