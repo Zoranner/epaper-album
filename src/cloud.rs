@@ -34,6 +34,15 @@ impl fmt::Display for CloudSyncError {
 
 impl std::error::Error for CloudSyncError {}
 
+pub trait HttpClient {
+    fn get_bytes(
+        &mut self,
+        url: &str,
+        secret_key: &str,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, CloudSyncError>;
+}
+
 #[derive(Debug, Deserialize)]
 struct RawServerPlanResponse {
     code: u16,
@@ -157,20 +166,38 @@ pub mod espidf {
     };
     use esp_idf_svc::http::Method;
 
-    use super::{parse_plan_response, plans_url, trim_secret_key, CloudSyncError};
+    use super::{parse_plan_response, plans_url, trim_secret_key, CloudSyncError, HttpClient};
     use crate::config::Config;
     use crate::model::PlanSnapshot;
 
     const HTTP_TIMEOUT_SECONDS: u64 = 15;
     const MAX_PLAN_RESPONSE_BYTES: usize = 32 * 1024;
 
+    pub struct EspIdfHttpClient;
+
     pub fn fetch_plan_response(config: &Config, days: u8) -> Result<PlanSnapshot, CloudSyncError> {
         let url = plans_url(&config.base_url, days)?;
-        let body = get_bytes(&url, trim_secret_key(config), MAX_PLAN_RESPONSE_BYTES)?;
+        let mut client = EspIdfHttpClient;
+        let body = client.get_bytes(&url, trim_secret_key(config), MAX_PLAN_RESPONSE_BYTES)?;
         parse_plan_response(&body)
     }
 
-    fn get_bytes(url: &str, secret_key: &str, max_bytes: usize) -> Result<Vec<u8>, CloudSyncError> {
+    impl HttpClient for EspIdfHttpClient {
+        fn get_bytes(
+            &mut self,
+            url: &str,
+            secret_key: &str,
+            max_bytes: usize,
+        ) -> Result<Vec<u8>, CloudSyncError> {
+            get_bytes(url, secret_key, max_bytes)
+        }
+    }
+
+    pub fn get_bytes(
+        url: &str,
+        secret_key: &str,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, CloudSyncError> {
         let mut connection = EspHttpConnection::new(&HttpConfiguration {
             timeout: Some(Duration::from_secs(HTTP_TIMEOUT_SECONDS)),
             follow_redirects_policy: FollowRedirectsPolicy::FollowAll,

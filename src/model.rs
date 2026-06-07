@@ -210,6 +210,41 @@ pub struct ResourceIndex {
 }
 
 impl ResourceIndex {
+    pub fn upsert(&mut self, resource: CachedResource) {
+        if let Some(existing) = self
+            .resources
+            .iter_mut()
+            .find(|existing| existing.sha256 == resource.sha256)
+        {
+            existing.byte_size = resource.byte_size;
+            existing.last_used_at_unix_secs = resource.last_used_at_unix_secs;
+            return;
+        }
+
+        self.resources.push(resource);
+    }
+
+    pub fn update(&mut self, resource: CachedResource) {
+        self.upsert(resource);
+    }
+
+    pub fn touch(&mut self, sha256: &str, last_used_at_unix_secs: u64) -> bool {
+        if let Some(resource) = self
+            .resources
+            .iter_mut()
+            .find(|resource| resource.sha256 == sha256)
+        {
+            resource.last_used_at_unix_secs = last_used_at_unix_secs;
+            return true;
+        }
+
+        false
+    }
+
+    pub fn mark_used(&mut self, sha256: &str, last_used_at_unix_secs: u64) -> bool {
+        self.touch(sha256, last_used_at_unix_secs)
+    }
+
     pub fn contains(&self, sha256: &str) -> bool {
         self.resources
             .iter()
@@ -266,6 +301,20 @@ pub struct DisplayItem {
     pub caption: String,
 }
 
+impl From<&DisplayItem> for DisplayState {
+    fn from(item: &DisplayItem) -> Self {
+        Self {
+            plan_id: Some(item.plan_id),
+            plan_content_hash: item.plan_content_hash.clone(),
+            date: Some(item.date),
+            image_sha256: Some(item.image_sha256.clone()),
+            image_index: item.image_index,
+            caption: Some(item.caption.clone()),
+            refreshed_at_unix_secs: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,5 +359,109 @@ mod tests {
         assert!(plan.contains_date(LocalDate::parse("2026-06-06").unwrap()));
         assert!(plan.contains_date(LocalDate::parse("2026-06-08").unwrap()));
         assert!(!plan.contains_date(LocalDate::parse("2026-06-09").unwrap()));
+    }
+
+    #[test]
+    fn resource_index_inserts_resource() {
+        let mut index = ResourceIndex::default();
+
+        index.upsert(CachedResource {
+            sha256: "hash-a".to_string(),
+            byte_size: 128,
+            last_used_at_unix_secs: 10,
+        });
+
+        assert!(index.contains("hash-a"));
+        assert_eq!(
+            index.known_resources(),
+            BTreeSet::from(["hash-a".to_string()])
+        );
+        assert_eq!(
+            index.resource("hash-a"),
+            Some(&CachedResource {
+                sha256: "hash-a".to_string(),
+                byte_size: 128,
+                last_used_at_unix_secs: 10,
+            })
+        );
+    }
+
+    #[test]
+    fn resource_index_updates_existing_resource() {
+        let mut index = ResourceIndex {
+            resources: vec![CachedResource {
+                sha256: "hash-a".to_string(),
+                byte_size: 128,
+                last_used_at_unix_secs: 10,
+            }],
+        };
+
+        index.upsert(CachedResource {
+            sha256: "hash-a".to_string(),
+            byte_size: 256,
+            last_used_at_unix_secs: 20,
+        });
+
+        assert_eq!(index.resources.len(), 1);
+        assert_eq!(
+            index.resource("hash-a"),
+            Some(&CachedResource {
+                sha256: "hash-a".to_string(),
+                byte_size: 256,
+                last_used_at_unix_secs: 20,
+            })
+        );
+    }
+
+    #[test]
+    fn resource_index_touch_updates_existing_resource() {
+        let mut index = ResourceIndex {
+            resources: vec![CachedResource {
+                sha256: "hash-a".to_string(),
+                byte_size: 128,
+                last_used_at_unix_secs: 10,
+            }],
+        };
+
+        assert!(index.touch("hash-a", 30));
+
+        assert_eq!(index.resource("hash-a").unwrap().byte_size, 128);
+        assert_eq!(index.resource("hash-a").unwrap().last_used_at_unix_secs, 30);
+    }
+
+    #[test]
+    fn resource_index_touch_reports_missing_resource() {
+        let mut index = ResourceIndex {
+            resources: vec![CachedResource {
+                sha256: "hash-a".to_string(),
+                byte_size: 128,
+                last_used_at_unix_secs: 10,
+            }],
+        };
+
+        assert!(!index.touch("hash-missing", 30));
+
+        assert_eq!(index.resource("hash-a").unwrap().last_used_at_unix_secs, 10);
+    }
+
+    #[test]
+    fn converts_selected_display_item_to_display_state() {
+        let item = DisplayItem {
+            plan_id: 3,
+            plan_content_hash: Some("hash-v1".to_string()),
+            date: LocalDate::parse("2026-06-08").unwrap(),
+            image_sha256: "abc".to_string(),
+            image_index: 2,
+            caption: "caption".to_string(),
+        };
+
+        let state = DisplayState::from(&item);
+
+        assert_eq!(state.plan_id, Some(3));
+        assert_eq!(state.plan_content_hash.as_deref(), Some("hash-v1"));
+        assert_eq!(state.date, Some(LocalDate::parse("2026-06-08").unwrap()));
+        assert_eq!(state.image_sha256.as_deref(), Some("abc"));
+        assert_eq!(state.image_index, 2);
+        assert_eq!(state.caption.as_deref(), Some("caption"));
     }
 }

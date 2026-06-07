@@ -1,3 +1,4 @@
+use crate::model::PlanSnapshot;
 use std::path::{Path, PathBuf};
 
 pub const ALBUM_ROOT: &str = "/sdcard/epaper-album";
@@ -31,12 +32,97 @@ pub enum StorageWrite {
     WriteError,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StorageJsonRead<T> {
+    Value(T),
+    Missing,
+    MountError,
+    ReadError,
+    ParseError,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StorageJsonWrite {
+    Written,
+    SerializeError,
+    MountError,
+    WriteError,
+}
+
+pub trait ResourceStore {
+    fn save_plan_snapshot(&mut self, snapshot: &PlanSnapshot) -> StorageJsonWrite;
+    fn save_image_bytes(&mut self, sha256: &str, content: &[u8]) -> StorageWrite;
+    fn save_sprite_bytes(&mut self, key: &str, content: &[u8]) -> StorageWrite;
+}
+
+#[derive(Debug, Default)]
+pub struct SdCardResourceStore;
+
+impl ResourceStore for SdCardResourceStore {
+    fn save_plan_snapshot(&mut self, snapshot: &PlanSnapshot) -> StorageJsonWrite {
+        write_json_file_atomic(PLANS_CURRENT_PATH, snapshot)
+    }
+
+    fn save_image_bytes(&mut self, sha256: &str, content: &[u8]) -> StorageWrite {
+        write_binary_file_atomic(image_bmp_path(sha256), content)
+    }
+
+    fn save_sprite_bytes(&mut self, key: &str, content: &[u8]) -> StorageWrite {
+        write_binary_file_atomic(sprite_bmp_path(key), content)
+    }
+}
+
 pub fn image_bmp_path(sha256: &str) -> PathBuf {
     Path::new(IMAGES_DIR).join(format!("{sha256}.bmp"))
 }
 
 pub fn sprite_bmp_path(key: &str) -> PathBuf {
     Path::new(SPRITES_DIR).join(format!("{key}.bmp"))
+}
+
+pub fn parse_json_str<T>(content: &str) -> Result<T, serde_json::Error>
+where
+    T: serde::de::DeserializeOwned,
+{
+    serde_json::from_str(content)
+}
+
+pub fn to_json_string<T>(value: &T) -> Result<String, serde_json::Error>
+where
+    T: serde::Serialize,
+{
+    serde_json::to_string_pretty(value)
+}
+
+pub fn read_json_file<T>(path: impl AsRef<Path>) -> StorageJsonRead<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    match read_text_file(path) {
+        StorageRead::Text(content) => match parse_json_str(&content) {
+            Ok(value) => StorageJsonRead::Value(value),
+            Err(_) => StorageJsonRead::ParseError,
+        },
+        StorageRead::Missing => StorageJsonRead::Missing,
+        StorageRead::MountError => StorageJsonRead::MountError,
+        StorageRead::ReadError => StorageJsonRead::ReadError,
+    }
+}
+
+pub fn write_json_file_atomic<T>(path: impl AsRef<Path>, value: &T) -> StorageJsonWrite
+where
+    T: serde::Serialize,
+{
+    let content = match to_json_string(value) {
+        Ok(content) => content,
+        Err(_) => return StorageJsonWrite::SerializeError,
+    };
+
+    match write_text_file_atomic(path, &content) {
+        StorageWrite::Written => StorageJsonWrite::Written,
+        StorageWrite::MountError => StorageJsonWrite::MountError,
+        StorageWrite::WriteError => StorageJsonWrite::WriteError,
+    }
 }
 
 #[cfg(not(target_os = "espidf"))]
@@ -320,5 +406,35 @@ mod tests {
             read_binary_file(&file_path),
             StorageBinaryRead::Bytes(vec![0x42, 0x4d, 0x00])
         );
+    }
+
+    #[test]
+    fn reads_and_writes_typed_json_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("state.json");
+        let state = crate::model::ResourceIndex {
+            resources: vec![crate::model::CachedResource {
+                sha256: "abc".to_string(),
+                byte_size: 128,
+                last_used_at_unix_secs: 9,
+            }],
+        };
+
+        let write_result = write_json_file_atomic(&file_path, &state);
+        let read_result = read_json_file(&file_path);
+
+        assert_eq!(write_result, StorageJsonWrite::Written);
+        assert_eq!(read_result, StorageJsonRead::Value(state));
+    }
+
+    #[test]
+    fn reports_typed_json_parse_error() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("broken.json");
+        std::fs::write(&file_path, "{").unwrap();
+
+        let read_result: StorageJsonRead<crate::model::ResourceIndex> = read_json_file(&file_path);
+
+        assert_eq!(read_result, StorageJsonRead::ParseError);
     }
 }
