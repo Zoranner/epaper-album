@@ -100,6 +100,77 @@ impl SleepPlan {
             deep_sleep_seconds: Some(deep_sleep_seconds),
         }
     }
+
+    pub const fn wake_at_after(next_wakeup_epoch_seconds: u64, deep_sleep_seconds: u32) -> Self {
+        Self {
+            next_wakeup_epoch_seconds: Some(next_wakeup_epoch_seconds),
+            deep_sleep_seconds: Some(deep_sleep_seconds),
+        }
+    }
+}
+
+pub fn next_wakeup_sleep_plan(
+    now_epoch_seconds: u64,
+    next_sync_epoch_seconds: u64,
+    next_plan_date_change_epoch_seconds: Option<u64>,
+    carousel_seconds: Option<u32>,
+) -> SleepPlan {
+    let carousel_epoch_seconds =
+        carousel_seconds.map(|seconds| now_epoch_seconds.saturating_add(u64::from(seconds)));
+
+    let earliest_candidate_epoch_seconds = [
+        Some(next_sync_epoch_seconds),
+        next_plan_date_change_epoch_seconds,
+        carousel_epoch_seconds,
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+    .unwrap_or(now_epoch_seconds);
+    let next_wakeup_epoch_seconds = earliest_candidate_epoch_seconds.max(now_epoch_seconds);
+
+    let deep_sleep_seconds = next_wakeup_epoch_seconds
+        .saturating_sub(now_epoch_seconds)
+        .min(u64::from(u32::MAX)) as u32;
+
+    SleepPlan::wake_at_after(next_wakeup_epoch_seconds, deep_sleep_seconds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn power_sleep_plan_uses_daily_sync_when_it_is_earliest() {
+        assert_eq!(
+            next_wakeup_sleep_plan(1_000, 1_100, Some(1_200), Some(300)),
+            SleepPlan::wake_at_after(1_100, 100)
+        );
+    }
+
+    #[test]
+    fn power_sleep_plan_uses_plan_date_change_when_it_is_earliest() {
+        assert_eq!(
+            next_wakeup_sleep_plan(1_000, 1_300, Some(1_120), Some(200)),
+            SleepPlan::wake_at_after(1_120, 120)
+        );
+    }
+
+    #[test]
+    fn power_sleep_plan_uses_carousel_interval_when_it_is_earliest() {
+        assert_eq!(
+            next_wakeup_sleep_plan(1_000, 1_300, Some(1_250), Some(60)),
+            SleepPlan::wake_at_after(1_060, 60)
+        );
+    }
+
+    #[test]
+    fn power_sleep_plan_wakes_immediately_for_due_sync() {
+        assert_eq!(
+            next_wakeup_sleep_plan(1_000, 900, Some(1_250), Some(60)),
+            SleepPlan::wake_at_after(1_000, 0)
+        );
+    }
 }
 
 #[cfg(target_os = "espidf")]

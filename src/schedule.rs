@@ -1,5 +1,29 @@
 use crate::model::{DisplayItem, DisplayState, LocalDate, PlanItem, PlanSnapshot};
 
+pub const DAILY_SYNC_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
+
+pub fn next_daily_sync_epoch_seconds(
+    last_successful_sync_epoch_seconds: u64,
+    now_epoch_seconds: u64,
+) -> u64 {
+    let scheduled_epoch_seconds =
+        last_successful_sync_epoch_seconds.saturating_add(DAILY_SYNC_INTERVAL_SECONDS);
+
+    scheduled_epoch_seconds.max(now_epoch_seconds)
+}
+
+pub fn daily_sync_due(
+    last_successful_sync_epoch_seconds: Option<u64>,
+    now_epoch_seconds: u64,
+) -> bool {
+    let Some(last_successful_sync_epoch_seconds) = last_successful_sync_epoch_seconds else {
+        return true;
+    };
+
+    now_epoch_seconds
+        >= last_successful_sync_epoch_seconds.saturating_add(DAILY_SYNC_INTERVAL_SECONDS)
+}
+
 pub fn select_plan_for_date(plans: &[PlanItem], date: LocalDate) -> Option<&PlanItem> {
     plans.iter().find(|plan| plan.contains_date(date))
 }
@@ -157,6 +181,55 @@ mod tests {
         assert_eq!(
             next_plan_change_date(&plans, date("2026-06-06")),
             Some(date("2026-06-09"))
+        );
+    }
+
+    #[test]
+    fn computes_next_daily_sync_from_last_successful_daily_sync() {
+        assert_eq!(
+            next_daily_sync_epoch_seconds(1_000, 10_000),
+            1_000 + DAILY_SYNC_INTERVAL_SECONDS
+        );
+    }
+
+    #[test]
+    fn clamps_overdue_next_daily_sync_to_now() {
+        assert_eq!(
+            next_daily_sync_epoch_seconds(1_000, 1_000 + DAILY_SYNC_INTERVAL_SECONDS + 30),
+            1_000 + DAILY_SYNC_INTERVAL_SECONDS + 30
+        );
+    }
+
+    #[test]
+    fn daily_sync_is_due_without_previous_success() {
+        assert!(daily_sync_due(None, 10_000));
+    }
+
+    #[test]
+    fn daily_sync_becomes_due_at_twenty_four_hours() {
+        let last_successful_sync = 1_000;
+
+        assert!(!daily_sync_due(
+            Some(last_successful_sync),
+            last_successful_sync + DAILY_SYNC_INTERVAL_SECONDS - 1
+        ));
+        assert!(daily_sync_due(
+            Some(last_successful_sync),
+            last_successful_sync + DAILY_SYNC_INTERVAL_SECONDS
+        ));
+    }
+
+    #[test]
+    fn manual_forced_sync_does_not_move_daily_sync_anchor() {
+        let last_successful_daily_sync = 1_000;
+        let manual_forced_sync_finished_at = 2_000;
+
+        assert_eq!(
+            next_daily_sync_epoch_seconds(
+                last_successful_daily_sync,
+                manual_forced_sync_finished_at
+            ),
+            last_successful_daily_sync + DAILY_SYNC_INTERVAL_SECONDS
         );
     }
 }

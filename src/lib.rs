@@ -4,6 +4,7 @@ pub mod bmp;
 pub mod cache;
 pub mod cloud;
 pub mod config;
+pub mod device_runtime;
 pub mod display;
 pub mod epd;
 pub mod error;
