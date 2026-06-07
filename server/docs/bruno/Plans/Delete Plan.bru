@@ -1,0 +1,17 @@
+meta {
+  name: Delete Plan
+  type: http
+  seq: 5
+}
+
+delete {
+  url: {{baseUrl}}/api/plans/:planId
+}
+
+headers {
+  Authorization: Bearer {{adminToken}}
+}
+
+params:path {
+  planId: {{planId}}
+}

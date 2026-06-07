@@ -1,0 +1,18 @@
+meta {
+  name: Generate Sprite
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/sprite
+}
+
+headers {
+  secret-key: {{secretKey}}
+}
+
+params:query {
+  type: {{spriteType}}
+  text: {{spriteText}}
+}

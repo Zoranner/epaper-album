@@ -1,0 +1,27 @@
+meta {
+  name: Update Plan
+  type: http
+  seq: 4
+}
+
+put {
+  url: {{baseUrl}}/api/plans/:planId
+}
+
+headers {
+  Authorization: Bearer {{adminToken}}
+  content-type: application/json
+}
+
+params:path {
+  planId: {{planId}}
+}
+
+body:json {
+  {
+    "start": "2026-06-07",
+    "end": "2026-06-07",
+    "caption": "晚风和海",
+    "images": []
+  }
+}

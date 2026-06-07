@@ -1,0 +1,17 @@
+meta {
+  name: List Images
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/images
+}
+
+headers {
+  Authorization: Bearer {{adminToken}}
+}
+
+params:query {
+  keyword:
+}

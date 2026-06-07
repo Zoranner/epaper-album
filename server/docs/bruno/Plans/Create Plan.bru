@@ -1,0 +1,23 @@
+meta {
+  name: Create Plan
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/api/plans
+}
+
+headers {
+  Authorization: Bearer {{adminToken}}
+  content-type: application/json
+}
+
+body:json {
+  {
+    "start": "2026-06-07",
+    "end": "2026-06-07",
+    "caption": "晚风和海",
+    "images": []
+  }
+}

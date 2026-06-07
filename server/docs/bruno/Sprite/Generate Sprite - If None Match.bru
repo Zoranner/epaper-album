@@ -1,0 +1,19 @@
+meta {
+  name: Generate Sprite - If None Match
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/sprite
+}
+
+headers {
+  secret-key: {{secretKey}}
+  If-None-Match: {{spriteEtag}}
+}
+
+params:query {
+  type: {{spriteType}}
+  text: {{spriteText}}
+}

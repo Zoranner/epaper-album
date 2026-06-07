@@ -1,0 +1,17 @@
+meta {
+  name: List Plans - User
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/plans
+}
+
+headers {
+  secret-key: {{secretKey}}
+}
+
+params:query {
+  days: 3
+}

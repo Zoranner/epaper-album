@@ -1,0 +1,17 @@
+meta {
+  name: List Plans - Admin
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/plans
+}
+
+headers {
+  Authorization: Bearer {{adminToken}}
+}
+
+params:query {
+  days: 3
+}
