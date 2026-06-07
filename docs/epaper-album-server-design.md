@@ -584,12 +584,45 @@ ORDER BY p.start_date ASC, p.id ASC, image_item.key ASC;
 
 管理台位于 `server/web`，使用 Vue 3、Vite、TypeScript 和 bun。页面是工作台式布局，主要功能包括：
 
-- 配置并保存管理密钥。
+- 管理员账号密码登录，并保存管理员 token。
 - 图片管理：上传原始图片、填写备注、查看处理状态、搜索图片、预览显示 BMP；`failed` 图片可以通过重新上传同一图片触发重试。
 - 计划管理：按天数查看计划，默认三天，最多七天。
 - 计划管理：新增、编辑、删除计划，并从已有图片中选择计划图片。
 
 前端开发代理在 `server/web/vite.config.ts` 中配置，开发模式下 `/api` 和 `/images` 转发到 `http://localhost:3000`。
+
+## 工程构建与部署
+
+服务端工程借鉴 `provider-relay` 的独立服务结构，所有后端、管理台和部署文件都收敛在 `server/` 目录中：
+
+```text
+server/
+  build.rs
+  Cargo.toml
+  Dockerfile
+  docker-build.sh
+  docker/docker-compose.yml
+  src/
+  tests/
+  web/
+```
+
+`server/build.rs` 负责在 Cargo 构建服务端时自动编译管理台。默认流程为：
+
+- 监听 `server/web/src`、`index.html`、`package.json`、`bun.lock`、`tsconfig` 和 `vite.config.ts`。
+- 如果 `server/web/node_modules` 不存在，执行 `bun install`。
+- 执行 `bun run build`，把管理台产物输出到 `server/web/dist`。
+
+构建后端依赖时可以设置 `SKIP_FRONTEND_BUILD=1` 跳过管理台编译，避免 Docker 的 Rust 依赖缓存阶段重复构建前端。
+
+Docker 镜像采用多阶段构建：
+
+- `oven/bun` 阶段安装前端依赖并执行 `bun run build`。
+- `cargo-chef` 阶段缓存 Rust 依赖。
+- Rust release 阶段设置 `SKIP_FRONTEND_BUILD=1` 编译后端二进制。
+- runtime 阶段只拷贝 `epaper-album-server` 二进制和 `web/dist`，运行目录为 `/app`。
+
+容器运行时使用 `/app/data` 作为持久数据目录，保存 SQLite 数据库、原图和显示 BMP。`server/docker/docker-compose.yml` 提供基础部署配置，服务名和镜像名均为 `epaper-album-server`，部署时通过环境变量设置 `SECRET_KEY`、`ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。
 
 ## 建议验证
 
@@ -597,6 +630,7 @@ ORDER BY p.start_date ASC, p.id ASC, image_item.key ASC;
 
 ```powershell
 cd server
+cargo build
 cargo fmt --all
 cargo test --all-targets --all-features
 cargo clippy --all-targets --all-features -- -D warnings

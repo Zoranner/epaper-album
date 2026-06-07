@@ -104,3 +104,55 @@ target/xtensa-esp32s3-espidf/release/
 ```
 
 `libespidf.bin` 属于 ESP-IDF 侧支撑产物，主固件烧录入口使用应用 ELF。
+
+## 服务端构建
+
+服务端位于 `server/`，是独立的 Rust 后端和 Vue 管理台工程。服务端 Cargo 构建会自动检查并编译 `server/web` 前端，前端依赖和构建统一使用 `bun`。
+
+```powershell
+cd server
+cargo build --release
+```
+
+需要只编译后端时，可以设置 `SKIP_FRONTEND_BUILD=1`：
+
+```powershell
+cd server
+$env:SKIP_FRONTEND_BUILD = "1"
+cargo build --release
+```
+
+常用验证命令：
+
+```powershell
+cd server
+cargo fmt --all
+cargo test --all-targets --all-features
+cargo clippy --all-targets --all-features -- -D warnings
+
+cd web
+bun run build
+```
+
+## 服务端容器部署
+
+服务端提供 Docker 多阶段构建。镜像构建会先用 `bun` 编译管理台，再编译 Rust 后端，运行容器中挂载 `/app/data` 保存 SQLite 数据库、原始图片和显示 BMP。
+
+```bash
+cd server
+./docker-build.sh
+```
+
+默认镜像名为 `epaper-album-server:latest`，也可以传入 tag：
+
+```bash
+./docker-build.sh 0.1.0
+```
+
+`server/docker/docker-compose.yml` 提供基础部署配置，默认暴露 `3000` 端口，并通过环境变量配置设备密钥和管理员账号密码。正式部署时应调整：
+
+```yaml
+SECRET_KEY=local-secret-key
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=admin
+```

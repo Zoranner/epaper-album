@@ -1,0 +1,8 @@
+target/
+web/node_modules/
+web/dist/
+web/.vite/
+data/
+*.db
+.git/
+.gitignore
