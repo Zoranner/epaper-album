@@ -18,7 +18,7 @@
 | `ADMIN_USERNAME` | `admin` | 管理员账号 |
 | `ADMIN_PASSWORD` | `admin` | 管理员密码 |
 
-`SECRET_KEY` 用于设备同步计划和下载显示图片。管理员账号密码用于管理台登录和管理接口权限。服务端启动时创建 `data/`、`data/origin/` 和 `data/display/` 目录，初始化 SQLite 表结构，并挂载 API 路由和管理台静态文件。
+`SECRET_KEY` 用于设备同步计划和下载显示图片。管理员账号密码用于管理台登录和管理接口权限。服务端启动时创建 `data/`、`data/images/original/`、`data/images/display/` 和 `data/sprites/` 目录，初始化 SQLite 表结构，并挂载 API 路由和管理台静态文件。
 
 `server/.env.example` 提供本地和容器部署的环境变量示例。实际部署时复制为 `server/.env` 并调整密钥和管理员密码；`server/.env` 不纳入版本管理。
 
@@ -60,7 +60,7 @@ secret-key: local-secret-key
 
 ### 计划
 
-计划描述某个日期范围内设备应显示的标题和图片。计划表直接保存图片 `sha256` 列表。原图保存为 `data/origin/{sha256}`，显示 BMP 保存为 `data/display/{sha256}`。管理台按图片 `status` 显示处理状态；设备接口只返回 `status = 'ready'` 的图片 `sha256`。
+计划描述某个日期范围内设备应显示的标题和图片。计划表直接保存图片 `sha256` 列表。原图保存为 `data/images/original/{sha256}`，显示 BMP 保存为 `data/images/display/{sha256}`。管理台按图片 `status` 显示处理状态；设备接口只返回 `status = 'ready'` 的图片 `sha256`。
 
 ```json
 {
@@ -86,7 +86,7 @@ secret-key: local-secret-key
 
 ### 图片
 
-图片上传后先按原始文件内容计算 `sha256`，再检查数据库记录和 `data/origin/{sha256}` 文件。已有图片复用现有记录和文件；新图片保存原始文件，数据库写入 `pending` 状态，并由服务端后台任务生成适配 800 x 480 六色电子墨水屏的 BMP 文件。显示 BMP 保存为 `data/display/{sha256}`。数据库保存图片 `sha256`、处理状态和备注。
+图片上传后先按原始文件内容计算 `sha256`，再检查数据库记录和 `data/images/original/{sha256}` 文件。已有图片复用现有记录和文件；新图片保存原始文件，数据库写入 `pending` 状态，并由服务端后台任务生成适配 800 x 480 六色电子墨水屏的 BMP 文件。显示 BMP 保存为 `data/images/display/{sha256}`。数据库保存图片 `sha256`、处理状态和备注。
 
 ```json
 {
@@ -96,7 +96,7 @@ secret-key: local-secret-key
 }
 ```
 
-`status` 是图片处理状态的唯一依据。`ready` 表示图片已经处理完成，可以从 `data/display/{sha256}` 下载；`pending` 和 `processing` 表示仍在处理流程中；`failed` 表示处理失败，等待管理员重新上传或后续手动重试。
+`status` 是图片处理状态的唯一依据。`ready` 表示图片已经处理完成，可以从 `data/images/display/{sha256}` 下载；`pending` 和 `processing` 表示仍在处理流程中；`failed` 表示处理失败，等待管理员重新上传或后续手动重试。
 
 ## 接口设计
 
@@ -396,11 +396,11 @@ Content-Type: multipart/form-data
 写入规则：
 
 - 服务端按原始文件内容计算 `sha256`，`sha256` 同时作为原始文件名和显示文件名。
-- 先检查 `images.sha256` 记录和 `data/origin/{sha256}` 文件。
+- 先检查 `images.sha256` 记录和 `data/images/original/{sha256}` 文件。
 - 已存在相同 `sha256` 时复用已有图片记录；表单提交了 `remark` 时更新备注，未提交时保留原备注；如果 `status` 是 `pending` 或 `processing`，确认图片处理任务已进入队列；如果 `status` 是 `failed`，把状态改回 `pending` 后入队重试。
-- 不存在相同 `sha256` 时，原始图片保存到 `data/origin/{sha256}`，数据库写入 `images(sha256, status, remark)`，初始状态为 `pending`。
+- 不存在相同 `sha256` 时，原始图片保存到 `data/images/original/{sha256}`，数据库写入 `images(sha256, status, remark)`，初始状态为 `pending`。
 - 后台任务从原始图片生成 800 x 480 BMP。
-- 显示 BMP 保存到 `data/display/{sha256}`。
+- 显示 BMP 保存到 `data/images/display/{sha256}`。
 
 ### 生成 Sprite
 
@@ -431,7 +431,7 @@ Authorization: Bearer <admin-token>
 | `type` | string | sprite 类型，取值为 `caption`、`date`、`status` 或 `notice` |
 | `text` | string | 需要生成的小图块文字，URL 编码后传入 |
 
-服务端按 GET 语义处理该接口，请求不会写入数据库、不会创建图片记录、不会写入缓存文件。成功响应返回 BMP 二进制内容，`Content-Type` 固定为 `image/bmp`。失败响应使用统一 JSON 结构。
+服务端按 GET 语义处理该接口，请求不会写入数据库、不会创建图片记录。成功响应返回 BMP 二进制内容，`Content-Type` 固定为 `image/bmp`。失败响应使用统一 JSON 结构。
 
 参数规则：
 
@@ -454,13 +454,12 @@ Authorization: Bearer <admin-token>
 缓存规则：
 
 - 服务端不做数据库缓存。
-- 服务端不做落盘文件缓存。
 - 生成结果不写入 `images` 表。
-- 响应可以带 `ETag` 和 `Cache-Control: no-cache`。
-- `ETag` 使用 `type`、文字内容和 `fonts.toml` 配置内容计算。
-- 客户端带 `If-None-Match` 且命中时，服务端返回 `304 Not Modified`。
+- sprite 缓存文件保存到 `data/sprites/{sha256}.bmp`。
+- `sha256` 使用 `type`、文字内容和 `fonts.toml` 配置内容计算。
+- 命中缓存文件时直接返回 BMP；未命中时生成 BMP，写入缓存文件后返回。
 
-生成流程读取 `assets/fonts.toml` 中的字体文件顺序和文字样式配置，逐字符选择第一个包含对应字形的字体，使用 fontdue 这类轻量 Rust 字体 rasterizer 将文字栅格化，再按阈值压成黑白像素并输出 BMP。sprite 缓存键使用 `type`、文字内容和 `fonts.toml` 配置内容计算。字体目录随工程保留为空目录，具体字体文件由运行环境自行提供。当前方案面向标题、日期和提示这类短文本，负责生成文字 sprite 小 BMP。Skia 适合复杂排版、矢量绘制和更完整图形管线，后续出现这类需求时再评估引入成本。
+生成流程读取 `assets/fonts.toml` 中的字体文件顺序和文字样式配置，逐字符选择第一个包含对应字形的字体，使用 fontdue 这类轻量 Rust 字体 rasterizer 将文字栅格化，再按阈值压成黑白像素并输出 BMP。字体目录随工程保留为空目录，具体字体文件由运行环境自行提供。当前方案面向标题、日期和提示这类短文本，负责生成文字 sprite 小 BMP。Skia 适合复杂排版、矢量绘制和更完整图形管线，后续出现这类需求时再评估引入成本。
 
 ### 更新图片备注
 
@@ -525,7 +524,7 @@ Authorization: Bearer <admin-token>
 | --- | --- |
 | `sha256` | 图片内容 SHA-256，也是显示 BMP 的文件键 |
 
-下载前先查询 `images.status`。只有 `status = 'ready'` 时才返回 `data/display/{sha256}` 对应的 BMP 二进制内容，`Content-Type` 固定为 `image/bmp`。资源不存在、状态不是 `ready`，或 `ready` 但显示文件不存在时，返回 `404 Not Found`。下载接口不修改图片状态。`sha256` 格式不正确返回 `400 Bad Request`。错误响应使用统一 JSON 结构。
+下载前先查询 `images.status`。只有 `status = 'ready'` 时才返回 `data/images/display/{sha256}` 对应的 BMP 二进制内容，`Content-Type` 固定为 `image/bmp`。资源不存在、状态不是 `ready`，或 `ready` 但显示文件不存在时，返回 `404 Not Found`。下载接口不修改图片状态。`sha256` 格式不正确返回 `400 Bad Request`。错误响应使用统一 JSON 结构。
 
 ## 图片处理流程
 
@@ -541,21 +540,21 @@ Authorization: Bearer <admin-token>
 - 上传图片时按同一规则判断是否需要入队。
 - 内存队列维护当前进程中的待处理 `sha256` 集合，同一个 `sha256` 不重复入队。
 - worker 取出任务前用条件更新抢占任务：`UPDATE images SET status = 'processing' WHERE sha256 = ? AND status = 'pending'`。更新成功才继续处理。
-- 处理成功后先把 BMP 写入临时文件，再原子替换为 `data/display/{sha256}`，最后把状态更新为 `ready`。对外接口以 `status` 为准，不用文件是否存在判断处理状态。
+- 处理成功后先把 BMP 写入临时文件，再原子替换为 `data/images/display/{sha256}`，最后把状态更新为 `ready`。对外接口以 `status` 为准，不用文件是否存在判断处理状态。
 - 处理失败时保留原图和 `images` 记录，把状态改为 `failed`。管理员重新上传同一图片或后续增加手动重试入口时，再把状态改回 `pending`。
 - 服务重启后不依赖内存队列恢复状态，按 `images.status` 重新恢复未完成任务。
-- 服务启动时执行一致性修复：`ready` 但 `data/display/{sha256}` 不存在时改回 `pending`；`pending`、`processing` 或 `failed` 不返回给用户计划接口。
+- 服务启动时执行一致性修复：`ready` 但 `data/images/display/{sha256}` 不存在时改回 `pending`；`pending`、`processing` 或 `failed` 不返回给用户计划接口。
 
 处理步骤：
 
-- 读取 `data/origin/{sha256}`。
+- 读取 `data/images/original/{sha256}`。
 - 解码原始图片。
 - 按 800 x 480 画布裁剪或居中适配。
 - 转换为六色电子墨水屏可用颜色。
 - 进行抖动处理。
 - 输出 BMP。
 - 写入临时 BMP 文件。
-- 原子替换为 `data/display/{sha256}`。
+- 原子替换为 `data/images/display/{sha256}`。
 
 管理台计划列表按 `status` 判断状态。`pending` 和 `processing` 显示“处理中”；`failed` 显示“处理失败”；`ready` 显示最终图片，并可把该图片纳入设备计划。
 
@@ -689,7 +688,7 @@ Docker 镜像采用多阶段构建：
 - Rust release 阶段设置 `SKIP_FRONTEND_BUILD=1` 编译后端二进制。
 - runtime 阶段只拷贝 `epaper-album-server` 二进制和 `web/dist`，运行目录为 `/app`。
 
-容器运行时使用 `/app/data` 作为持久数据目录，保存 SQLite 数据库、原图和显示 BMP。`server/docker/docker-compose.yml` 提供基础部署配置，服务名和镜像名均为 `epaper-album-server`，部署时通过 `server/.env` 设置 `SECRET_KEY`、`ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。
+容器运行时使用 `/app/data` 作为持久数据目录，保存 SQLite 数据库、原图、显示 BMP 和 sprite 缓存。`server/docker/docker-compose.yml` 提供基础部署配置，服务名和镜像名均为 `epaper-album-server`，部署时通过 `server/.env` 设置 `SECRET_KEY`、`ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。
 
 ## 建议验证
 

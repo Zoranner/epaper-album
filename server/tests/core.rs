@@ -37,8 +37,9 @@ async fn test_app_with_options(admin_token_expires_at: chrono::DateTime<chrono::
         "epaper-album-server-test-{}-{id}",
         std::process::id()
     ));
-    std::fs::create_dir_all(data_dir.join("origin")).expect("create origin dir");
-    std::fs::create_dir_all(data_dir.join("display")).expect("create display dir");
+    std::fs::create_dir_all(data_dir.join("images").join("original")).expect("create original dir");
+    std::fs::create_dir_all(data_dir.join("images").join("display")).expect("create display dir");
+    std::fs::create_dir_all(data_dir.join("sprites")).expect("create sprites dir");
 
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -170,7 +171,8 @@ fn multipart_body(boundary: &str, image: &[u8], remark: Option<&str>) -> Vec<u8>
 }
 
 fn write_display_file(data_dir: &Path, sha256: &str, bytes: &[u8]) {
-    std::fs::write(data_dir.join("display").join(sha256), bytes).expect("write display file");
+    std::fs::write(data_dir.join("images").join("display").join(sha256), bytes)
+        .expect("write display file");
 }
 
 fn sprite_font_assets_available() -> bool {
@@ -576,7 +578,12 @@ async fn upload_deduplicates_same_image_and_requeues_failed_image() {
     assert_eq!(value["data"]["sha256"], expected_sha);
     assert_eq!(value["data"]["status"], "pending");
     assert_eq!(image_remark(&app.pool, expected_sha).await, "第一次");
-    assert!(app.data_dir.join("origin").join(expected_sha).exists());
+    assert!(app
+        .data_dir
+        .join("images")
+        .join("original")
+        .join(expected_sha)
+        .exists());
 
     sqlx::query("UPDATE images SET status = 'failed' WHERE sha256 = ?")
         .bind(expected_sha)
@@ -667,7 +674,7 @@ async fn sprite_rejects_invalid_kind() {
 }
 
 #[tokio::test]
-async fn sprite_returns_bmp_and_supports_http_cache() {
+async fn sprite_returns_bmp_and_uses_data_cache() {
     if !sprite_font_assets_available() {
         eprintln!("skip sprite success test: fixed font files are not installed");
         return;
@@ -692,17 +699,6 @@ async fn sprite_returns_bmp_and_supports_http_cache() {
         response.headers().get(header::CONTENT_TYPE),
         Some(&"image/bmp".parse().expect("content type"))
     );
-    assert_eq!(
-        response.headers().get(header::CACHE_CONTROL),
-        Some(&"no-cache".parse().expect("cache control"))
-    );
-    let etag = response
-        .headers()
-        .get(header::ETAG)
-        .expect("etag")
-        .to_str()
-        .expect("etag str")
-        .to_string();
     let bytes = response
         .into_body()
         .collect()
@@ -718,22 +714,38 @@ async fn sprite_returns_bmp_and_supports_http_cache() {
         .pixels()
         .all(|pixel| { matches!(pixel.0, [0, 0, 0, 255] | [255, 255, 255, 255]) }));
 
+    let cache_files = std::fs::read_dir(app.data_dir.join("sprites"))
+        .expect("read sprite cache dir")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("sprite cache entries");
+    assert_eq!(cache_files.len(), 1);
+    assert_eq!(
+        cache_files[0]
+            .path()
+            .extension()
+            .and_then(|value| value.to_str()),
+        Some("bmp")
+    );
+    std::fs::write(cache_files[0].path(), b"BMcached").expect("overwrite sprite cache");
+
     let response = app
         .app
         .clone()
         .oneshot(
             user_request(sprite_uri)
-                .header(header::IF_NONE_MATCH, etag)
                 .body(Body::empty())
                 .expect("request"),
         )
         .await
         .expect("response");
-    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
-    assert_eq!(
-        response.headers().get(header::CACHE_CONTROL),
-        Some(&"no-cache".parse().expect("cache control"))
-    );
+    assert_eq!(response.status(), StatusCode::OK);
+    let cached_bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collect cached body")
+        .to_bytes();
+    assert_eq!(cached_bytes.as_ref(), b"BMcached");
 }
 
 #[tokio::test]

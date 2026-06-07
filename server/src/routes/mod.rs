@@ -142,7 +142,7 @@ pub async fn recover_and_enqueue_pending(state: &AppState) -> anyhow::Result<()>
     let ready_sha256s = state.store.ready_sha256s().await?;
     let missing = ready_sha256s
         .into_iter()
-        .filter(|sha256| !state.data_dir.join("display").join(sha256).exists())
+        .filter(|sha256| !display_image_path(&state.data_dir, sha256).exists())
         .collect::<Vec<_>>();
     state
         .store
@@ -315,9 +315,9 @@ async fn upload_image(
     }
 
     let sha256 = hex::encode(Sha256::digest(&bytes));
-    let origin_path = state.app.data_dir.join("origin").join(&sha256);
-    if !origin_path.exists() {
-        tokio::fs::write(&origin_path, &bytes)
+    let original_path = original_image_path(&state.app.data_dir, &sha256);
+    if !original_path.exists() {
+        tokio::fs::write(&original_path, &bytes)
             .await
             .map_err(|error| AppError::Internal(error.into()))?;
     }
@@ -369,7 +369,7 @@ async fn download_image(
         return Err(AppError::NotFound(format!("Image {sha256} not found")));
     }
 
-    let display_path = state.app.data_dir.join("display").join(&sha256);
+    let display_path = display_image_path(&state.app.data_dir, &sha256);
     if !display_path.exists() {
         return Err(AppError::NotFound(format!("Image {sha256} not found")));
     }
@@ -389,16 +389,18 @@ async fn create_sprite(
     let kind = validate_sprite_payload(&payload)?;
     let font_config = load_sprite_font_config().await?;
     validate_sprite_font_config(&font_config.parsed)?;
-    let font_assets = load_sprite_font_assets(&font_config.parsed).await?;
     let text = payload.text.trim().to_string();
-    let etag = sprite_etag(kind, &text, &font_config.raw);
+    let sha256 = sprite_sha256(kind, &text, &font_config.raw);
+    let cache_path = sprite_cache_path(&state.app.data_dir, &sha256);
 
-    if if_none_match_matches(&headers, &etag) {
-        let mut response = StatusCode::NOT_MODIFIED.into_response();
-        set_sprite_cache_headers(response.headers_mut(), &etag);
-        return Ok(response);
+    if cache_path.exists() {
+        let bytes = tokio::fs::read(cache_path)
+            .await
+            .map_err(|error| AppError::Internal(error.into()))?;
+        return Ok(([(header::CONTENT_TYPE, "image/bmp")], bytes).into_response());
     }
 
+    let font_assets = load_sprite_font_assets(&font_config.parsed).await?;
     let mut font_bytes = Vec::with_capacity(font_assets.len());
     for asset in font_assets {
         font_bytes.push(
@@ -412,9 +414,8 @@ async fn create_sprite(
         .await
         .map_err(|error| AppError::Internal(error.into()))??;
 
-    let mut response = ([(header::CONTENT_TYPE, "image/bmp")], bmp).into_response();
-    set_sprite_cache_headers(response.headers_mut(), &etag);
-    Ok(response)
+    write_sprite_cache(&cache_path, &bmp).await?;
+    Ok(([(header::CONTENT_TYPE, "image/bmp")], bmp).into_response())
 }
 
 async fn enqueue_image(state: &RuntimeState, sha256: String) {
@@ -458,10 +459,10 @@ async fn process_one_image(state: &AppState, sha256: &str) -> anyhow::Result<()>
     }
 
     let result = async {
-        let origin_path = state.data_dir.join("origin").join(sha256);
-        let display_path = state.data_dir.join("display").join(sha256);
-        let temp_path = state.data_dir.join("display").join(format!("{sha256}.tmp"));
-        let bytes = tokio::fs::read(origin_path).await?;
+        let original_path = original_image_path(&state.data_dir, sha256);
+        let display_path = display_image_path(&state.data_dir, sha256);
+        let temp_path = display_image_path(&state.data_dir, &format!("{sha256}.tmp"));
+        let bytes = tokio::fs::read(original_path).await?;
         let bmp = tokio::task::spawn_blocking(move || render_display_bmp(&bytes)).await??;
         tokio::fs::write(&temp_path, bmp).await?;
         if display_path.exists() {
@@ -629,32 +630,46 @@ fn fallback_font_index(fonts: &[Font], character: char) -> usize {
         .unwrap_or(0)
 }
 
-fn set_sprite_cache_headers(headers: &mut HeaderMap, etag: &str) {
-    headers.insert(
-        header::CACHE_CONTROL,
-        "no-cache".parse().expect("cache header"),
-    );
-    headers.insert(header::ETAG, etag.parse().expect("etag header"));
+async fn write_sprite_cache(path: &std::path::Path, bytes: &[u8]) -> Result<(), AppError> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("invalid sprite cache path")))?;
+    tokio::fs::create_dir_all(directory)
+        .await
+        .map_err(|error| AppError::Internal(error.into()))?;
+    let temp_path = path.with_extension("tmp");
+    tokio::fs::write(&temp_path, bytes)
+        .await
+        .map_err(|error| AppError::Internal(error.into()))?;
+    if path.exists() {
+        tokio::fs::remove_file(path)
+            .await
+            .map_err(|error| AppError::Internal(error.into()))?;
+    }
+    tokio::fs::rename(temp_path, path)
+        .await
+        .map_err(|error| AppError::Internal(error.into()))?;
+    Ok(())
 }
 
-fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {
-    headers
-        .get(header::IF_NONE_MATCH)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| {
-            value
-                .split(',')
-                .map(str::trim)
-                .any(|candidate| candidate == etag || candidate.strip_prefix("W/") == Some(etag))
-        })
-}
-
-fn sprite_etag(kind: SpriteKind, text: &str, font_config: &str) -> String {
+fn sprite_sha256(kind: SpriteKind, text: &str, font_config: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(kind.as_str().as_bytes());
     hasher.update(text.as_bytes());
     hasher.update(font_config.as_bytes());
-    format!("\"{}\"", hex::encode(hasher.finalize()))
+    hex::encode(hasher.finalize())
+}
+
+fn original_image_path(data_dir: &std::path::Path, sha256: &str) -> PathBuf {
+    data_dir.join("images").join("original").join(sha256)
+}
+
+fn display_image_path(data_dir: &std::path::Path, sha256: &str) -> PathBuf {
+    data_dir.join("images").join("display").join(sha256)
+}
+
+fn sprite_cache_path(data_dir: &std::path::Path, sha256: &str) -> PathBuf {
+    data_dir.join("sprites").join(format!("{sha256}.bmp"))
 }
 
 fn fit_to_display(image: DynamicImage) -> DynamicImage {

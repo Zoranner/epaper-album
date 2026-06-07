@@ -17,8 +17,9 @@ async fn main() -> anyhow::Result<()> {
 
     let config = AppConfig::from_env()?;
     std::fs::create_dir_all("data")?;
-    std::fs::create_dir_all("data/origin")?;
-    std::fs::create_dir_all("data/display")?;
+    std::fs::create_dir_all("data/images/original")?;
+    std::fs::create_dir_all("data/images/display")?;
+    std::fs::create_dir_all("data/sprites")?;
 
     let pool = SqlitePoolOptions::new()
         .max_connections(5)

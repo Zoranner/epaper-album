@@ -34,7 +34,7 @@ WORKDIR /app
 COPY --from=backend-builder /app/target/release/epaper-album-server .
 COPY --from=web-builder /app/web/dist ./web/dist
 COPY assets/ ./assets/
-RUN mkdir -p /app/data/origin /app/data/display && chown -R epaper:epaper /app/data
+RUN mkdir -p /app/data/images/original /app/data/images/display /app/data/sprites && chown -R epaper:epaper /app/data
 VOLUME ["/app/data"]
 EXPOSE 3000
 ENV LISTEN_PORT=3000
