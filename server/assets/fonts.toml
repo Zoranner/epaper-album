@@ -1,0 +1,9 @@
+files = [
+  "TerminessTTF NF.ttf",
+  "LXGWWenKaiMono-Regular.ttf",
+]
+
+[style]
+font_size = 32.0
+padding_x = 12
+padding_y = 8

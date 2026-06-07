@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, path::PathBuf};
+use std::net::SocketAddr;
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
@@ -9,7 +9,6 @@ pub struct AppConfig {
     pub admin_password: String,
     pub admin_token: String,
     pub admin_token_expires_at: chrono::DateTime<chrono::Utc>,
-    pub text_font_path: Option<PathBuf>,
 }
 
 impl AppConfig {
@@ -28,11 +27,6 @@ impl AppConfig {
             std::env::var("ADMIN_PASSWORD").unwrap_or_else(|_| "admin".to_string());
         let admin_token = uuid::Uuid::new_v4().to_string();
         let admin_token_expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
-        let text_font_path = std::env::var("TEXT_FONT_PATH")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from);
 
         Ok(Self {
             listen_addr: SocketAddr::from(([0, 0, 0, 0], port)),
@@ -42,7 +36,6 @@ impl AppConfig {
             admin_password,
             admin_token,
             admin_token_expires_at,
-            text_font_path,
         })
     }
 }

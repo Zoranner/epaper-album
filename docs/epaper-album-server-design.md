@@ -17,13 +17,12 @@
 | `SECRET_KEY` | `local-secret-key` | 设备和用户权限请求接口时使用的密钥 |
 | `ADMIN_USERNAME` | `admin` | 管理员账号 |
 | `ADMIN_PASSWORD` | `admin` | 管理员密码 |
-| `TEXT_FONT_PATH` | 无 | sprite 生成使用的 TTF、OTF 或 TTC 字体文件路径 |
 
 `SECRET_KEY` 用于设备同步计划和下载显示图片。管理员账号密码用于管理台登录和管理接口权限。服务端启动时创建 `data/`、`data/origin/` 和 `data/display/` 目录，初始化 SQLite 表结构，并挂载 API 路由和管理台静态文件。
 
 `server/.env.example` 提供本地和容器部署的环境变量示例。实际部署时复制为 `server/.env` 并调整密钥和管理员密码；`server/.env` 不纳入版本管理。
 
-sprite 生成接口从 `TEXT_FONT_PATH` 读取字体文件，并用字体 rasterize 方式生成小尺寸黑白 BMP。该配置指向单个字体文件，不额外管理字体目录。容器部署时需要把字体文件挂载到容器内，再把 `TEXT_FONT_PATH` 配置为容器内路径。未配置字体文件时，sprite 生成接口返回统一 JSON 错误，照片计划、图片上传、图片处理和设备同步等功能继续按原配置运行。
+sprite 生成接口读取 `server/assets/fonts.toml` 和 `server/assets/fonts/` 下的字体资源，并用字体 rasterize 方式生成小尺寸黑白 BMP。`fonts.toml` 配置字体 fallback 顺序、字号和 padding。字体文件不纳入版本管理，部署或本地运行前需要自行放入固定目录。
 
 ## 鉴权规则
 
@@ -461,7 +460,7 @@ Authorization: Bearer <admin-token>
 - `ETag` 使用 `type`、`text`、字体文件元信息和样式版本计算。
 - 客户端带 `If-None-Match` 且命中时，服务端返回 `304 Not Modified`。
 
-生成流程读取 `TEXT_FONT_PATH` 指向的字体文件，使用 fontdue 这类轻量 Rust 字体 rasterizer 将文字栅格化，再按阈值压成黑白像素并输出 BMP。当前方案面向标题、日期和提示这类短文本，负责生成文字 sprite 小 BMP。Skia 适合复杂排版、矢量绘制和更完整图形管线，后续出现这类需求时再评估引入成本。
+生成流程读取 `assets/fonts.toml` 中的字体文件顺序和文字样式配置，逐字符选择第一个包含对应字形的字体，使用 fontdue 这类轻量 Rust 字体 rasterizer 将文字栅格化，再按阈值压成黑白像素并输出 BMP。字体目录随工程保留为空目录，具体字体文件由运行环境自行提供。当前方案面向标题、日期和提示这类短文本，负责生成文字 sprite 小 BMP。Skia 适合复杂排版、矢量绘制和更完整图形管线，后续出现这类需求时再评估引入成本。
 
 ### 更新图片备注
 
@@ -668,6 +667,8 @@ server/
   Dockerfile
   docker-build.sh
   docker/docker-compose.yml
+  assets/fonts.toml
+  assets/fonts/
   src/
   tests/
   web/

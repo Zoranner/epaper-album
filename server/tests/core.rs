@@ -28,21 +28,10 @@ struct TestApp {
 }
 
 async fn test_app() -> TestApp {
-    test_app_with_text_font(None).await
+    test_app_with_options(chrono::Utc::now() + chrono::Duration::hours(1)).await
 }
 
-async fn test_app_with_text_font(text_font_path: Option<PathBuf>) -> TestApp {
-    test_app_with_options(
-        text_font_path,
-        chrono::Utc::now() + chrono::Duration::hours(1),
-    )
-    .await
-}
-
-async fn test_app_with_options(
-    text_font_path: Option<PathBuf>,
-    admin_token_expires_at: chrono::DateTime<chrono::Utc>,
-) -> TestApp {
+async fn test_app_with_options(admin_token_expires_at: chrono::DateTime<chrono::Utc>) -> TestApp {
     let id = TEST_ID.fetch_add(1, Ordering::Relaxed);
     let data_dir = std::env::temp_dir().join(format!(
         "epaper-album-server-test-{}-{id}",
@@ -68,7 +57,6 @@ async fn test_app_with_options(
         admin_token_expires_at,
         data_dir: data_dir.clone(),
         enqueue_processing: false,
-        text_font_path,
     };
 
     TestApp {
@@ -185,16 +173,24 @@ fn write_display_file(data_dir: &Path, sha256: &str, bytes: &[u8]) {
     std::fs::write(data_dir.join("display").join(sha256), bytes).expect("write display file");
 }
 
-fn test_font_path() -> Option<PathBuf> {
-    [
-        r"C:\Windows\Fonts\msyh.ttc",
-        r"C:\Windows\Fonts\simhei.ttf",
-        r"C:\Windows\Fonts\arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
-    .into_iter()
-    .map(PathBuf::from)
-    .find(|path| path.exists())
+fn sprite_font_assets_available() -> bool {
+    let Ok(config) = std::fs::read_to_string("assets/fonts.toml") else {
+        return false;
+    };
+    let Ok(value) = config.parse::<toml::Value>() else {
+        return false;
+    };
+    value
+        .get("files")
+        .and_then(toml::Value::as_array)
+        .is_some_and(|files| {
+            !files.is_empty()
+                && files.iter().all(|file| {
+                    file.as_str()
+                        .map(|file_name| Path::new("assets/fonts").join(file_name).exists())
+                        .unwrap_or(false)
+                })
+        })
 }
 
 #[tokio::test]
@@ -245,7 +241,7 @@ async fn login_returns_jwt_token_expiration_and_rejects_bad_credentials() {
 
 #[tokio::test]
 async fn expired_admin_token_is_rejected() {
-    let app = test_app_with_options(None, chrono::Utc::now() - chrono::Duration::seconds(1)).await;
+    let app = test_app_with_options(chrono::Utc::now() - chrono::Duration::seconds(1)).await;
 
     let (status, value) = request_json(
         app.app.clone(),
@@ -656,21 +652,9 @@ async fn download_returns_ready_bmp_and_404_does_not_change_status() {
 }
 
 #[tokio::test]
-async fn sprite_requires_configured_font_and_valid_kind() {
+async fn sprite_rejects_invalid_kind() {
     let app = test_app().await;
 
-    let (status, value) = request_json(
-        app.app.clone(),
-        admin_request(&app, "/api/sprite?type=caption&text=caption")
-            .body(Body::empty())
-            .expect("request"),
-    )
-    .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(value["code"], 500);
-    assert_eq!(value["data"], Value::Null);
-
-    let app = test_app_with_text_font(Some(PathBuf::from("missing-font.ttf"))).await;
     let (status, value) = request_json(
         app.app.clone(),
         admin_request(&app, "/api/sprite?type=badge&text=caption")
@@ -683,18 +667,20 @@ async fn sprite_requires_configured_font_and_valid_kind() {
 }
 
 #[tokio::test]
-async fn sprite_returns_bmp_and_supports_http_cache_when_font_is_configured() {
-    let Some(font_path) = test_font_path() else {
-        eprintln!("skip sprite success test: no known system font");
+async fn sprite_returns_bmp_and_supports_http_cache() {
+    if !sprite_font_assets_available() {
+        eprintln!("skip sprite success test: fixed font files are not installed");
         return;
-    };
-    let app = test_app_with_text_font(Some(font_path)).await;
+    }
+
+    let app = test_app().await;
+    let sprite_uri = "/api/sprite?type=caption&text=Album%E6%99%9A%E9%A3%8E2026";
 
     let response = app
         .app
         .clone()
         .oneshot(
-            user_request("/api/sprite?type=date&text=2026-06-07")
+            user_request(sprite_uri)
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -736,7 +722,7 @@ async fn sprite_returns_bmp_and_supports_http_cache_when_font_is_configured() {
         .app
         .clone()
         .oneshot(
-            user_request("/api/sprite?type=date&text=2026-06-07")
+            user_request(sprite_uri)
                 .header(header::IF_NONE_MATCH, etag)
                 .body(Body::empty())
                 .expect("request"),
@@ -752,11 +738,12 @@ async fn sprite_returns_bmp_and_supports_http_cache_when_font_is_configured() {
 
 #[tokio::test]
 async fn sprite_accepts_status_and_notice_types() {
-    let Some(font_path) = test_font_path() else {
-        eprintln!("skip sprite type test: no known system font");
+    if !sprite_font_assets_available() {
+        eprintln!("skip sprite type test: fixed font files are not installed");
         return;
-    };
-    let app = test_app_with_text_font(Some(font_path)).await;
+    }
+
+    let app = test_app().await;
 
     for kind in ["status", "notice"] {
         let response = app

@@ -23,6 +23,7 @@ use image::{
     imageops::FilterType, DynamicImage, GenericImage, GenericImageView, ImageFormat, Rgba,
     RgbaImage,
 };
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, Mutex};
 use tower_http::services::ServeDir;
@@ -38,6 +39,8 @@ use crate::{
 
 const DISPLAY_WIDTH: u32 = 800;
 const DISPLAY_HEIGHT: u32 = 480;
+const SPRITE_FONT_DIR: &str = "assets/fonts";
+const SPRITE_FONT_CONFIG_PATH: &str = "assets/fonts.toml";
 const SPRITE_STYLE_VERSION: &str = "sprite-style-v1";
 
 #[derive(Debug, Clone)]
@@ -50,7 +53,6 @@ pub struct AppState {
     pub admin_token_expires_at: DateTime<Utc>,
     pub data_dir: PathBuf,
     pub enqueue_processing: bool,
-    pub text_font_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -61,11 +63,23 @@ enum SpriteKind {
     Notice,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 struct SpriteStyle {
     font_size: f32,
     padding_x: u32,
     padding_y: u32,
+}
+
+#[derive(Debug)]
+struct SpriteFontAsset {
+    path: PathBuf,
+    metadata: std::fs::Metadata,
+}
+
+#[derive(Debug, Deserialize)]
+struct SpriteFontConfig {
+    files: Vec<String>,
+    style: SpriteStyle,
 }
 
 impl SpriteKind {
@@ -370,15 +384,11 @@ async fn create_sprite(
 ) -> Result<Response, AppError> {
     require_any_permission(&headers, &state.app)?;
     let kind = validate_sprite_payload(&payload)?;
-    let font_path =
-        state.app.text_font_path.clone().ok_or_else(|| {
-            AppError::Internal(anyhow::anyhow!("TEXT_FONT_PATH is not configured"))
-        })?;
-    let font_metadata = tokio::fs::metadata(&font_path)
-        .await
-        .map_err(|error| AppError::Internal(error.into()))?;
+    let font_config = load_sprite_font_config().await?;
+    validate_sprite_font_config(&font_config)?;
+    let font_assets = load_sprite_font_assets(&font_config).await?;
     let text = payload.text.trim().to_string();
-    let etag = sprite_etag(kind, &text, &font_metadata);
+    let etag = sprite_etag(kind, &text, &font_config, &font_assets);
 
     if if_none_match_matches(&headers, &etag) {
         let mut response = StatusCode::NOT_MODIFIED.into_response();
@@ -386,10 +396,16 @@ async fn create_sprite(
         return Ok(response);
     }
 
-    let font_bytes = tokio::fs::read(font_path)
-        .await
-        .map_err(|error| AppError::Internal(error.into()))?;
-    let bmp = tokio::task::spawn_blocking(move || render_sprite_bmp(&text, font_bytes))
+    let mut font_bytes = Vec::with_capacity(font_assets.len());
+    for asset in font_assets {
+        font_bytes.push(
+            tokio::fs::read(asset.path)
+                .await
+                .map_err(|error| AppError::Internal(error.into()))?,
+        );
+    }
+    let style = font_config.style;
+    let bmp = tokio::task::spawn_blocking(move || render_sprite_bmp(&text, font_bytes, style))
         .await
         .map_err(|error| AppError::Internal(error.into()))??;
 
@@ -473,18 +489,31 @@ fn render_display_bmp(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     Ok(output.into_inner())
 }
 
-fn render_sprite_bmp(text: &str, font_bytes: Vec<u8>) -> anyhow::Result<Vec<u8>> {
-    let style = sprite_style();
-    let font = Font::from_bytes(font_bytes, FontSettings::default())
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
-    let fonts = &[font];
+fn render_sprite_bmp(
+    text: &str,
+    font_bytes: Vec<Vec<u8>>,
+    style: SpriteStyle,
+) -> anyhow::Result<Vec<u8>> {
+    let fonts = font_bytes
+        .into_iter()
+        .map(|bytes| {
+            Font::from_bytes(bytes, FontSettings::default())
+                .map_err(|error| anyhow::anyhow!("{error}"))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
     let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
     layout.reset(&LayoutSettings {
         x: style.padding_x as f32,
         y: style.padding_y as f32,
         ..LayoutSettings::default()
     });
-    layout.append(fonts, &TextStyle::new(text, style.font_size, 0));
+    for character in text.chars() {
+        let font_index = fallback_font_index(&fonts, character);
+        layout.append(
+            &fonts,
+            &TextStyle::new(&character.to_string(), style.font_size, font_index),
+        );
+    }
 
     let glyphs = layout.glyphs();
     let text_width = glyphs
@@ -538,12 +567,59 @@ fn render_sprite_bmp(text: &str, font_bytes: Vec<u8>) -> anyhow::Result<Vec<u8>>
     Ok(output.into_inner())
 }
 
-fn sprite_style() -> SpriteStyle {
-    SpriteStyle {
-        font_size: 32.0,
-        padding_x: 12,
-        padding_y: 8,
+async fn load_sprite_font_assets(
+    config: &SpriteFontConfig,
+) -> Result<Vec<SpriteFontAsset>, AppError> {
+    let mut assets = Vec::new();
+    for file_name in &config.files {
+        let file_name = file_name.trim();
+        if file_name.is_empty() {
+            continue;
+        }
+        let path = PathBuf::from(SPRITE_FONT_DIR).join(file_name);
+        let metadata = tokio::fs::metadata(&path)
+            .await
+            .map_err(|error| AppError::Internal(error.into()))?;
+        assets.push(SpriteFontAsset { path, metadata });
     }
+    if assets.is_empty() {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "sprite font config has no font files"
+        )));
+    }
+    Ok(assets)
+}
+
+async fn load_sprite_font_config() -> Result<SpriteFontConfig, AppError> {
+    let config = tokio::fs::read_to_string(SPRITE_FONT_CONFIG_PATH)
+        .await
+        .map_err(|error| AppError::Internal(error.into()))?;
+    toml::from_str(&config).map_err(|error| AppError::Internal(error.into()))
+}
+
+fn validate_sprite_font_config(config: &SpriteFontConfig) -> Result<(), AppError> {
+    if config
+        .files
+        .iter()
+        .all(|file_name| file_name.trim().is_empty())
+    {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "sprite font config has no font files"
+        )));
+    }
+    if config.style.font_size <= 0.0 {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "sprite font size must be positive"
+        )));
+    }
+    Ok(())
+}
+
+fn fallback_font_index(fonts: &[Font], character: char) -> usize {
+    fonts
+        .iter()
+        .position(|font| font.has_glyph(character))
+        .unwrap_or(0)
 }
 
 fn set_sprite_cache_headers(headers: &mut HeaderMap, etag: &str) {
@@ -566,18 +642,33 @@ fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {
         })
 }
 
-fn sprite_etag(kind: SpriteKind, text: &str, metadata: &std::fs::Metadata) -> String {
+fn sprite_etag(
+    kind: SpriteKind,
+    text: &str,
+    config: &SpriteFontConfig,
+    font_assets: &[SpriteFontAsset],
+) -> String {
     let mut hasher = Sha256::new();
     hasher.update(SPRITE_STYLE_VERSION.as_bytes());
     hasher.update(kind.as_str().as_bytes());
     hasher.update(text.as_bytes());
-    hasher.update(metadata.len().to_le_bytes());
-    let modified = metadata
-        .modified()
-        .ok()
-        .and_then(|time| system_time_nanos_since_epoch(time).ok())
-        .unwrap_or_default();
-    hasher.update(modified.to_le_bytes());
+    hasher.update(config.style.font_size.to_le_bytes());
+    hasher.update(config.style.padding_x.to_le_bytes());
+    hasher.update(config.style.padding_y.to_le_bytes());
+    for file_name in &config.files {
+        hasher.update(file_name.as_bytes());
+    }
+    for asset in font_assets {
+        hasher.update(asset.path.to_string_lossy().as_bytes());
+        hasher.update(asset.metadata.len().to_le_bytes());
+        let modified = asset
+            .metadata
+            .modified()
+            .ok()
+            .and_then(|time| system_time_nanos_since_epoch(time).ok())
+            .unwrap_or_default();
+        hasher.update(modified.to_le_bytes());
+    }
     format!("\"{}\"", hex::encode(hasher.finalize()))
 }
 

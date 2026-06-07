@@ -33,6 +33,7 @@ RUN useradd --system --no-create-home --uid 1000 epaper
 WORKDIR /app
 COPY --from=backend-builder /app/target/release/epaper-album-server .
 COPY --from=web-builder /app/web/dist ./web/dist
+COPY assets/ ./assets/
 RUN mkdir -p /app/data/origin /app/data/display && chown -R epaper:epaper /app/data
 VOLUME ["/app/data"]
 EXPOSE 3000
