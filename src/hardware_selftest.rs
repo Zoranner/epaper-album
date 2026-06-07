@@ -54,10 +54,10 @@ const DATE_TEXT_BITMAP: [u8; 210] = [
     0x00, 0x1F, 0xC0, 0xE0, 0xFF, 0x81, 0xE0, 0xFF, 0x81, 0xE0, 0x00, 0x0F, 0x00, 0xF0, 0x00, 0x07,
     0x80, 0xE0,
 ];
-const STATUS_TEXT_WIDTH: usize = 93;
-const STATUS_TEXT_HEIGHT: usize = 15;
-const STATUS_TEXT_BYTES_PER_ROW: usize = 12;
-const STATUS_TEXT_BITMAP: [u8; 180] = [
+const NOTICE_TEXT_WIDTH: usize = 93;
+const NOTICE_TEXT_HEIGHT: usize = 15;
+const NOTICE_TEXT_BYTES_PER_ROW: usize = 12;
+const NOTICE_TEXT_BITMAP: [u8; 180] = [
     0x0F, 0xC1, 0xE0, 0x39, 0xFE, 0x3F, 0xC0, 0xE0, 0x01, 0xE0, 0xF0, 0x78, 0x1F, 0xF0, 0xE0, 0x71,
     0xFE, 0x3F, 0xE0, 0xE0, 0x03, 0xF0, 0x70, 0x70, 0x3F, 0xF0, 0xE0, 0x71, 0xFE, 0x3F, 0xF0, 0xE0,
     0x03, 0xF0, 0x78, 0x70, 0x78, 0x78, 0xF0, 0x71, 0xC0, 0x38, 0xF0, 0xE0, 0x03, 0xF0, 0x38, 0xE0,
@@ -353,13 +353,13 @@ fn draw_self_test_overlay(frame: &mut [u8]) {
     );
     draw_bitmap_text(
         frame,
-        OverlaySlot::TopRight,
+        OverlaySlot::TopLeft,
         &style,
         &BitmapText {
-            width: STATUS_TEXT_WIDTH,
-            height: STATUS_TEXT_HEIGHT,
-            bytes_per_row: STATUS_TEXT_BYTES_PER_ROW,
-            bitmap: &STATUS_TEXT_BITMAP,
+            width: NOTICE_TEXT_WIDTH,
+            height: NOTICE_TEXT_HEIGHT,
+            bytes_per_row: NOTICE_TEXT_BYTES_PER_ROW,
+            bitmap: &NOTICE_TEXT_BITMAP,
         },
     );
 }
@@ -404,6 +404,7 @@ fn frame_overlay_origin(
     match slot {
         OverlaySlot::BottomLeft => (left, bottom),
         OverlaySlot::BottomRight => (right, bottom),
+        OverlaySlot::TopLeft => (left, top),
         OverlaySlot::TopRight => (right, top),
     }
 }

@@ -42,7 +42,7 @@ impl BatteryStatus {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LowBatteryPolicy {
     pub stop_cloud_sync: bool,
-    pub show_status_hint: bool,
+    pub show_notice: bool,
     pub minimum_percent: Option<u8>,
     pub minimum_millivolts: Option<u16>,
 }
@@ -51,7 +51,7 @@ impl Default for LowBatteryPolicy {
     fn default() -> Self {
         Self {
             stop_cloud_sync: true,
-            show_status_hint: true,
+            show_notice: true,
             minimum_percent: Some(15),
             minimum_millivolts: None,
         }

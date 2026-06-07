@@ -2,7 +2,7 @@ use crate::config::Config;
 #[cfg(not(target_os = "espidf"))]
 use crate::display::{DisplayRefreshMode, EpaperDisplay, MockDisplay};
 #[cfg(not(target_os = "espidf"))]
-use crate::render::{render_photo_page, RenderInput, RenderStatusHint};
+use crate::render::{render_photo_page, RenderInput, RenderNotice};
 use crate::storage::{read_text_file, StorageRead};
 use std::fmt::Arguments;
 use std::path::Path;
@@ -124,8 +124,7 @@ fn probe_render() -> RenderProbe {
     #[cfg(not(target_os = "espidf"))]
     {
         let frame = render_photo_page(
-            &RenderInput::new("SELF TEST", "2026-06-07")
-                .with_status_hint(RenderStatusHint::Offline),
+            &RenderInput::new("SELF TEST", "2026-06-07").with_notice(RenderNotice::Offline),
         );
         let mut display = MockDisplay::new();
 

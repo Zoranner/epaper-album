@@ -37,11 +37,12 @@ impl Default for TextStyle {
 pub enum OverlaySlot {
     BottomLeft,
     BottomRight,
+    TopLeft,
     TopRight,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RenderStatusHint {
+pub enum RenderNotice {
     LowBattery,
     Offline,
     SyncFailed,
@@ -49,7 +50,7 @@ pub enum RenderStatusHint {
     StorageLow,
 }
 
-impl RenderStatusHint {
+impl RenderNotice {
     pub const fn text(self) -> &'static str {
         match self {
             Self::LowBattery => "LOW BAT",
@@ -83,7 +84,7 @@ pub struct RenderInput<'a> {
     pub image: Option<RenderImage<'a>>,
     pub caption: &'a str,
     pub date: &'a str,
-    pub status_hint: Option<RenderStatusHint>,
+    pub notice: Option<RenderNotice>,
     pub style: TextStyle,
 }
 
@@ -93,7 +94,7 @@ impl<'a> RenderInput<'a> {
             image: None,
             caption,
             date,
-            status_hint: None,
+            notice: None,
             style: TextStyle {
                 foreground: Color::Black,
                 background: Color::White,
@@ -113,8 +114,8 @@ impl<'a> RenderInput<'a> {
         self
     }
 
-    pub const fn with_status_hint(mut self, status_hint: RenderStatusHint) -> Self {
-        self.status_hint = Some(status_hint);
+    pub const fn with_notice(mut self, notice: RenderNotice) -> Self {
+        self.notice = Some(notice);
         self
     }
 
@@ -145,13 +146,8 @@ pub fn render_into(buffer: &mut ScreenBuffer, input: &RenderInput<'_>) {
         draw_text(buffer, OverlaySlot::BottomRight, input.date, &input.style);
     }
 
-    if let Some(status_hint) = input.status_hint {
-        draw_text(
-            buffer,
-            OverlaySlot::TopRight,
-            status_hint.text(),
-            &input.style,
-        );
+    if let Some(notice) = input.notice {
+        draw_text(buffer, OverlaySlot::TopLeft, notice.text(), &input.style);
     }
 }
 
@@ -360,6 +356,7 @@ fn overlay_origin(
     match slot {
         OverlaySlot::BottomLeft => (left, bottom),
         OverlaySlot::BottomRight => (right, bottom),
+        OverlaySlot::TopLeft => (left, top),
         OverlaySlot::TopRight => (right, top),
     }
 }

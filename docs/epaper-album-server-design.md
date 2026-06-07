@@ -428,14 +428,14 @@ Authorization: Bearer <admin-token>
 
 | 参数 | 类型 | 说明 |
 | --- | --- | --- |
-| `type` | string | sprite 类型，取值为 `caption`、`date`、`status` 或 `notice` |
+| `type` | string | sprite 类型，取值为 `caption`、`date`、`notice` 或 `status` |
 | `text` | string | 需要生成的小图块文字，URL 编码后传入 |
 
 服务端按 GET 语义处理该接口，请求不会写入数据库、不会创建图片记录。成功响应返回 BMP 二进制内容，`Content-Type` 固定为 `image/bmp`。失败响应使用统一 JSON 结构。
 
 参数规则：
 
-- `type` 仅支持 `caption`、`date`、`status` 和 `notice`。
+- `type` 仅支持 `caption`、`date`、`notice` 和 `status`。
 - `text` 去除首尾空白后不能为空。
 - `text` 最多 64 个 Unicode 字符。
 - 未知 `type`、空文本和超长文本返回 `400 Bad Request`。
@@ -449,7 +449,7 @@ Authorization: Bearer <admin-token>
 | 尺寸 | 按文字内容自适应宽高 |
 | 格式 | 24-bit BMP |
 
-`type` 对齐设备端文字用途：`caption` 对应左下角标题，`date` 对应右下角日期，`status` 对应右上角状态提示，`notice` 对应后续普通提示文字。当前四种类型使用同一套字体、字号、内边距和颜色规则，`type` 只用于调用方区分用途和后续扩展。生成结果为白底黑字。字体栅格化后按阈值压成纯黑白像素，不输出灰度抗锯齿像素。
+`type` 对齐设备端文字用途：`caption` 对应左下角标题，`date` 对应右下角日期，`notice` 对应左上角通知，`status` 对应后续右上角状态扩展。当前四种类型使用同一套字体、字号、内边距和颜色规则，`type` 用于调用方区分用途和后续扩展。生成结果为白底黑字。字体栅格化后按阈值压成纯黑白像素，不输出灰度抗锯齿像素。
 
 缓存规则：
 
@@ -459,7 +459,7 @@ Authorization: Bearer <admin-token>
 - `sha256` 使用 `type`、文字内容和 `fonts.toml` 配置内容计算。
 - 命中缓存文件时直接返回 BMP；未命中时生成 BMP，写入缓存文件后返回。
 
-生成流程读取 `assets/fonts.toml` 中的字体文件顺序和文字样式配置，逐字符选择第一个包含对应字形的字体，使用 fontdue 这类轻量 Rust 字体 rasterizer 将文字栅格化，再按阈值压成黑白像素并输出 BMP。字体目录随工程保留为空目录，具体字体文件由运行环境自行提供。当前方案面向标题、日期和提示这类短文本，负责生成文字 sprite 小 BMP。Skia 适合复杂排版、矢量绘制和更完整图形管线，后续出现这类需求时再评估引入成本。
+生成流程读取 `assets/fonts.toml` 中的字体文件顺序和文字样式配置，逐字符选择第一个包含对应字形的字体，使用 fontdue 这类轻量 Rust 字体 rasterizer 将文字栅格化，再按阈值压成黑白像素并输出 BMP。字体目录随工程保留为空目录，具体字体文件由运行环境自行提供。当前方案面向标题、日期和通知这类短文本，负责生成文字 sprite 小 BMP。Skia 适合复杂排版、矢量绘制和更完整图形管线，后续出现这类需求时再评估引入成本。
 
 ### 更新图片备注
 
