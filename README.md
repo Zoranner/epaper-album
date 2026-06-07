@@ -64,20 +64,24 @@ cargo +esp run --release --target xtensa-esp32s3-espidf
 cargo +esp espflash flash --release --target xtensa-esp32s3-espidf --monitor --port COM3
 ```
 
-当前固件入口会执行串口自检，输出 TF 卡、配置文件、屏幕刷新和渲染探测结果。烧录后串口监视器会显示带 ESP-IDF 日志前缀的内容：
+当前 ESP32-S3 固件入口会执行一次设备运行周期：读取 TF 卡配置和本地状态，按同步计划连接云端，下载计划和缺失图片，基于缓存生成显示决策，刷新屏幕后写入运行状态。烧录后串口监视器会显示带 ESP-IDF 日志前缀的内容：
 
 ```text
-I (...) epaper_album: epaper-album self-test
-I (...) epaper_album: storage: available
-I (...) epaper_album: config: missing
-I (...) epaper_album: epd: refreshed
-I (...) epaper_album: render refresh count: 0
-I (...) epaper_album: render sleep: false
+I (...) epaper_album: wake: unknown
+I (...) epaper_album: device outcome: completed
+I (...) epaper_album: cycle outcome: RefreshOnly
+I (...) epaper_album: sync attempted: true
+I (...) epaper_album: sync succeeded: true
+I (...) epaper_album: refresh attempted: true
+I (...) epaper_album: refresh succeeded: true
+I (...) epaper_album: next wake: Some(...), sleep seconds: Some(...)
 ```
 
-`storage` 的取值包括 `available` 和 `mount-error`。`config` 的取值包括 `valid`、`incomplete`、`missing`、`parse-error` 和 `read-error`。`epd` 的取值包括 `refreshed`、`photo-refreshed`、`image-format-error`、`image-read-error`、`init-error`、`busy-timeout` 和 `transport-error`。TF 卡根目录提供 `config.toml` 后，可以通过串口输出确认设备端 TF 卡挂载、配置文件读取和屏幕刷新状态。
+`device outcome` 表示 ESP-IDF 适配层结果，常见值包括 `completed`、`storage-mount-error`、`epd-init-error` 和 `state-write-error`。`cycle outcome` 表示业务周期结果，常见值包括 `SyncRequested`、`RefreshOnly`、`SleepOnly`、`LowBatterySkipSync`、`SyncFailed`、`RefreshFailed` 和 `NoUsablePhoto`。`next wake` 和 `sleep seconds` 来自调度计算，当前开发入口输出计划值，深度睡眠执行保持手动接入。
 
-TF 卡根目录提供 `test.bmp` 后，设备会优先刷这张图片，并输出 `epd: photo-refreshed`。`test.bmp` 使用 `800x480`、24-bit、未压缩 BMP。仓库提供桌面照片处理脚本，可以把桌面 `sample.jpg` 转成六色屏测试图：
+TF 卡根目录放置 `/sdcard/config.toml`，设备即可读取 Wi-Fi、云端地址和 `secret-key`。云端计划引用的图片缓存到 `/sdcard/epaper-album/images/`，标题、日期和通知 sprite 缓存到 `/sdcard/epaper-album/sprites/`，运行状态写入 `/sdcard/epaper-album/device-state.json`。
+
+硬件照片自检阶段使用的 `test.bmp` 仍可作为屏幕链路排查资源。`test.bmp` 使用 `800x480`、24-bit、未压缩 BMP。仓库提供桌面照片处理脚本，可以把桌面 `sample.jpg` 转成六色屏测试图：
 
 ```powershell
 .\scripts\prepare-test-bmp.ps1
