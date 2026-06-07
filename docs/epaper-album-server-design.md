@@ -22,7 +22,7 @@
 
 `server/.env.example` 提供本地和容器部署的环境变量示例。实际部署时复制为 `server/.env` 并调整密钥和管理员密码；`server/.env` 不纳入版本管理。
 
-sprite 生成接口读取 `server/assets/fonts.toml` 和 `server/assets/fonts/` 下的字体资源，并用字体 rasterize 方式生成小尺寸黑白 BMP。`fonts.toml` 配置字体 fallback 顺序、字号和 padding。字体文件不纳入版本管理，部署或本地运行前需要自行放入固定目录。
+sprite 生成接口读取 `server/assets/fonts.toml` 和 `server/assets/fonts/` 下的字体资源，并用字体 rasterize 方式生成小尺寸黑白 BMP。`fonts.toml` 配置字体 fallback 顺序、字号和 padding；仓库只提供 `server/assets/fonts.example.toml`，部署或本地运行前复制为 `fonts.toml` 并把字体文件放入固定目录。真实配置和字体文件不纳入版本管理。
 
 ## 鉴权规则
 
@@ -457,10 +457,10 @@ Authorization: Bearer <admin-token>
 - 服务端不做落盘文件缓存。
 - 生成结果不写入 `images` 表。
 - 响应可以带 `ETag` 和 `Cache-Control: no-cache`。
-- `ETag` 使用 `type`、`text`、字体文件元信息和样式版本计算。
+- `ETag` 使用 `type`、文字内容和 `fonts.toml` 配置内容计算。
 - 客户端带 `If-None-Match` 且命中时，服务端返回 `304 Not Modified`。
 
-生成流程读取 `assets/fonts.toml` 中的字体文件顺序和文字样式配置，逐字符选择第一个包含对应字形的字体，使用 fontdue 这类轻量 Rust 字体 rasterizer 将文字栅格化，再按阈值压成黑白像素并输出 BMP。字体目录随工程保留为空目录，具体字体文件由运行环境自行提供。当前方案面向标题、日期和提示这类短文本，负责生成文字 sprite 小 BMP。Skia 适合复杂排版、矢量绘制和更完整图形管线，后续出现这类需求时再评估引入成本。
+生成流程读取 `assets/fonts.toml` 中的字体文件顺序和文字样式配置，逐字符选择第一个包含对应字形的字体，使用 fontdue 这类轻量 Rust 字体 rasterizer 将文字栅格化，再按阈值压成黑白像素并输出 BMP。sprite 缓存键使用 `type`、文字内容和 `fonts.toml` 配置内容计算。字体目录随工程保留为空目录，具体字体文件由运行环境自行提供。当前方案面向标题、日期和提示这类短文本，负责生成文字 sprite 小 BMP。Skia 适合复杂排版、矢量绘制和更完整图形管线，后续出现这类需求时再评估引入成本。
 
 ### 更新图片备注
 
@@ -667,7 +667,7 @@ server/
   Dockerfile
   docker-build.sh
   docker/docker-compose.yml
-  assets/fonts.toml
+  assets/fonts.example.toml
   assets/fonts/
   src/
   tests/

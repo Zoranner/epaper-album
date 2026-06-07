@@ -3,7 +3,6 @@ use std::{
     io::Cursor,
     path::PathBuf,
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
@@ -41,7 +40,6 @@ const DISPLAY_WIDTH: u32 = 800;
 const DISPLAY_HEIGHT: u32 = 480;
 const SPRITE_FONT_DIR: &str = "assets/fonts";
 const SPRITE_FONT_CONFIG_PATH: &str = "assets/fonts.toml";
-const SPRITE_STYLE_VERSION: &str = "sprite-style-v1";
 
 #[derive(Debug, Clone)]
 pub struct AppState {
@@ -73,13 +71,18 @@ struct SpriteStyle {
 #[derive(Debug)]
 struct SpriteFontAsset {
     path: PathBuf,
-    metadata: std::fs::Metadata,
 }
 
 #[derive(Debug, Deserialize)]
 struct SpriteFontConfig {
     files: Vec<String>,
     style: SpriteStyle,
+}
+
+#[derive(Debug)]
+struct LoadedSpriteFontConfig {
+    raw: String,
+    parsed: SpriteFontConfig,
 }
 
 impl SpriteKind {
@@ -385,10 +388,10 @@ async fn create_sprite(
     require_any_permission(&headers, &state.app)?;
     let kind = validate_sprite_payload(&payload)?;
     let font_config = load_sprite_font_config().await?;
-    validate_sprite_font_config(&font_config)?;
-    let font_assets = load_sprite_font_assets(&font_config).await?;
+    validate_sprite_font_config(&font_config.parsed)?;
+    let font_assets = load_sprite_font_assets(&font_config.parsed).await?;
     let text = payload.text.trim().to_string();
-    let etag = sprite_etag(kind, &text, &font_config, &font_assets);
+    let etag = sprite_etag(kind, &text, &font_config.raw);
 
     if if_none_match_matches(&headers, &etag) {
         let mut response = StatusCode::NOT_MODIFIED.into_response();
@@ -404,7 +407,7 @@ async fn create_sprite(
                 .map_err(|error| AppError::Internal(error.into()))?,
         );
     }
-    let style = font_config.style;
+    let style = font_config.parsed.style;
     let bmp = tokio::task::spawn_blocking(move || render_sprite_bmp(&text, font_bytes, style))
         .await
         .map_err(|error| AppError::Internal(error.into()))??;
@@ -577,10 +580,10 @@ async fn load_sprite_font_assets(
             continue;
         }
         let path = PathBuf::from(SPRITE_FONT_DIR).join(file_name);
-        let metadata = tokio::fs::metadata(&path)
+        tokio::fs::metadata(&path)
             .await
             .map_err(|error| AppError::Internal(error.into()))?;
-        assets.push(SpriteFontAsset { path, metadata });
+        assets.push(SpriteFontAsset { path });
     }
     if assets.is_empty() {
         return Err(AppError::Internal(anyhow::anyhow!(
@@ -590,11 +593,15 @@ async fn load_sprite_font_assets(
     Ok(assets)
 }
 
-async fn load_sprite_font_config() -> Result<SpriteFontConfig, AppError> {
+async fn load_sprite_font_config() -> Result<LoadedSpriteFontConfig, AppError> {
     let config = tokio::fs::read_to_string(SPRITE_FONT_CONFIG_PATH)
         .await
         .map_err(|error| AppError::Internal(error.into()))?;
-    toml::from_str(&config).map_err(|error| AppError::Internal(error.into()))
+    let parsed = toml::from_str(&config).map_err(|error| AppError::Internal(error.into()))?;
+    Ok(LoadedSpriteFontConfig {
+        raw: config,
+        parsed,
+    })
 }
 
 fn validate_sprite_font_config(config: &SpriteFontConfig) -> Result<(), AppError> {
@@ -642,38 +649,12 @@ fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {
         })
 }
 
-fn sprite_etag(
-    kind: SpriteKind,
-    text: &str,
-    config: &SpriteFontConfig,
-    font_assets: &[SpriteFontAsset],
-) -> String {
+fn sprite_etag(kind: SpriteKind, text: &str, font_config: &str) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(SPRITE_STYLE_VERSION.as_bytes());
     hasher.update(kind.as_str().as_bytes());
     hasher.update(text.as_bytes());
-    hasher.update(config.style.font_size.to_le_bytes());
-    hasher.update(config.style.padding_x.to_le_bytes());
-    hasher.update(config.style.padding_y.to_le_bytes());
-    for file_name in &config.files {
-        hasher.update(file_name.as_bytes());
-    }
-    for asset in font_assets {
-        hasher.update(asset.path.to_string_lossy().as_bytes());
-        hasher.update(asset.metadata.len().to_le_bytes());
-        let modified = asset
-            .metadata
-            .modified()
-            .ok()
-            .and_then(|time| system_time_nanos_since_epoch(time).ok())
-            .unwrap_or_default();
-        hasher.update(modified.to_le_bytes());
-    }
+    hasher.update(font_config.as_bytes());
     format!("\"{}\"", hex::encode(hasher.finalize()))
-}
-
-fn system_time_nanos_since_epoch(time: SystemTime) -> Result<u128, std::time::SystemTimeError> {
-    Ok(time.duration_since(UNIX_EPOCH)?.as_nanos())
 }
 
 fn fit_to_display(image: DynamicImage) -> DynamicImage {

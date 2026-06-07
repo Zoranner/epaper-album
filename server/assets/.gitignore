@@ -1,0 +1,3 @@
+fonts.toml
+fonts/*
+!fonts/.gitkeep
