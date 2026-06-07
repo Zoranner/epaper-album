@@ -52,7 +52,7 @@ pub struct ImageRemarkPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct TextImagePayload {
+pub struct SpritePayload {
     #[serde(rename = "type")]
     pub kind: String,
     pub text: String,

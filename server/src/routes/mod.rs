@@ -3,13 +3,14 @@ use std::{
     io::Cursor,
     path::PathBuf,
     sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
     body::Bytes,
     extract::{Multipart, Path, Query, State},
     http::{header, HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{get, post, put},
     Json, Router,
 };
@@ -31,12 +32,13 @@ use crate::{
     error::AppError,
     models::{
         null_data, ApiResponse, ImageRemarkPayload, LoginRequest, LoginResponse, PlanPayload,
-        TextImagePayload,
+        SpritePayload,
     },
 };
 
 const DISPLAY_WIDTH: u32 = 800;
 const DISPLAY_HEIGHT: u32 = 480;
+const SPRITE_STYLE_VERSION: &str = "sprite-style-v1";
 
 #[derive(Debug, Clone)]
 pub struct AppState {
@@ -51,16 +53,29 @@ pub struct AppState {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum TextImageKind {
-    Title,
+enum SpriteKind {
+    Caption,
     Date,
+    Status,
+    Notice,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct TextImageStyle {
+struct SpriteStyle {
     font_size: f32,
     padding_x: u32,
     padding_y: u32,
+}
+
+impl SpriteKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Caption => "caption",
+            Self::Date => "date",
+            Self::Status => "status",
+            Self::Notice => "notice",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -97,7 +112,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/plans/:id", put(update_plan).delete(delete_plan))
         .route("/api/images", get(list_images).post(upload_image))
         .route("/api/images/:sha256", put(update_image))
-        .route("/api/text-images", post(create_text_image))
+        .route("/api/sprite", get(create_sprite))
         .route("/images/:sha256", get(download_image))
         .fallback_service(ServeDir::new("web/dist").append_index_html_on_directories(true))
         .with_state(runtime)
@@ -346,26 +361,39 @@ async fn download_image(
     Ok(([(header::CONTENT_TYPE, "image/bmp")], bytes))
 }
 
-async fn create_text_image(
+async fn create_sprite(
     State(state): State<RuntimeState>,
     headers: HeaderMap,
-    Json(payload): Json<TextImagePayload>,
-) -> Result<impl IntoResponse, AppError> {
+    Query(payload): Query<SpritePayload>,
+) -> Result<Response, AppError> {
     require_any_permission(&headers, &state.app)?;
-    let kind = validate_text_image_payload(&payload)?;
+    let kind = validate_sprite_payload(&payload)?;
     let font_path =
         state.app.text_font_path.clone().ok_or_else(|| {
             AppError::Internal(anyhow::anyhow!("TEXT_FONT_PATH is not configured"))
         })?;
-    let font_bytes = tokio::fs::read(font_path)
+    let font_metadata = tokio::fs::metadata(&font_path)
         .await
         .map_err(|error| AppError::Internal(error.into()))?;
     let text = payload.text.trim().to_string();
-    let bmp = tokio::task::spawn_blocking(move || render_text_image_bmp(kind, &text, font_bytes))
+    let etag = sprite_etag(kind, &text, &font_metadata);
+
+    if if_none_match_matches(&headers, &etag) {
+        let mut response = StatusCode::NOT_MODIFIED.into_response();
+        set_sprite_cache_headers(response.headers_mut(), &etag);
+        return Ok(response);
+    }
+
+    let font_bytes = tokio::fs::read(font_path)
+        .await
+        .map_err(|error| AppError::Internal(error.into()))?;
+    let bmp = tokio::task::spawn_blocking(move || render_sprite_bmp(&text, font_bytes))
         .await
         .map_err(|error| AppError::Internal(error.into()))??;
 
-    Ok(([(header::CONTENT_TYPE, "image/bmp")], bmp))
+    let mut response = ([(header::CONTENT_TYPE, "image/bmp")], bmp).into_response();
+    set_sprite_cache_headers(response.headers_mut(), &etag);
+    Ok(response)
 }
 
 async fn enqueue_image(state: &RuntimeState, sha256: String) {
@@ -443,12 +471,8 @@ fn render_display_bmp(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     Ok(output.into_inner())
 }
 
-fn render_text_image_bmp(
-    kind: TextImageKind,
-    text: &str,
-    font_bytes: Vec<u8>,
-) -> anyhow::Result<Vec<u8>> {
-    let style = text_image_style(kind);
+fn render_sprite_bmp(text: &str, font_bytes: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    let style = sprite_style();
     let font = Font::from_bytes(font_bytes, FontSettings::default())
         .map_err(|error| anyhow::anyhow!("{error}"))?;
     let fonts = &[font];
@@ -512,19 +536,51 @@ fn render_text_image_bmp(
     Ok(output.into_inner())
 }
 
-fn text_image_style(kind: TextImageKind) -> TextImageStyle {
-    match kind {
-        TextImageKind::Title => TextImageStyle {
-            font_size: 36.0,
-            padding_x: 16,
-            padding_y: 10,
-        },
-        TextImageKind::Date => TextImageStyle {
-            font_size: 24.0,
-            padding_x: 10,
-            padding_y: 8,
-        },
+fn sprite_style() -> SpriteStyle {
+    SpriteStyle {
+        font_size: 32.0,
+        padding_x: 12,
+        padding_y: 8,
     }
+}
+
+fn set_sprite_cache_headers(headers: &mut HeaderMap, etag: &str) {
+    headers.insert(
+        header::CACHE_CONTROL,
+        "no-cache".parse().expect("cache header"),
+    );
+    headers.insert(header::ETAG, etag.parse().expect("etag header"));
+}
+
+fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {
+    headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .any(|candidate| candidate == etag || candidate.strip_prefix("W/") == Some(etag))
+        })
+}
+
+fn sprite_etag(kind: SpriteKind, text: &str, metadata: &std::fs::Metadata) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(SPRITE_STYLE_VERSION.as_bytes());
+    hasher.update(kind.as_str().as_bytes());
+    hasher.update(text.as_bytes());
+    hasher.update(metadata.len().to_le_bytes());
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|time| system_time_nanos_since_epoch(time).ok())
+        .unwrap_or_default();
+    hasher.update(modified.to_le_bytes());
+    format!("\"{}\"", hex::encode(hasher.finalize()))
+}
+
+fn system_time_nanos_since_epoch(time: SystemTime) -> Result<u128, std::time::SystemTimeError> {
+    Ok(time.duration_since(UNIX_EPOCH)?.as_nanos())
 }
 
 fn fit_to_display(image: DynamicImage) -> DynamicImage {
@@ -674,25 +730,27 @@ fn validate_sha256(value: &str) -> Result<(), AppError> {
     }
 }
 
-fn validate_text_image_payload(payload: &TextImagePayload) -> Result<TextImageKind, AppError> {
+fn validate_sprite_payload(payload: &SpritePayload) -> Result<SpriteKind, AppError> {
     let kind = match payload.kind.as_str() {
-        "title" => TextImageKind::Title,
-        "date" => TextImageKind::Date,
+        "caption" => SpriteKind::Caption,
+        "date" => SpriteKind::Date,
+        "status" => SpriteKind::Status,
+        "notice" => SpriteKind::Notice,
         value => {
             return Err(AppError::BadRequest(format!(
-                "Invalid text image type: {value}"
+                "Invalid sprite type: {value}"
             )))
         }
     };
     let text = payload.text.trim();
     if text.is_empty() {
         return Err(AppError::BadRequest(
-            "text image text cannot be empty".to_string(),
+            "sprite text cannot be empty".to_string(),
         ));
     }
     if text.chars().count() > 64 {
         return Err(AppError::BadRequest(
-            "text image text cannot exceed 64 characters".to_string(),
+            "sprite text cannot exceed 64 characters".to_string(),
         ));
     }
     Ok(kind)

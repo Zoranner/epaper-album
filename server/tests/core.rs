@@ -622,16 +622,13 @@ async fn download_returns_ready_bmp_and_404_does_not_change_status() {
 }
 
 #[tokio::test]
-async fn text_image_requires_configured_font_and_valid_kind() {
+async fn sprite_requires_configured_font_and_valid_kind() {
     let app = test_app().await;
 
-    let body = json!({ "type": "title", "text": "测试标题" });
     let (status, value) = request_json(
         app.app.clone(),
-        admin_request(&app, "/api/text-images")
-            .method("POST")
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(body.to_string()))
+        admin_request(&app, "/api/sprite?type=caption&text=caption")
+            .body(Body::empty())
             .expect("request"),
     )
     .await;
@@ -640,13 +637,10 @@ async fn text_image_requires_configured_font_and_valid_kind() {
     assert_eq!(value["data"], Value::Null);
 
     let app = test_app_with_text_font(Some(PathBuf::from("missing-font.ttf"))).await;
-    let body = json!({ "type": "badge", "text": "测试标题" });
     let (status, value) = request_json(
         app.app.clone(),
-        admin_request(&app, "/api/text-images")
-            .method("POST")
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(body.to_string()))
+        admin_request(&app, "/api/sprite?type=badge&text=caption")
+            .body(Body::empty())
             .expect("request"),
     )
     .await;
@@ -655,9 +649,9 @@ async fn text_image_requires_configured_font_and_valid_kind() {
 }
 
 #[tokio::test]
-async fn text_image_returns_bmp_when_font_is_configured() {
+async fn sprite_returns_bmp_and_supports_http_cache_when_font_is_configured() {
     let Some(font_path) = test_font_path() else {
-        eprintln!("skip text image success test: no known system font");
+        eprintln!("skip sprite success test: no known system font");
         return;
     };
     let app = test_app_with_text_font(Some(font_path)).await;
@@ -666,12 +660,8 @@ async fn text_image_returns_bmp_when_font_is_configured() {
         .app
         .clone()
         .oneshot(
-            user_request("/api/text-images")
-                .method("POST")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({ "type": "date", "text": "2026-06-07" }).to_string(),
-                ))
+            user_request("/api/sprite?type=date&text=2026-06-07")
+                .body(Body::empty())
                 .expect("request"),
         )
         .await
@@ -682,6 +672,17 @@ async fn text_image_returns_bmp_when_font_is_configured() {
         response.headers().get(header::CONTENT_TYPE),
         Some(&"image/bmp".parse().expect("content type"))
     );
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL),
+        Some(&"no-cache".parse().expect("cache control"))
+    );
+    let etag = response
+        .headers()
+        .get(header::ETAG)
+        .expect("etag")
+        .to_str()
+        .expect("etag str")
+        .to_string();
     let bytes = response
         .into_body()
         .collect()
@@ -696,4 +697,48 @@ async fn text_image_returns_bmp_when_font_is_configured() {
     assert!(image
         .pixels()
         .all(|pixel| { matches!(pixel.0, [0, 0, 0, 255] | [255, 255, 255, 255]) }));
+
+    let response = app
+        .app
+        .clone()
+        .oneshot(
+            user_request("/api/sprite?type=date&text=2026-06-07")
+                .header(header::IF_NONE_MATCH, etag)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL),
+        Some(&"no-cache".parse().expect("cache control"))
+    );
+}
+
+#[tokio::test]
+async fn sprite_accepts_status_and_notice_types() {
+    let Some(font_path) = test_font_path() else {
+        eprintln!("skip sprite type test: no known system font");
+        return;
+    };
+    let app = test_app_with_text_font(Some(font_path)).await;
+
+    for kind in ["status", "notice"] {
+        let response = app
+            .app
+            .clone()
+            .oneshot(
+                user_request(&format!("/api/sprite?type={kind}&text=OFFLINE"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&"image/bmp".parse().expect("content type"))
+        );
+    }
 }

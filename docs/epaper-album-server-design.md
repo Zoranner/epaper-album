@@ -17,13 +17,13 @@
 | `SECRET_KEY` | `local-secret-key` | 设备和用户权限请求接口时使用的密钥 |
 | `ADMIN_USERNAME` | `admin` | 管理员账号 |
 | `ADMIN_PASSWORD` | `admin` | 管理员密码 |
-| `TEXT_FONT_PATH` | 无 | 文字图片生成使用的 TTF、OTF 或 TTC 字体文件路径 |
+| `TEXT_FONT_PATH` | 无 | sprite 生成使用的 TTF、OTF 或 TTC 字体文件路径 |
 
 `SECRET_KEY` 用于设备同步计划和下载显示图片。管理员账号密码用于管理台登录和管理接口权限。服务端启动时创建 `data/`、`data/origin/` 和 `data/display/` 目录，初始化 SQLite 表结构，并挂载 API 路由和管理台静态文件。
 
 `server/.env.example` 提供本地和容器部署的环境变量示例。实际部署时复制为 `server/.env` 并调整密钥和管理员密码；`server/.env` 不纳入版本管理。
 
-文字图片生成接口从 `TEXT_FONT_PATH` 读取字体文件，并用字体 rasterize 方式生成小尺寸黑白 BMP。该配置指向单个字体文件，不额外管理字体目录。容器部署时需要把字体文件挂载到容器内，再把 `TEXT_FONT_PATH` 配置为容器内路径。未配置字体文件时，文字图片生成接口返回统一 JSON 错误，照片计划、图片上传、图片处理和设备同步等功能继续按原配置运行。
+sprite 生成接口从 `TEXT_FONT_PATH` 读取字体文件，并用字体 rasterize 方式生成小尺寸黑白 BMP。该配置指向单个字体文件，不额外管理字体目录。容器部署时需要把字体文件挂载到容器内，再把 `TEXT_FONT_PATH` 配置为容器内路径。未配置字体文件时，sprite 生成接口返回统一 JSON 错误，照片计划、图片上传、图片处理和设备同步等功能继续按原配置运行。
 
 ## 鉴权规则
 
@@ -402,13 +402,13 @@ Content-Type: multipart/form-data
 - 后台任务从原始图片生成 800 x 480 BMP。
 - 显示 BMP 保存到 `data/display/{sha256}`。
 
-### 生成文字图片
+### 生成 Sprite
 
 ```http
-POST /api/text-images
+GET /api/sprite?type=caption&text=晚风和海
 ```
 
-用途：根据短文本生成标题、日期等 BMP 小图块，供调用方预览、保存或合成显示资源时使用。该接口支持管理员权限和 `secret-key` 权限。
+用途：根据短文本和类型即时生成设备叠加文字使用的 BMP 小图块，供调用方预览、保存或合成显示资源时使用。该接口支持管理员权限和 `secret-key` 权限。
 
 用户权限请求头：
 
@@ -420,28 +420,47 @@ secret-key: local-secret-key
 
 ```http
 Authorization: Bearer <admin-token>
-Content-Type: application/json
 ```
 
-请求体：
-
-```json
-{
-  "type": "title",
-  "text": "晚风和海"
-}
-```
+查询参数：
 
 字段说明：
 
-| 字段 | 类型 | 说明 |
+| 参数 | 类型 | 说明 |
 | --- | --- | --- |
-| `type` | string | 文字图片类型，取值为 `title` 或 `date` |
-| `text` | string | 需要生成的小图块文字 |
+| `type` | string | sprite 类型，取值为 `caption`、`date`、`status` 或 `notice` |
+| `text` | string | 需要生成的小图块文字，URL 编码后传入 |
 
-成功响应返回 BMP 二进制内容，`Content-Type` 固定为 `image/bmp`。失败响应使用统一 JSON 结构。
+服务端按 GET 语义处理该接口，请求不会写入数据库、不会创建图片记录、不会写入缓存文件。成功响应返回 BMP 二进制内容，`Content-Type` 固定为 `image/bmp`。失败响应使用统一 JSON 结构。
 
-生成流程读取 `TEXT_FONT_PATH` 指向的字体文件，使用 fontdue 这类轻量 Rust 字体 rasterizer 将文字栅格化，再按阈值压成黑白像素并输出 BMP。当前方案面向标题和日期这类短文本，负责生成字体位图和小 BMP。Skia 适合复杂排版、矢量绘制和更完整图形管线，后续出现这类需求时再评估引入成本。
+参数规则：
+
+- `type` 仅支持 `caption`、`date`、`status` 和 `notice`。
+- `text` 去除首尾空白后不能为空。
+- `text` 最多 64 个 Unicode 字符。
+- 未知 `type`、空文本和超长文本返回 `400 Bad Request`。
+
+输出规格：
+
+| 配置项 | 值 |
+| --- | --- |
+| 字号 | 32px |
+| 内边距 | x=12, y=8 |
+| 尺寸 | 按文字内容自适应宽高 |
+| 格式 | 24-bit BMP |
+
+`type` 对齐设备端文字用途：`caption` 对应左下角标题，`date` 对应右下角日期，`status` 对应右上角状态提示，`notice` 对应后续普通提示文字。当前四种类型使用同一套字体、字号、内边距和颜色规则，`type` 只用于调用方区分用途和后续扩展。生成结果为白底黑字。字体栅格化后按阈值压成纯黑白像素，不输出灰度抗锯齿像素。
+
+缓存规则：
+
+- 服务端不做数据库缓存。
+- 服务端不做落盘文件缓存。
+- 生成结果不写入 `images` 表。
+- 响应可以带 `ETag` 和 `Cache-Control: no-cache`。
+- `ETag` 使用 `type`、`text`、字体文件元信息和样式版本计算。
+- 客户端带 `If-None-Match` 且命中时，服务端返回 `304 Not Modified`。
+
+生成流程读取 `TEXT_FONT_PATH` 指向的字体文件，使用 fontdue 这类轻量 Rust 字体 rasterizer 将文字栅格化，再按阈值压成黑白像素并输出 BMP。当前方案面向标题、日期和提示这类短文本，负责生成文字 sprite 小 BMP。Skia 适合复杂排版、矢量绘制和更完整图形管线，后续出现这类需求时再评估引入成本。
 
 ### 更新图片备注
 
