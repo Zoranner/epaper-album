@@ -7,6 +7,7 @@ use crate::model::{
     CachedResource, DisplayItem, DisplayState, LocalDate, PlanSnapshot, ResourceIndex,
 };
 use crate::power::BatteryStatus;
+use crate::render::RenderNotice;
 use crate::state::{PersistentDeviceState, RefreshReason};
 use std::fmt;
 
@@ -51,6 +52,7 @@ pub struct DisplayRefreshRequest {
     pub item: DisplayItem,
     pub display_state: DisplayState,
     pub reason: RefreshReason,
+    pub notice: Option<RenderNotice>,
     pub now_epoch_seconds: u64,
 }
 
@@ -198,6 +200,7 @@ where
             item: item.clone(),
             display_state: next_display_state.clone(),
             reason: *reason,
+            notice: refresh_notice(battery.low_battery, sync_failed),
             now_epoch_seconds,
         };
 
@@ -248,6 +251,18 @@ fn update_cache_state(state: &mut PersistentDeviceState, resource_index: &Resour
         .iter()
         .map(|resource| resource.byte_size)
         .sum();
+}
+
+fn refresh_notice(low_battery: bool, sync_failed: bool) -> Option<RenderNotice> {
+    if low_battery {
+        return Some(RenderNotice::LowBattery);
+    }
+
+    if sync_failed {
+        return Some(RenderNotice::SyncFailed);
+    }
+
+    None
 }
 
 fn cycle_outcome(

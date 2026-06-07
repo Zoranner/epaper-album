@@ -45,6 +45,27 @@ pub mod espidf {
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum WifiConnectError {
+        InitError,
+        ConfigError,
+        StartError,
+        ScanError,
+        TargetNotFound,
+        ConnectError,
+        NetifError,
+    }
+
+    pub struct ConnectedWifi {
+        wifi: BlockingWifi<EspWifi<'static>>,
+    }
+
+    impl ConnectedWifi {
+        pub fn ip_info(&self) -> Result<esp_idf_svc::ipv4::IpInfo, esp_idf_svc::sys::EspError> {
+            self.wifi.wifi().sta_netif().get_ip_info()
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum HttpProbe {
         Skipped,
         Fetched,
@@ -86,44 +107,56 @@ pub mod espidf {
             return network_probe(WifiProbe::Skipped, HttpProbe::Skipped);
         }
 
-        let sys_loop = match EspSystemEventLoop::take() {
-            Ok(sys_loop) => sys_loop,
-            Err(_) => return network_probe(WifiProbe::InitError, HttpProbe::Skipped),
-        };
-        let nvs = match EspDefaultNvsPartition::take() {
-            Ok(nvs) => nvs,
-            Err(_) => return network_probe(WifiProbe::InitError, HttpProbe::Skipped),
-        };
-        let esp_wifi = match EspWifi::new(modem, sys_loop.clone(), Some(nvs)) {
-            Ok(esp_wifi) => esp_wifi,
-            Err(_) => return network_probe(WifiProbe::InitError, HttpProbe::Skipped),
-        };
-        let mut wifi = match BlockingWifi::wrap(esp_wifi, sys_loop) {
-            Ok(wifi) => wifi,
-            Err(_) => return network_probe(WifiProbe::InitError, HttpProbe::Skipped),
+        let connected = match connect_wifi(modem, config) {
+            Ok(connected) => connected,
+            Err(error) => return network_probe(wifi_probe_from_error(error), HttpProbe::Skipped),
         };
 
+        let wifi_probe = match connected.ip_info() {
+            Ok(ip_info) => {
+                log::info!(target: "epaper_album", "wifi ip: {:?}", ip_info);
+                WifiProbe::Connected
+            }
+            Err(_) => return network_probe(WifiProbe::NetifError, HttpProbe::Skipped),
+        };
+        let http_probe = probe_test_http();
+
+        network_probe(wifi_probe, http_probe)
+    }
+
+    pub fn connect_wifi(
+        modem: Modem<'static>,
+        config: &Config,
+    ) -> Result<ConnectedWifi, WifiConnectError> {
+        let wifi_ssid = config.wifi_ssid.trim();
+        let wifi_password = config.wifi_password.trim();
+        if wifi_ssid.is_empty() || wifi_password.is_empty() {
+            return Err(WifiConnectError::ConfigError);
+        }
+
+        let sys_loop = EspSystemEventLoop::take().map_err(|_| WifiConnectError::InitError)?;
+        let nvs = EspDefaultNvsPartition::take().map_err(|_| WifiConnectError::InitError)?;
+        let esp_wifi = EspWifi::new(modem, sys_loop.clone(), Some(nvs))
+            .map_err(|_| WifiConnectError::InitError)?;
+        let mut wifi =
+            BlockingWifi::wrap(esp_wifi, sys_loop).map_err(|_| WifiConnectError::InitError)?;
+
         let configuration = Configuration::Client(ClientConfiguration {
-            ssid: match wifi_ssid.try_into() {
-                Ok(ssid) => ssid,
-                Err(_) => return network_probe(WifiProbe::ConfigError, HttpProbe::Skipped),
-            },
+            ssid: wifi_ssid
+                .try_into()
+                .map_err(|_| WifiConnectError::ConfigError)?,
             bssid: None,
             auth_method: AuthMethod::WPA2Personal,
-            password: match wifi_password.try_into() {
-                Ok(password) => password,
-                Err(_) => return network_probe(WifiProbe::ConfigError, HttpProbe::Skipped),
-            },
+            password: wifi_password
+                .try_into()
+                .map_err(|_| WifiConnectError::ConfigError)?,
             channel: None,
             ..Default::default()
         });
 
-        if wifi.set_configuration(&configuration).is_err() {
-            return network_probe(WifiProbe::ConfigError, HttpProbe::Skipped);
-        }
-        if wifi.start().is_err() {
-            return network_probe(WifiProbe::StartError, HttpProbe::Skipped);
-        }
+        wifi.set_configuration(&configuration)
+            .map_err(|_| WifiConnectError::ConfigError)?;
+        wifi.start().map_err(|_| WifiConnectError::StartError)?;
 
         match find_test_access_point(&mut wifi, wifi_ssid) {
             Ok(Some(ap)) => {
@@ -137,28 +170,28 @@ pub mod espidf {
             }
             Ok(None) => {
                 log::warn!(target: "epaper_album", "wifi target: not-found");
-                return network_probe(WifiProbe::TargetNotFound, HttpProbe::Skipped);
+                return Err(WifiConnectError::TargetNotFound);
             }
-            Err(_) => return network_probe(WifiProbe::ScanError, HttpProbe::Skipped),
+            Err(_) => return Err(WifiConnectError::ScanError),
         }
 
-        if wifi.connect().is_err() {
-            return network_probe(WifiProbe::ConnectError, HttpProbe::Skipped);
-        }
-        if wifi.wait_netif_up().is_err() {
-            return network_probe(WifiProbe::NetifError, HttpProbe::Skipped);
-        }
+        wifi.connect().map_err(|_| WifiConnectError::ConnectError)?;
+        wifi.wait_netif_up()
+            .map_err(|_| WifiConnectError::NetifError)?;
 
-        let wifi_probe = match wifi.wifi().sta_netif().get_ip_info() {
-            Ok(ip_info) => {
-                log::info!(target: "epaper_album", "wifi ip: {:?}", ip_info);
-                WifiProbe::Connected
-            }
-            Err(_) => return network_probe(WifiProbe::NetifError, HttpProbe::Skipped),
-        };
-        let http_probe = probe_test_http();
+        Ok(ConnectedWifi { wifi })
+    }
 
-        network_probe(wifi_probe, http_probe)
+    const fn wifi_probe_from_error(error: WifiConnectError) -> WifiProbe {
+        match error {
+            WifiConnectError::InitError => WifiProbe::InitError,
+            WifiConnectError::ConfigError => WifiProbe::ConfigError,
+            WifiConnectError::StartError => WifiProbe::StartError,
+            WifiConnectError::ScanError => WifiProbe::ScanError,
+            WifiConnectError::TargetNotFound => WifiProbe::TargetNotFound,
+            WifiConnectError::ConnectError => WifiProbe::ConnectError,
+            WifiConnectError::NetifError => WifiProbe::NetifError,
+        }
     }
 
     fn find_test_access_point(

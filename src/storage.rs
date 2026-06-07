@@ -58,6 +58,9 @@ pub trait ResourceStore {
 #[derive(Debug, Default)]
 pub struct SdCardResourceStore;
 
+#[derive(Debug, Default)]
+pub struct MountedSdCardResourceStore;
+
 impl ResourceStore for SdCardResourceStore {
     fn save_plan_snapshot(&mut self, snapshot: &PlanSnapshot) -> StorageJsonWrite {
         write_json_file_atomic(PLANS_CURRENT_PATH, snapshot)
@@ -69,6 +72,20 @@ impl ResourceStore for SdCardResourceStore {
 
     fn save_sprite_bytes(&mut self, key: &str, content: &[u8]) -> StorageWrite {
         write_binary_file_atomic(sprite_bmp_path(key), content)
+    }
+}
+
+impl ResourceStore for MountedSdCardResourceStore {
+    fn save_plan_snapshot(&mut self, snapshot: &PlanSnapshot) -> StorageJsonWrite {
+        write_json_file_atomic_mounted(PLANS_CURRENT_PATH, snapshot)
+    }
+
+    fn save_image_bytes(&mut self, sha256: &str, content: &[u8]) -> StorageWrite {
+        write_binary_file_atomic_mounted(image_bmp_path(sha256), content)
+    }
+
+    fn save_sprite_bytes(&mut self, key: &str, content: &[u8]) -> StorageWrite {
+        write_binary_file_atomic_mounted(sprite_bmp_path(key), content)
     }
 }
 
@@ -119,6 +136,67 @@ where
     };
 
     match write_text_file_atomic(path, &content) {
+        StorageWrite::Written => StorageJsonWrite::Written,
+        StorageWrite::MountError => StorageJsonWrite::MountError,
+        StorageWrite::WriteError => StorageJsonWrite::WriteError,
+    }
+}
+
+pub fn read_text_file_mounted(path: impl AsRef<Path>) -> StorageRead {
+    match std::fs::read_to_string(path) {
+        Ok(content) => StorageRead::Text(content),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => StorageRead::Missing,
+        Err(_) => StorageRead::ReadError,
+    }
+}
+
+pub fn read_binary_file_mounted(path: impl AsRef<Path>) -> StorageBinaryRead {
+    match std::fs::read(path) {
+        Ok(content) => StorageBinaryRead::Bytes(content),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => StorageBinaryRead::Missing,
+        Err(_) => StorageBinaryRead::ReadError,
+    }
+}
+
+pub fn read_json_file_mounted<T>(path: impl AsRef<Path>) -> StorageJsonRead<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    match read_text_file_mounted(path) {
+        StorageRead::Text(content) => match parse_json_str(&content) {
+            Ok(value) => StorageJsonRead::Value(value),
+            Err(_) => StorageJsonRead::ParseError,
+        },
+        StorageRead::Missing => StorageJsonRead::Missing,
+        StorageRead::MountError => StorageJsonRead::MountError,
+        StorageRead::ReadError => StorageJsonRead::ReadError,
+    }
+}
+
+pub fn write_text_file_atomic_mounted(path: impl AsRef<Path>, content: &str) -> StorageWrite {
+    match write_file_atomic(path.as_ref(), content.as_bytes()) {
+        Ok(()) => StorageWrite::Written,
+        Err(_) => StorageWrite::WriteError,
+    }
+}
+
+pub fn write_binary_file_atomic_mounted(path: impl AsRef<Path>, content: &[u8]) -> StorageWrite {
+    match write_file_atomic(path.as_ref(), content) {
+        Ok(()) => StorageWrite::Written,
+        Err(_) => StorageWrite::WriteError,
+    }
+}
+
+pub fn write_json_file_atomic_mounted<T>(path: impl AsRef<Path>, value: &T) -> StorageJsonWrite
+where
+    T: serde::Serialize,
+{
+    let content = match to_json_string(value) {
+        Ok(content) => content,
+        Err(_) => return StorageJsonWrite::SerializeError,
+    };
+
+    match write_text_file_atomic_mounted(path, &content) {
         StorageWrite::Written => StorageJsonWrite::Written,
         StorageWrite::MountError => StorageJsonWrite::MountError,
         StorageWrite::WriteError => StorageJsonWrite::WriteError,
@@ -436,5 +514,24 @@ mod tests {
         let read_result: StorageJsonRead<crate::model::ResourceIndex> = read_json_file(&file_path);
 
         assert_eq!(read_result, StorageJsonRead::ParseError);
+    }
+
+    #[test]
+    fn mounted_helpers_read_and_write_without_mounting_again() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("mounted").join("state.json");
+        let state = crate::model::ResourceIndex {
+            resources: vec![crate::model::CachedResource {
+                sha256: "abc".to_string(),
+                byte_size: 128,
+                last_used_at_unix_secs: 9,
+            }],
+        };
+
+        let write_result = write_json_file_atomic_mounted(&file_path, &state);
+        let read_result = read_json_file_mounted(&file_path);
+
+        assert_eq!(write_result, StorageJsonWrite::Written);
+        assert_eq!(read_result, StorageJsonRead::Value(state));
     }
 }
