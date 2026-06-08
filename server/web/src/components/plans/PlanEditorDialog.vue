@@ -10,16 +10,10 @@
           @update:model-value="draft.caption = $event"
         />
         <BaseDateInput
-          label="开始日期"
+          label="日期"
           required
-          :model-value="draft.start"
-          @update:model-value="draft.start = $event"
-        />
-        <BaseDateInput
-          label="结束日期"
-          required
-          :model-value="draft.end"
-          @update:model-value="draft.end = $event"
+          :model-value="draft.date"
+          @update:model-value="draft.date = $event"
         />
       </div>
 
@@ -31,28 +25,30 @@
       />
 
       <p v-if="error" class="form-error">{{ error }}</p>
-      <div class="dialog-actions">
-        <span>{{ selectedImage ? '已选 1 张' : '未选图片' }}</span>
+      <BaseDialogActions>
+        <template #meta>{{ selectedImage ? '已选 1 张' : '未选图片' }}</template>
         <BaseButton type="button" variant="secondary" @click="$emit('close')">取消</BaseButton>
         <BaseButton :loading="saving" type="submit" variant="primary">保存</BaseButton>
-      </div>
+      </BaseDialogActions>
     </form>
   </BaseDialog>
 </template>
 
 <script setup lang="ts">
 import { reactive, ref, watch } from 'vue';
-import { createPlan, updatePlan, type AdminImage, type AdminPlan, type PlanPayload } from '../../api';
+import { createPlan, updatePlan, type AdminImage, type PlanPayload } from '../../api';
 import BaseButton from '../base/BaseButton.vue';
 import BaseDialog from '../base/BaseDialog.vue';
+import BaseDialogActions from '../base/BaseDialogActions.vue';
 import BaseDateInput from '../base/BaseDateInput.vue';
 import BaseInput from '../base/BaseInput.vue';
 import PlanImagePicker from './PlanImagePicker.vue';
+import type { PlanView } from './PlansView.vue';
 import { useAuthStore } from '../../composables/useAuthStore';
 
 const props = defineProps<{
   open: boolean;
-  plan: AdminPlan | null;
+  plan: PlanView | null;
   images: AdminImage[];
   previewUrls: Record<string, string>;
 }>();
@@ -66,10 +62,9 @@ const auth = useAuthStore();
 const saving = ref(false);
 const error = ref('');
 const draft = reactive<PlanPayload>({
-  start: '',
-  end: '',
+  date: '',
   caption: '',
-  images: [],
+  image_sha256: '',
 });
 
 async function submit() {
@@ -80,8 +75,11 @@ async function submit() {
   saving.value = true;
   error.value = '';
   try {
+    if (!draft.image_sha256) {
+      throw new Error('请选择一张图片');
+    }
     if (props.plan) {
-      await updatePlan(auth.token.value, props.plan.id, draft);
+      await updatePlan(auth.token.value, props.plan.date, draft);
     } else {
       await createPlan(auth.token.value, draft);
     }
@@ -97,15 +95,14 @@ const selectedImage = ref('');
 
 function selectImage(sha256: string) {
   selectedImage.value = selectedImage.value === sha256 ? '' : sha256;
-  draft.images = selectedImage.value ? [selectedImage.value] : [];
+  draft.image_sha256 = selectedImage.value;
 }
 
-function loadDraft(plan: AdminPlan | null) {
-  draft.start = plan?.start ?? '';
-  draft.end = plan?.end ?? '';
+function loadDraft(plan: PlanView | null) {
+  draft.date = plan?.date ?? '';
   draft.caption = plan?.caption ?? '';
-  selectedImage.value = plan?.images[0]?.sha256 ?? '';
-  draft.images = selectedImage.value ? [selectedImage.value] : [];
+  selectedImage.value = plan?.image_sha256 ?? '';
+  draft.image_sha256 = selectedImage.value;
   error.value = '';
 }
 

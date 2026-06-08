@@ -267,13 +267,9 @@ mod tests {
             "message": "ok",
             "data": [
                 {
-                    "id": 1,
-                    "start": "2026-06-08",
-                    "end": "2026-06-09",
+                    "date": "2026-06-08",
                     "caption": "晚风",
-                    "images": [
-                        "1111111111111111111111111111111111111111111111111111111111111111"
-                    ]
+                    "image_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
                 }
             ]
         }"#;
@@ -282,10 +278,12 @@ mod tests {
 
         assert_eq!(response.content_hash.len(), 64);
         assert_eq!(response.plans.len(), 1);
-        assert_eq!(response.plans[0].id, 1);
         assert_eq!(response.plans[0].caption, "晚风");
-        assert_eq!(response.plans[0].start.to_string(), "2026-06-08");
-        assert_eq!(response.plans[0].images.len(), 1);
+        assert_eq!(response.plans[0].date.to_string(), "2026-06-08");
+        assert_eq!(
+            response.plans[0].image_sha256,
+            "1111111111111111111111111111111111111111111111111111111111111111"
+        );
     }
 
     #[test]

@@ -7,18 +7,15 @@ export interface AdminImage {
 }
 
 export interface AdminPlan {
-  id: number;
-  start: string;
-  end: string;
+  date: string;
   caption: string;
-  images: AdminImage[];
+  image_sha256: string;
 }
 
 export interface PlanPayload {
-  start: string;
-  end: string;
+  date: string;
   caption: string;
-  images: string[];
+  image_sha256: string;
 }
 
 export interface LoginResponse {

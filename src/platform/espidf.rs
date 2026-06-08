@@ -135,7 +135,6 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
                     trigger,
                     now_epoch_seconds,
                     date,
-                    rotation_slot: rotation_slot(now_epoch_seconds),
                     battery,
                     daily_sync_due: due,
                 },
@@ -311,11 +310,6 @@ fn today() -> LocalDate {
     let now = Local::now();
     LocalDate::new(now.year() as u16, now.month() as u8, now.day() as u8)
         .unwrap_or_else(|| LocalDate::parse("2026-01-01").unwrap())
-}
-
-#[cfg(target_os = "espidf")]
-fn rotation_slot(now_epoch_seconds: u64) -> u64 {
-    now_epoch_seconds / DAILY_SYNC_INTERVAL_SECONDS
 }
 
 #[cfg(target_os = "espidf")]

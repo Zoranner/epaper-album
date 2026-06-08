@@ -1,7 +1,7 @@
 pub mod cycle;
 
 use crate::power::BatteryStatus;
-use crate::schedule::{display_needs_refresh, select_plan_for_date};
+use crate::schedule::{display_needs_refresh, select_display_item, select_plan_for_date};
 use crate::state::{PersistentDeviceState, WakeReason};
 use crate::{
     model::{DisplayItem, DisplayState, LocalDate, PlanSnapshot, ResourceIndex},
@@ -12,7 +12,6 @@ use crate::{
 pub enum RunTrigger {
     Startup,
     Wake(WakeReason),
-    Manual,
 }
 
 impl RunTrigger {
@@ -20,7 +19,6 @@ impl RunTrigger {
         match self {
             Self::Startup => WakeReason::Startup,
             Self::Wake(reason) => reason,
-            Self::Manual => WakeReason::ManualButton,
         }
     }
 }
@@ -48,7 +46,6 @@ pub struct RunReport {
     pub trigger: RunTrigger,
     pub outcome: RunOutcome,
     pub wake_reason: WakeReason,
-    pub force_sync: bool,
     pub daily_sync_consumed: bool,
     pub display_refresh_due: bool,
     pub battery: BatteryStatus,
@@ -72,7 +69,6 @@ pub enum DisplayDecision {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NoUsablePhotoReason {
     NoPlanForDate,
-    PlanHasNoImages,
     ResourceNotCached,
 }
 
@@ -80,31 +76,22 @@ pub fn generate_display_decision(
     snapshot: Option<&PlanSnapshot>,
     resource_index: &ResourceIndex,
     date: LocalDate,
-    rotation_slot: u64,
     previous_state: Option<&PersistentDeviceState>,
 ) -> DisplayDecision {
     let Some(snapshot) = snapshot else {
         return DisplayDecision::MissingConfig;
     };
 
-    generate_display_decision_from_snapshot(
-        snapshot,
-        resource_index,
-        date,
-        rotation_slot,
-        previous_state,
-    )
+    generate_display_decision_from_snapshot(snapshot, resource_index, date, previous_state)
 }
 
 pub fn generate_display_decision_from_snapshot(
     snapshot: &PlanSnapshot,
     resource_index: &ResourceIndex,
     date: LocalDate,
-    rotation_slot: u64,
     previous_state: Option<&PersistentDeviceState>,
 ) -> DisplayDecision {
-    let Some(item) = select_usable_display_item(snapshot, resource_index, date, rotation_slot)
-    else {
+    let Some(item) = select_usable_display_item(snapshot, resource_index, date) else {
         let reason = no_usable_photo_reason(snapshot, resource_index, date);
         return DisplayDecision::NoUsablePhoto(reason);
     };
@@ -137,30 +124,10 @@ fn select_usable_display_item(
     snapshot: &PlanSnapshot,
     resource_index: &ResourceIndex,
     date: LocalDate,
-    rotation_slot: u64,
 ) -> Option<DisplayItem> {
-    let plan = select_plan_for_date(&snapshot.plans, date)?;
+    let item = select_display_item(snapshot, date)?;
 
-    if plan.images.is_empty() {
-        return None;
-    }
-
-    let image_count = plan.images.len();
-    let start_index = (rotation_slot % image_count as u64) as usize;
-
-    (0..image_count)
-        .map(|offset| (start_index + offset) % image_count)
-        .find_map(|image_index| {
-            let image_sha256 = plan.images.get(image_index)?;
-            resource_index.contains(image_sha256).then(|| DisplayItem {
-                plan_id: plan.id,
-                plan_content_hash: Some(snapshot.content_hash.clone()),
-                date,
-                image_sha256: image_sha256.clone(),
-                image_index,
-                caption: plan.caption.clone(),
-            })
-        })
+    resource_index.contains(&item.image_sha256).then_some(item)
 }
 
 fn no_usable_photo_reason(
@@ -172,15 +139,7 @@ fn no_usable_photo_reason(
         return NoUsablePhotoReason::NoPlanForDate;
     };
 
-    if plan.images.is_empty() {
-        return NoUsablePhotoReason::PlanHasNoImages;
-    }
-
-    if plan
-        .images
-        .iter()
-        .all(|image_sha256| !resource_index.contains(image_sha256))
-    {
+    if !resource_index.contains(&plan.image_sha256) {
         return NoUsablePhotoReason::ResourceNotCached;
     }
 
@@ -191,9 +150,8 @@ pub fn run_once(mut input: RunInput) -> RunReport {
     let wake_reason = input.trigger.wake_reason();
     input.persistent_state.last_wake_reason = Some(wake_reason);
 
-    let force_sync = matches!(input.trigger, RunTrigger::Manual);
-    let sync_requested = force_sync || input.daily_sync_due;
-    let daily_sync_consumed = input.daily_sync_due && !force_sync && !input.battery.low_battery;
+    let sync_requested = true;
+    let daily_sync_consumed = input.daily_sync_due && !input.battery.low_battery;
 
     let outcome = if sync_requested && input.battery.low_battery {
         RunOutcome::LowBatterySkipSync
@@ -209,7 +167,6 @@ pub fn run_once(mut input: RunInput) -> RunReport {
         trigger: input.trigger,
         outcome,
         wake_reason,
-        force_sync,
         daily_sync_consumed,
         display_refresh_due: input.display_refresh_due,
         battery: input.battery,
@@ -234,19 +191,18 @@ mod tests {
     }
 
     #[test]
-    fn manual_run_forces_sync_without_consuming_daily_sync() {
-        let mut input = input(RunTrigger::Manual);
+    fn startup_run_requests_sync_and_consumes_due_daily_sync() {
+        let mut input = input(RunTrigger::Startup);
         input.daily_sync_due = true;
 
         let report = run_once(input);
 
         assert_eq!(report.outcome, RunOutcome::SyncRequested);
-        assert!(report.force_sync);
-        assert!(!report.daily_sync_consumed);
-        assert_eq!(report.wake_reason, WakeReason::ManualButton);
+        assert!(report.daily_sync_consumed);
+        assert_eq!(report.wake_reason, WakeReason::Startup);
         assert_eq!(
             report.persistent_state.last_wake_reason,
-            Some(WakeReason::ManualButton)
+            Some(WakeReason::Startup)
         );
     }
 
@@ -258,8 +214,17 @@ mod tests {
         let report = run_once(input);
 
         assert_eq!(report.outcome, RunOutcome::SyncRequested);
-        assert!(!report.force_sync);
         assert!(report.daily_sync_consumed);
+    }
+
+    #[test]
+    fn timer_wake_requests_sync_even_when_daily_sync_is_not_due() {
+        let input = input(RunTrigger::Wake(WakeReason::Timer));
+
+        let report = run_once(input);
+
+        assert_eq!(report.outcome, RunOutcome::SyncRequested);
+        assert!(!report.daily_sync_consumed);
     }
 
     #[test]
@@ -278,15 +243,13 @@ mod tests {
         LocalDate::parse(value).unwrap()
     }
 
-    fn snapshot(images: &[&str]) -> PlanSnapshot {
+    fn snapshot(image_sha256: &str) -> PlanSnapshot {
         PlanSnapshot {
             content_hash: "hash-v1".to_string(),
             plans: vec![PlanItem {
-                id: 7,
-                start: date("2026-06-08"),
-                end: date("2026-06-08"),
+                date: date("2026-06-08"),
                 caption: "caption".to_string(),
-                images: images.iter().map(|image| image.to_string()).collect(),
+                image_sha256: image_sha256.to_string(),
             }],
         }
     }
@@ -307,20 +270,19 @@ mod tests {
     #[test]
     fn display_decision_reports_missing_config() {
         let decision =
-            generate_display_decision(None, &ResourceIndex::default(), date("2026-06-08"), 0, None);
+            generate_display_decision(None, &ResourceIndex::default(), date("2026-06-08"), None);
 
         assert_eq!(decision, DisplayDecision::MissingConfig);
     }
 
     #[test]
     fn display_decision_reports_no_usable_photo_when_resource_is_missing() {
-        let snapshot = snapshot(&["a"]);
+        let snapshot = snapshot("a");
 
         let decision = generate_display_decision_from_snapshot(
             &snapshot,
             &ResourceIndex::default(),
             date("2026-06-08"),
-            0,
             None,
         );
 
@@ -331,12 +293,12 @@ mod tests {
     }
 
     #[test]
-    fn display_decision_refreshes_first_usable_photo_from_rotation_slot() {
-        let snapshot = snapshot(&["a", "b", "c"]);
-        let index = index(&["c"]);
+    fn display_decision_refreshes_cached_plan_photo() {
+        let snapshot = snapshot("a");
+        let index = index(&["a"]);
 
         let decision =
-            generate_display_decision_from_snapshot(&snapshot, &index, date("2026-06-08"), 1, None);
+            generate_display_decision_from_snapshot(&snapshot, &index, date("2026-06-08"), None);
 
         match decision {
             DisplayDecision::RefreshRequired {
@@ -344,9 +306,8 @@ mod tests {
                 display_state,
                 reason,
             } => {
-                assert_eq!(item.image_sha256, "c");
-                assert_eq!(item.image_index, 2);
-                assert_eq!(display_state.image_sha256.as_deref(), Some("c"));
+                assert_eq!(item.image_sha256, "a");
+                assert_eq!(display_state.image_sha256.as_deref(), Some("a"));
                 assert_eq!(reason, RefreshReason::FirstBoot);
             }
             other => panic!("unexpected decision: {other:?}"),
@@ -354,15 +315,109 @@ mod tests {
     }
 
     #[test]
+    fn display_decision_uses_latest_past_plan_when_today_has_no_plan() {
+        let snapshot = PlanSnapshot {
+            content_hash: "hash-v1".to_string(),
+            plans: vec![
+                PlanItem {
+                    date: date("2026-06-04"),
+                    caption: "day-4".to_string(),
+                    image_sha256: "4".to_string(),
+                },
+                PlanItem {
+                    date: date("2026-06-07"),
+                    caption: "day-7".to_string(),
+                    image_sha256: "7".to_string(),
+                },
+                PlanItem {
+                    date: date("2026-06-13"),
+                    caption: "future".to_string(),
+                    image_sha256: "13".to_string(),
+                },
+            ],
+        };
+        let index = index(&["7"]);
+
+        let decision =
+            generate_display_decision_from_snapshot(&snapshot, &index, date("2026-06-10"), None);
+
+        match decision {
+            DisplayDecision::RefreshRequired { item, .. } => {
+                assert_eq!(item.date, date("2026-06-07"));
+                assert_eq!(item.caption, "day-7");
+            }
+            other => panic!("unexpected decision: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn display_decision_prefers_current_plan_over_past_plan() {
+        let snapshot = PlanSnapshot {
+            content_hash: "hash-v1".to_string(),
+            plans: vec![
+                PlanItem {
+                    date: date("2026-06-07"),
+                    caption: "day-7".to_string(),
+                    image_sha256: "7".to_string(),
+                },
+                PlanItem {
+                    date: date("2026-06-10"),
+                    caption: "day-10".to_string(),
+                    image_sha256: "10".to_string(),
+                },
+                PlanItem {
+                    date: date("2026-06-12"),
+                    caption: "future".to_string(),
+                    image_sha256: "12".to_string(),
+                },
+            ],
+        };
+        let index = index(&["7", "10"]);
+
+        let decision =
+            generate_display_decision_from_snapshot(&snapshot, &index, date("2026-06-10"), None);
+
+        match decision {
+            DisplayDecision::RefreshRequired { item, .. } => {
+                assert_eq!(item.date, date("2026-06-10"));
+                assert_eq!(item.caption, "day-10");
+            }
+            other => panic!("unexpected decision: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn display_decision_reports_no_plan_when_only_future_plans_exist() {
+        let snapshot = PlanSnapshot {
+            content_hash: "hash-v1".to_string(),
+            plans: vec![PlanItem {
+                date: date("2026-06-12"),
+                caption: "future".to_string(),
+                image_sha256: "12".to_string(),
+            }],
+        };
+
+        let decision = generate_display_decision_from_snapshot(
+            &snapshot,
+            &ResourceIndex::default(),
+            date("2026-06-10"),
+            None,
+        );
+
+        assert_eq!(
+            decision,
+            DisplayDecision::NoUsablePhoto(NoUsablePhotoReason::NoPlanForDate)
+        );
+    }
+
+    #[test]
     fn display_decision_sleeps_when_previous_state_matches() {
-        let snapshot = snapshot(&["a"]);
+        let snapshot = snapshot("a");
         let index = index(&["a"]);
         let previous_display = DisplayState {
-            plan_id: Some(7),
             plan_content_hash: Some("older-hash".to_string()),
             date: Some(date("2026-06-08")),
             image_sha256: Some("a".to_string()),
-            image_index: 0,
             caption: Some("caption".to_string()),
             refreshed_at_unix_secs: Some(100),
         };
@@ -373,7 +428,6 @@ mod tests {
             &snapshot,
             &index,
             date("2026-06-08"),
-            0,
             Some(&previous_state),
         );
 

@@ -159,30 +159,26 @@ mod tests {
             local_snapshot: None,
             resource_index: index,
             missing_resources: Vec::new(),
-            force: false,
             now_epoch_seconds: 1,
         }
     }
 
     #[test]
-    fn sync_downloads_plan_and_remote_missing_images() {
+    fn sync_downloads_plan_and_remote_missing_image() {
         let body = br#"{
             "code": 0,
             "message": "ok",
             "data": [
                 {
-                    "id": 9,
-                    "start": "2026-06-08",
-                    "end": "2026-06-09",
+                    "date": "2026-06-08",
                     "caption": "caption",
-                    "images": ["a", "b"]
+                    "image_sha256": "a"
                 }
             ]
         }"#;
         let client = MockHttpClient::default()
             .with_response(&plans_url("https://example.com", 3).unwrap(), body)
-            .with_response("https://example.com/images/a", b"image-a")
-            .with_response("https://example.com/images/b", b"image-b");
+            .with_response("https://example.com/images/a", b"image-a");
         let store = MockStore::default();
         let mut sync = CloudResourceSync::new(client, store);
 
@@ -191,17 +187,17 @@ mod tests {
             .unwrap();
         let (client, store) = sync.into_parts();
 
-        assert_eq!(result.snapshot.plans[0].images, vec!["a", "b"]);
+        assert_eq!(result.snapshot.plans[0].image_sha256, "a");
         assert_eq!(
             result
                 .resources
                 .iter()
                 .map(|resource| resource.sha256.as_str())
                 .collect::<Vec<_>>(),
-            vec!["a", "b"]
+            vec!["a"]
         );
-        assert_eq!(store.images, vec!["a", "b"]);
-        assert_eq!(client.requests.len(), 3);
+        assert_eq!(store.images, vec!["a"]);
+        assert_eq!(client.requests.len(), 2);
     }
 
     #[test]
@@ -211,11 +207,9 @@ mod tests {
             "message": "ok",
             "data": [
                 {
-                    "id": 9,
-                    "start": "2026-06-08",
-                    "end": "2026-06-09",
+                    "date": "2026-06-08",
                     "caption": "caption",
-                    "images": ["a"]
+                    "image_sha256": "a"
                 }
             ]
         }"#;

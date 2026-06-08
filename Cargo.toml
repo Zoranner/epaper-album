@@ -6,7 +6,7 @@ license = "MIT"
 publish = false
 
 [workspace]
-members = ["crates/schema"]
+members = ["crates/schema", "server"]
 
 [dependencies]
 anyhow = "1.0"

@@ -170,37 +170,25 @@ impl PlanSnapshot {
     pub fn referenced_resources(&self) -> BTreeSet<String> {
         self.plans
             .iter()
-            .flat_map(|plan| plan.images.iter().cloned())
+            .map(|plan| plan.image_sha256.clone())
             .collect()
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanItem {
-    pub id: i64,
-    pub start: LocalDate,
-    pub end: LocalDate,
+    pub date: LocalDate,
     #[serde(default)]
     pub caption: String,
-    #[serde(default)]
-    pub images: Vec<String>,
+    pub image_sha256: String,
 }
 
-impl PlanItem {
-    pub fn contains_date(&self, date: LocalDate) -> bool {
-        self.start <= date && date <= self.end
-    }
-
-    pub fn image_at_slot(&self, rotation_slot: u64) -> Option<(usize, &str)> {
-        if self.images.is_empty() {
-            return None;
-        }
-
-        let image_index = (rotation_slot % self.images.len() as u64) as usize;
-        self.images
-            .get(image_index)
-            .map(|sha256| (image_index, sha256.as_str()))
-    }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanPayload {
+    pub date: LocalDate,
+    pub caption: String,
+    pub image_sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -276,15 +264,11 @@ pub struct CachedResource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct DisplayState {
     #[serde(default)]
-    pub plan_id: Option<i64>,
-    #[serde(default)]
     pub plan_content_hash: Option<String>,
     #[serde(default)]
     pub date: Option<LocalDate>,
     #[serde(default)]
     pub image_sha256: Option<String>,
-    #[serde(default)]
-    pub image_index: usize,
     #[serde(default)]
     pub caption: Option<String>,
     #[serde(default)]
@@ -293,22 +277,18 @@ pub struct DisplayState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DisplayItem {
-    pub plan_id: i64,
     pub plan_content_hash: Option<String>,
     pub date: LocalDate,
     pub image_sha256: String,
-    pub image_index: usize,
     pub caption: String,
 }
 
 impl From<&DisplayItem> for DisplayState {
     fn from(item: &DisplayItem) -> Self {
         Self {
-            plan_id: Some(item.plan_id),
             plan_content_hash: item.plan_content_hash.clone(),
             date: Some(item.date),
             image_sha256: Some(item.image_sha256.clone()),
-            image_index: item.image_index,
             caption: Some(item.caption.clone()),
             refreshed_at_unix_secs: None,
         }
@@ -347,18 +327,15 @@ mod tests {
     }
 
     #[test]
-    fn plan_matches_inclusive_date_range() {
+    fn plan_references_single_image() {
         let plan = PlanItem {
-            id: 7,
-            start: LocalDate::parse("2026-06-06").unwrap(),
-            end: LocalDate::parse("2026-06-08").unwrap(),
+            date: LocalDate::parse("2026-06-06").unwrap(),
             caption: "caption".to_string(),
-            images: vec!["hash".to_string()],
+            image_sha256: "hash".to_string(),
         };
 
-        assert!(plan.contains_date(LocalDate::parse("2026-06-06").unwrap()));
-        assert!(plan.contains_date(LocalDate::parse("2026-06-08").unwrap()));
-        assert!(!plan.contains_date(LocalDate::parse("2026-06-09").unwrap()));
+        assert_eq!(plan.date.to_string(), "2026-06-06");
+        assert_eq!(plan.image_sha256, "hash");
     }
 
     #[test]
@@ -447,21 +424,17 @@ mod tests {
     #[test]
     fn converts_selected_display_item_to_display_state() {
         let item = DisplayItem {
-            plan_id: 3,
             plan_content_hash: Some("hash-v1".to_string()),
             date: LocalDate::parse("2026-06-08").unwrap(),
             image_sha256: "abc".to_string(),
-            image_index: 2,
             caption: "caption".to_string(),
         };
 
         let state = DisplayState::from(&item);
 
-        assert_eq!(state.plan_id, Some(3));
         assert_eq!(state.plan_content_hash.as_deref(), Some("hash-v1"));
         assert_eq!(state.date, Some(LocalDate::parse("2026-06-08").unwrap()));
         assert_eq!(state.image_sha256.as_deref(), Some("abc"));
-        assert_eq!(state.image_index, 2);
         assert_eq!(state.caption.as_deref(), Some("caption"));
     }
 }

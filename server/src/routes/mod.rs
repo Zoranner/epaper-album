@@ -7,13 +7,13 @@ use std::{
 
 use axum::{
     body::Bytes,
-    extract::{Multipart, Path, Query, State},
+    extract::{rejection::JsonRejection, Multipart, Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post, put},
     Json, Router,
 };
-use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Duration, Local, Utc};
 use fontdue::{
     layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle},
     Font, FontSettings,
@@ -35,6 +35,7 @@ use crate::{
         SpritePayload,
     },
 };
+use schema::LocalDate;
 
 const DISPLAY_WIDTH: u32 = 800;
 const DISPLAY_HEIGHT: u32 = 480;
@@ -127,7 +128,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/healthz", get(healthz))
         .route("/api/login", post(login))
         .route("/api/plans", get(list_plans).post(create_plan))
-        .route("/api/plans/:id", put(update_plan).delete(delete_plan))
+        .route("/api/plans/:date", put(update_plan).delete(delete_plan))
         .route("/api/images", get(list_images).post(upload_image))
         .route("/api/images/:sha256", put(update_image))
         .route("/api/sprite", get(create_sprite))
@@ -200,16 +201,16 @@ async fn list_plans(
     let days = parse_days(params.get("days"));
     let start = Local::now().date_naive();
     let end = start + Duration::days((days - 1) as i64);
-    let start = start.format("%Y-%m-%d").to_string();
-    let end = end.format("%Y-%m-%d").to_string();
+    let start = local_date_from_chrono(start)?;
+    let end = local_date_from_chrono(end)?;
 
     match permission {
         Permission::Admin => Ok(Json(ApiResponse::ok(
-            serde_json::to_value(state.app.store.list_admin_plans(&start, &end).await?)
+            serde_json::to_value(state.app.store.list_admin_plans(start, end).await?)
                 .map_err(|error| AppError::Internal(error.into()))?,
         ))),
         Permission::User => Ok(Json(ApiResponse::ok(
-            serde_json::to_value(state.app.store.list_user_plans(&start, &end).await?)
+            serde_json::to_value(state.app.store.list_user_plans(start, end).await?)
                 .map_err(|error| AppError::Internal(error.into()))?,
         ))),
     }
@@ -218,9 +219,10 @@ async fn list_plans(
 async fn create_plan(
     State(state): State<RuntimeState>,
     headers: HeaderMap,
-    Json(payload): Json<PlanPayload>,
+    payload: Result<Json<PlanPayload>, JsonRejection>,
 ) -> Result<impl IntoResponse, AppError> {
     require_admin(&headers, &state.app)?;
+    let Json(payload) = payload.map_err(map_json_rejection)?;
     validate_plan_payload(&payload)?;
     let plan = state
         .app
@@ -234,31 +236,34 @@ async fn create_plan(
 async fn update_plan(
     State(state): State<RuntimeState>,
     headers: HeaderMap,
-    Path(id): Path<i64>,
-    Json(payload): Json<PlanPayload>,
+    Path(date): Path<String>,
+    payload: Result<Json<PlanPayload>, JsonRejection>,
 ) -> Result<impl IntoResponse, AppError> {
     require_admin(&headers, &state.app)?;
+    let date = parse_plan_date(&date)?;
+    let Json(payload) = payload.map_err(map_json_rejection)?;
     validate_plan_payload(&payload)?;
     let plan = state
         .app
         .store
-        .update_plan(id, payload)
+        .update_plan(date, payload)
         .await
         .map_err(map_store_error)?
-        .ok_or_else(|| AppError::NotFound(format!("Plan {id} not found")))?;
+        .ok_or_else(|| AppError::NotFound(format!("Plan {date} not found")))?;
     Ok(Json(ApiResponse::ok(plan)))
 }
 
 async fn delete_plan(
     State(state): State<RuntimeState>,
     headers: HeaderMap,
-    Path(id): Path<i64>,
+    Path(date): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     require_admin(&headers, &state.app)?;
-    if state.app.store.delete_plan(id).await? {
+    let date = parse_plan_date(&date)?;
+    if state.app.store.delete_plan(date).await? {
         Ok(Json(ApiResponse::ok(null_data())))
     } else {
-        Err(AppError::NotFound(format!("Plan {id} not found")))
+        Err(AppError::NotFound(format!("Plan {date} not found")))
     }
 }
 
@@ -794,24 +799,31 @@ fn parse_days(value: Option<&String>) -> u32 {
 }
 
 fn validate_plan_payload(payload: &PlanPayload) -> Result<(), AppError> {
-    if payload.start.trim().is_empty() || payload.end.trim().is_empty() {
+    if payload.caption.trim().is_empty() {
         return Err(AppError::BadRequest(
-            "plan start and end cannot be empty".to_string(),
+            "plan caption cannot be empty".to_string(),
         ));
     }
-    let start = NaiveDate::parse_from_str(&payload.start, "%Y-%m-%d")
-        .map_err(|_| AppError::BadRequest("plan start must use YYYY-MM-DD format".to_string()))?;
-    let end = NaiveDate::parse_from_str(&payload.end, "%Y-%m-%d")
-        .map_err(|_| AppError::BadRequest("plan end must use YYYY-MM-DD format".to_string()))?;
-    if start > end {
-        return Err(AppError::BadRequest(
-            "plan start cannot be later than end".to_string(),
-        ));
-    }
-    for sha256 in &payload.images {
-        validate_sha256(sha256)?;
-    }
+    validate_sha256(&payload.image_sha256)?;
     Ok(())
+}
+
+fn parse_plan_date(value: &str) -> Result<LocalDate, AppError> {
+    if value.trim().is_empty() {
+        return Err(AppError::BadRequest(
+            "plan date cannot be empty".to_string(),
+        ));
+    }
+    LocalDate::parse(value)
+        .map_err(|_| AppError::BadRequest("plan date must use YYYY-MM-DD format".to_string()))
+}
+
+fn local_date_from_chrono(date: chrono::NaiveDate) -> Result<LocalDate, AppError> {
+    LocalDate::new(date.year() as u16, date.month() as u8, date.day() as u8).ok_or_else(|| {
+        AppError::Internal(anyhow::anyhow!(
+            "failed to convert chrono date to local date"
+        ))
+    })
 }
 
 fn validate_sha256(value: &str) -> Result<(), AppError> {
@@ -853,7 +865,15 @@ fn map_store_error(error: anyhow::Error) -> AppError {
     let message = error.to_string();
     if message.starts_with("Unknown image sha256:") {
         AppError::BadRequest(message)
+    } else if message.starts_with("Plan date already exists:")
+        || message.contains("UNIQUE constraint failed: plans.date")
+    {
+        AppError::BadRequest(message)
     } else {
         AppError::Internal(error)
     }
+}
+
+fn map_json_rejection(error: JsonRejection) -> AppError {
+    AppError::BadRequest(format!("Invalid JSON body: {error}"))
 }

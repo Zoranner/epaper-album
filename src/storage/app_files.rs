@@ -110,15 +110,13 @@ mod tests {
         LocalDate::parse(value).unwrap()
     }
 
-    fn snapshot(images: &[&str]) -> PlanSnapshot {
+    fn snapshot(image_sha256: &str) -> PlanSnapshot {
         PlanSnapshot {
             content_hash: "hash-v1".to_string(),
             plans: vec![PlanItem {
-                id: 7,
-                start: date("2026-06-08"),
-                end: date("2026-06-08"),
                 caption: "caption".to_string(),
-                images: images.iter().map(|image| image.to_string()).collect(),
+                date: date("2026-06-08"),
+                image_sha256: image_sha256.to_string(),
             }],
         }
     }
@@ -143,14 +141,12 @@ mod tests {
             temp_dir.path().join("plan.json"),
             temp_dir.path().join("state.json"),
         ));
-        let snapshot = snapshot(&["a"]);
+        let snapshot = snapshot("a");
         let resource_index = index(&["a"]);
         let display_state = DisplayState {
-            plan_id: Some(7),
             plan_content_hash: Some("hash-v1".to_string()),
             date: Some(date("2026-06-08")),
             image_sha256: Some("a".to_string()),
-            image_index: 0,
             caption: Some("caption".to_string()),
             refreshed_at_unix_secs: Some(100),
         };
@@ -176,14 +172,12 @@ mod tests {
 
     #[test]
     fn app_json_helpers_round_trip_domain_types() {
-        let snapshot = snapshot(&["a"]);
+        let snapshot = snapshot("a");
         let resource_index = index(&["a"]);
         let display_state = DisplayState {
-            plan_id: Some(7),
             plan_content_hash: Some("hash-v1".to_string()),
             date: Some(date("2026-06-08")),
             image_sha256: Some("a".to_string()),
-            image_index: 0,
             caption: Some("caption".to_string()),
             refreshed_at_unix_secs: Some(100),
         };

@@ -20,7 +20,6 @@ pub struct DeviceCycleInput {
     pub trigger: RunTrigger,
     pub now_epoch_seconds: u64,
     pub date: LocalDate,
-    pub rotation_slot: u64,
     pub battery: BatteryStatus,
     pub daily_sync_due: bool,
 }
@@ -31,7 +30,6 @@ pub struct SyncRequest {
     pub local_snapshot: Option<PlanSnapshot>,
     pub resource_index: ResourceIndex,
     pub missing_resources: Vec<String>,
-    pub force: bool,
     pub now_epoch_seconds: u64,
 }
 
@@ -73,7 +71,6 @@ pub struct DeviceCycleResult {
     pub sync_attempted: bool,
     pub sync_succeeded: bool,
     pub daily_sync_consumed: bool,
-    pub force_sync: bool,
     pub refresh_attempted: bool,
     pub refresh_succeeded: bool,
 }
@@ -118,7 +115,6 @@ where
         trigger,
         now_epoch_seconds,
         date,
-        rotation_slot,
         battery,
         daily_sync_due,
     } = input;
@@ -126,8 +122,7 @@ where
     let wake_reason = trigger.wake_reason();
     persistent_state.last_wake_reason = Some(wake_reason);
 
-    let force_sync = matches!(trigger, RunTrigger::Manual);
-    let sync_requested = force_sync || daily_sync_due;
+    let sync_requested = true;
     let mut sync_attempted = false;
     let mut sync_succeeded = false;
     let mut daily_sync_consumed = false;
@@ -148,7 +143,6 @@ where
                 local_snapshot: snapshot.clone(),
                 resource_index: resource_index.clone(),
                 missing_resources: missing,
-                force: force_sync,
                 now_epoch_seconds,
             };
 
@@ -162,7 +156,7 @@ where
                     persistent_state.last_successful_sync_epoch_seconds = Some(now_epoch_seconds);
                     persistent_state.last_sync_error = None;
                     sync_succeeded = true;
-                    daily_sync_consumed = daily_sync_due && !force_sync;
+                    daily_sync_consumed = daily_sync_due;
                 }
                 Err(error) => {
                     persistent_state.last_sync_error = Some(error.to_string());
@@ -180,7 +174,6 @@ where
         snapshot.as_ref(),
         &resource_index,
         date,
-        rotation_slot,
         Some(&persistent_state),
     );
 
@@ -240,7 +233,6 @@ where
         sync_attempted,
         sync_succeeded,
         daily_sync_consumed,
-        force_sync,
         refresh_attempted,
         refresh_succeeded,
     }
@@ -366,15 +358,13 @@ mod tests {
         }
     }
 
-    fn snapshot(hash: &str, images: &[&str]) -> PlanSnapshot {
+    fn snapshot(hash: &str, image_sha256: &str) -> PlanSnapshot {
         PlanSnapshot {
             content_hash: hash.to_string(),
             plans: vec![PlanItem {
-                id: 7,
-                start: date("2026-06-08"),
-                end: date("2026-06-08"),
+                date: date("2026-06-08"),
                 caption: "caption".to_string(),
-                images: images.iter().map(|image| image.to_string()).collect(),
+                image_sha256: image_sha256.to_string(),
             }],
         }
     }
@@ -402,7 +392,6 @@ mod tests {
             trigger: RunTrigger::Wake(WakeReason::Timer),
             now_epoch_seconds: 100,
             date: date("2026-06-08"),
-            rotation_slot: 0,
             battery: BatteryStatus::unknown(),
             daily_sync_due: false,
         }
@@ -410,8 +399,8 @@ mod tests {
 
     #[test]
     fn sync_downloads_missing_image_and_refreshes_display() {
-        let local_snapshot = snapshot("hash-local", &["a"]);
-        let remote_snapshot = snapshot("hash-remote", &["a"]);
+        let local_snapshot = snapshot("hash-local", "a");
+        let remote_snapshot = snapshot("hash-remote", "a");
         let mut input = input(Some(local_snapshot), ResourceIndex::default());
         input.daily_sync_due = true;
         let mut sync = FakeSync {
@@ -458,7 +447,7 @@ mod tests {
     #[test]
     fn low_battery_skips_sync_but_refreshes_from_cache() {
         let mut input = input(
-            Some(snapshot("hash-v1", &["a"])),
+            Some(snapshot("hash-v1", "a")),
             index(&[resource("a", 128, 1)]),
         );
         input.daily_sync_due = true;
@@ -477,16 +466,16 @@ mod tests {
     }
 
     #[test]
-    fn manual_force_sync_does_not_consume_daily_task() {
+    fn startup_sync_uses_same_cycle_as_timer_wake() {
         let mut input = input(
-            Some(snapshot("hash-v1", &["a"])),
+            Some(snapshot("hash-v1", "a")),
             index(&[resource("a", 128, 1)]),
         );
-        input.trigger = RunTrigger::Manual;
+        input.trigger = RunTrigger::Startup;
         input.daily_sync_due = true;
         let mut sync = FakeSync {
             result: Some(Ok(SyncResult {
-                snapshot: snapshot("hash-v2", &["a"]),
+                snapshot: snapshot("hash-v2", "a"),
                 resources: Vec::new(),
             })),
             requests: Vec::new(),
@@ -496,19 +485,17 @@ mod tests {
         let result = run_device_cycle(input, &mut sync, &mut display);
 
         assert_eq!(sync.requests.len(), 1);
-        assert!(sync.requests[0].force);
-        assert!(result.force_sync);
-        assert!(!result.daily_sync_consumed);
+        assert!(result.daily_sync_consumed);
         assert_eq!(
             result.persistent_state.last_wake_reason,
-            Some(WakeReason::ManualButton)
+            Some(WakeReason::Startup)
         );
     }
 
     #[test]
     fn sync_failure_uses_local_cache_for_display_decision() {
         let mut input = input(
-            Some(snapshot("hash-v1", &["a"])),
+            Some(snapshot("hash-v1", "a")),
             index(&[resource("a", 128, 1)]),
         );
         input.daily_sync_due = true;
@@ -532,13 +519,19 @@ mod tests {
 
     #[test]
     fn no_available_photo_returns_no_usable_photo_decision() {
-        let input = input(Some(snapshot("hash-v1", &["a"])), ResourceIndex::default());
-        let mut sync = FakeSync::default();
+        let input = input(Some(snapshot("hash-v1", "a")), ResourceIndex::default());
+        let mut sync = FakeSync {
+            result: Some(Ok(SyncResult {
+                snapshot: snapshot("hash-v1", "a"),
+                resources: Vec::new(),
+            })),
+            requests: Vec::new(),
+        };
         let mut display = FakeDisplay::default();
 
         let result = run_device_cycle(input, &mut sync, &mut display);
 
-        assert_eq!(sync.requests.len(), 0);
+        assert_eq!(sync.requests.len(), 1);
         assert_eq!(display.requests.len(), 0);
         assert_eq!(
             result.display_decision,

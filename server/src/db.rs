@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 
 use anyhow::{anyhow, Result};
+use schema::{LocalDate, PlanItem, PlanPayload};
 use sqlx::SqlitePool;
 
-use crate::models::{AdminPlan, ImageRecord, PlanPayload, UserPlan};
+use crate::models::ImageRecord;
 
 #[derive(Debug, Clone)]
 pub struct Store {
@@ -12,11 +13,9 @@ pub struct Store {
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct PlanRow {
-    id: i64,
-    start_date: String,
-    end_date: String,
+    date: String,
     caption: String,
-    images: String,
+    image_sha256: String,
 }
 
 impl Store {
@@ -28,101 +27,77 @@ impl Store {
         &self.pool
     }
 
-    pub async fn list_admin_plans(&self, start: &str, end: &str) -> Result<Vec<AdminPlan>> {
+    pub async fn list_admin_plans(
+        &self,
+        start: LocalDate,
+        end: LocalDate,
+    ) -> Result<Vec<PlanItem>> {
+        let rows = self.load_plan_rows(start, end).await?;
+        Ok(rows.into_iter().map(plan_from_row).collect())
+    }
+
+    pub async fn list_user_plans(&self, start: LocalDate, end: LocalDate) -> Result<Vec<PlanItem>> {
         let rows = self.load_plan_rows(start, end).await?;
         let mut plans = Vec::with_capacity(rows.len());
 
         for row in rows {
-            let sha256s = parse_images(&row.images)?;
-            let mut images = Vec::with_capacity(sha256s.len());
-            for sha256 in sha256s {
-                if let Some(image) = self.get_image(&sha256).await? {
-                    images.push(image);
-                }
+            let status: Option<String> =
+                sqlx::query_scalar("SELECT status FROM images WHERE sha256 = ?")
+                    .bind(&row.image_sha256)
+                    .fetch_optional(&self.pool)
+                    .await?;
+            if status.as_deref() == Some("ready") {
+                plans.push(plan_from_row(row));
             }
-            plans.push(AdminPlan {
-                id: row.id,
-                start: row.start_date,
-                end: row.end_date,
-                caption: row.caption,
-                images,
-            });
         }
 
         Ok(plans)
     }
 
-    pub async fn list_user_plans(&self, start: &str, end: &str) -> Result<Vec<UserPlan>> {
-        let rows = self.load_plan_rows(start, end).await?;
-        let mut plans = Vec::with_capacity(rows.len());
+    pub async fn create_plan(&self, payload: PlanPayload) -> Result<PlanItem> {
+        self.validate_image(&payload.image_sha256).await?;
+        let result =
+            sqlx::query("INSERT INTO plans (date, caption, image_sha256) VALUES (?, ?, ?)")
+                .bind(payload.date.to_string())
+                .bind(payload.caption.trim())
+                .bind(&payload.image_sha256)
+                .execute(&self.pool)
+                .await?;
 
-        for row in rows {
-            let sha256s = parse_images(&row.images)?;
-            let mut images = Vec::new();
-            for sha256 in sha256s {
-                let status: Option<String> =
-                    sqlx::query_scalar("SELECT status FROM images WHERE sha256 = ?")
-                        .bind(&sha256)
-                        .fetch_optional(&self.pool)
-                        .await?;
-                if status.as_deref() == Some("ready") {
-                    images.push(sha256);
-                }
-            }
-            plans.push(UserPlan {
-                id: row.id,
-                start: row.start_date,
-                end: row.end_date,
-                caption: row.caption,
-                images,
-            });
+        if result.rows_affected() == 0 {
+            return Err(anyhow!("Plan date already exists: {}", payload.date));
         }
 
-        Ok(plans)
-    }
-
-    pub async fn create_plan(&self, payload: PlanPayload) -> Result<AdminPlan> {
-        let images = self.validate_and_deduplicate_images(payload.images).await?;
-        let images_json = serde_json::to_string(&images)?;
-        let result = sqlx::query(
-            "INSERT INTO plans (start_date, end_date, caption, images) VALUES (?, ?, ?, ?)",
-        )
-        .bind(&payload.start)
-        .bind(&payload.end)
-        .bind(&payload.caption)
-        .bind(images_json)
-        .execute(&self.pool)
-        .await?;
-
-        self.get_admin_plan(result.last_insert_rowid())
+        self.get_admin_plan(payload.date)
             .await?
             .ok_or_else(|| anyhow!("created plan not found"))
     }
 
-    pub async fn update_plan(&self, id: i64, payload: PlanPayload) -> Result<Option<AdminPlan>> {
-        let images = self.validate_and_deduplicate_images(payload.images).await?;
-        let images_json = serde_json::to_string(&images)?;
-        let result = sqlx::query(
-            "UPDATE plans SET start_date = ?, end_date = ?, caption = ?, images = ? WHERE id = ?",
-        )
-        .bind(&payload.start)
-        .bind(&payload.end)
-        .bind(&payload.caption)
-        .bind(images_json)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
+    pub async fn update_plan(
+        &self,
+        date: LocalDate,
+        payload: PlanPayload,
+    ) -> Result<Option<PlanItem>> {
+        self.validate_image(&payload.image_sha256).await?;
+        let result =
+            sqlx::query("UPDATE plans SET date = ?, caption = ?, image_sha256 = ? WHERE date = ?")
+                .bind(payload.date.to_string())
+                .bind(payload.caption.trim())
+                .bind(&payload.image_sha256)
+                .bind(date.to_string())
+                .execute(&self.pool)
+                .await?;
 
         if result.rows_affected() == 0 {
             return Ok(None);
         }
 
-        self.get_admin_plan(id).await
+        self.get_admin_plan(payload.date).await
     }
 
-    pub async fn delete_plan(&self, id: i64) -> Result<bool> {
-        let result = sqlx::query("DELETE FROM plans WHERE id = ?")
-            .bind(id)
+    pub async fn delete_plan(&self, date: LocalDate) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM plans WHERE date = ?")
+            .bind(date.to_string())
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected() > 0)
@@ -295,88 +270,58 @@ impl Store {
         Ok(())
     }
 
-    async fn load_plan_rows(&self, start: &str, end: &str) -> Result<Vec<PlanRow>> {
+    async fn load_plan_rows(&self, start: LocalDate, end: LocalDate) -> Result<Vec<PlanRow>> {
         let rows = sqlx::query_as::<_, PlanRow>(
-            "SELECT id, start_date, end_date, caption, images
+            "SELECT date, caption, image_sha256
              FROM plans
-             WHERE start_date <= ? AND end_date >= ?
-             ORDER BY start_date ASC, id ASC",
+             WHERE (date >= ? AND date <= ?)
+                OR date = (SELECT MAX(date) FROM plans WHERE date < ?)
+             ORDER BY date ASC",
         )
-        .bind(end)
-        .bind(start)
+        .bind(start.to_string())
+        .bind(end.to_string())
+        .bind(start.to_string())
         .fetch_all(&self.pool)
         .await?;
 
         Ok(rows)
     }
 
-    async fn get_admin_plan(&self, id: i64) -> Result<Option<AdminPlan>> {
+    async fn get_admin_plan(&self, date: LocalDate) -> Result<Option<PlanItem>> {
         let row = sqlx::query_as::<_, PlanRow>(
-            "SELECT id, start_date, end_date, caption, images FROM plans WHERE id = ?",
+            "SELECT date, caption, image_sha256 FROM plans WHERE date = ?",
         )
-        .bind(id)
+        .bind(date.to_string())
         .fetch_optional(&self.pool)
         .await?;
 
-        let Some(row) = row else {
-            return Ok(None);
-        };
-
-        let sha256s = parse_images(&row.images)?;
-        let mut images = Vec::with_capacity(sha256s.len());
-        for sha256 in sha256s {
-            if let Some(image) = self.get_image(&sha256).await? {
-                images.push(image);
-            }
-        }
-
-        Ok(Some(AdminPlan {
-            id: row.id,
-            start: row.start_date,
-            end: row.end_date,
-            caption: row.caption,
-            images,
-        }))
+        Ok(row.map(plan_from_row))
     }
 
-    async fn validate_and_deduplicate_images(&self, images: Vec<String>) -> Result<Vec<String>> {
-        let mut seen = HashSet::new();
-        let mut deduplicated = Vec::new();
-        for sha256 in images {
-            if !seen.insert(sha256.clone()) {
-                continue;
-            }
-            let exists: Option<i64> =
-                sqlx::query_scalar("SELECT 1 FROM images WHERE sha256 = ? LIMIT 1")
-                    .bind(&sha256)
-                    .fetch_optional(&self.pool)
-                    .await?;
-            if exists.is_none() {
-                return Err(anyhow!("Unknown image sha256: {sha256}"));
-            }
-            deduplicated.push(sha256);
+    async fn validate_image(&self, sha256: &str) -> Result<()> {
+        let exists: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM images WHERE sha256 = ? LIMIT 1")
+                .bind(sha256)
+                .fetch_optional(&self.pool)
+                .await?;
+        if exists.is_none() {
+            return Err(anyhow!("Unknown image sha256: {sha256}"));
         }
-        Ok(deduplicated)
+        Ok(())
     }
 }
 
 pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
-    drop_incompatible_table(
-        pool,
-        "plans",
-        &["id", "start_date", "end_date", "caption", "images"],
-    )
-    .await?;
+    drop_incompatible_table(pool, "plans", &["date", "caption", "image_sha256"]).await?;
     drop_incompatible_table(pool, "images", &["sha256", "status", "remark"]).await?;
 
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS plans (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            start_date TEXT NOT NULL,
-            end_date   TEXT NOT NULL,
-            caption    TEXT NOT NULL,
-            images     TEXT NOT NULL
+            date          TEXT PRIMARY KEY,
+            caption       TEXT NOT NULL,
+            image_sha256 TEXT NOT NULL,
+            FOREIGN KEY (image_sha256) REFERENCES images(sha256)
         )
         "#,
     )
@@ -398,8 +343,12 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-fn parse_images(value: &str) -> Result<Vec<String>> {
-    serde_json::from_str(value).map_err(Into::into)
+fn plan_from_row(row: PlanRow) -> PlanItem {
+    PlanItem {
+        date: LocalDate::parse(&row.date).expect("stored plan date must be valid"),
+        caption: row.caption,
+        image_sha256: row.image_sha256,
+    }
 }
 
 async fn drop_incompatible_table(

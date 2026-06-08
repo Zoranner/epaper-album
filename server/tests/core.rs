@@ -134,12 +134,11 @@ async fn image_remark(pool: &SqlitePool, sha256: &str) -> String {
         .expect("image remark")
 }
 
-async fn insert_plan(pool: &SqlitePool, start: &str, end: &str, caption: &str, images: Vec<&str>) {
-    sqlx::query("INSERT INTO plans (start_date, end_date, caption, images) VALUES (?, ?, ?, ?)")
-        .bind(start)
-        .bind(end)
+async fn insert_plan(pool: &SqlitePool, date: &str, caption: &str, image_sha256: &str) {
+    sqlx::query("INSERT INTO plans (date, caption, image_sha256) VALUES (?, ?, ?)")
+        .bind(date)
         .bind(caption)
-        .bind(serde_json::to_string(&images).expect("images json"))
+        .bind(image_sha256)
         .execute(pool)
         .await
         .expect("insert plan");
@@ -260,6 +259,12 @@ async fn expired_admin_token_is_rejected() {
 async fn plans_days_parameter_is_lenient_and_clamped() {
     let app = test_app().await;
     let today = chrono::Local::now().date_naive();
+    let previous_old = (today - chrono::Duration::days(5))
+        .format("%Y-%m-%d")
+        .to_string();
+    let previous_recent = (today - chrono::Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
     let day0 = today.format("%Y-%m-%d").to_string();
     let day2 = (today + chrono::Duration::days(2))
         .format("%Y-%m-%d")
@@ -271,10 +276,14 @@ async fn plans_days_parameter_is_lenient_and_clamped() {
         .format("%Y-%m-%d")
         .to_string();
 
-    insert_plan(&app.pool, &day0, &day0, "today", vec![]).await;
-    insert_plan(&app.pool, &day2, &day2, "day2", vec![]).await;
-    insert_plan(&app.pool, &day6, &day6, "day6", vec![]).await;
-    insert_plan(&app.pool, &day7, &day7, "day7", vec![]).await;
+    let ready_sha = valid_sha(20);
+    seed_image(&app.pool, &ready_sha, "ready", "ready").await;
+    insert_plan(&app.pool, &previous_old, "old", &ready_sha).await;
+    insert_plan(&app.pool, &previous_recent, "recent", &ready_sha).await;
+    insert_plan(&app.pool, &day0, "today", &ready_sha).await;
+    insert_plan(&app.pool, &day2, "day2", &ready_sha).await;
+    insert_plan(&app.pool, &day6, "day6", &ready_sha).await;
+    insert_plan(&app.pool, &day7, "day7", &ready_sha).await;
 
     let (_, default_value) = request_json(
         app.app.clone(),
@@ -283,7 +292,10 @@ async fn plans_days_parameter_is_lenient_and_clamped() {
             .expect("request"),
     )
     .await;
-    assert_eq!(default_value["data"].as_array().expect("plans").len(), 2);
+    let default_plans = default_value["data"].as_array().expect("plans");
+    assert_eq!(default_plans.len(), 3);
+    assert_eq!(default_plans[0]["date"], previous_recent);
+    assert_eq!(default_plans[0]["caption"], "recent");
 
     let (_, min_value) = request_json(
         app.app.clone(),
@@ -292,7 +304,10 @@ async fn plans_days_parameter_is_lenient_and_clamped() {
             .expect("request"),
     )
     .await;
-    assert_eq!(min_value["data"].as_array().expect("plans").len(), 1);
+    let min_plans = min_value["data"].as_array().expect("plans");
+    assert_eq!(min_plans.len(), 2);
+    assert_eq!(min_plans[0]["date"], previous_recent);
+    assert_eq!(min_plans[1]["date"], day0);
 
     let (_, max_value) = request_json(
         app.app.clone(),
@@ -301,29 +316,26 @@ async fn plans_days_parameter_is_lenient_and_clamped() {
             .expect("request"),
     )
     .await;
-    let captions = max_value["data"]
+    let dates = max_value["data"]
         .as_array()
         .expect("plans")
         .iter()
-        .map(|item| item["caption"].as_str().expect("caption"))
+        .map(|item| item["date"].as_str().expect("date"))
         .collect::<Vec<_>>();
-    assert_eq!(captions, vec!["today", "day2", "day6"]);
+    assert_eq!(dates, vec![previous_recent, day0, day2, day6]);
 }
 
 #[tokio::test]
-async fn plan_create_deduplicates_images_and_rejects_unknown_sha256() {
+async fn plan_create_uses_date_key_and_rejects_unknown_sha256() {
     let app = test_app().await;
     let sha_a = valid_sha(10);
-    let sha_b = valid_sha(11);
     let sha_unknown = valid_sha(12);
     seed_image(&app.pool, &sha_a, "ready", "A").await;
-    seed_image(&app.pool, &sha_b, "pending", "B").await;
 
     let body = json!({
-        "start": "2026-06-06",
-        "end": "2026-06-07",
-        "caption": "去重",
-        "images": [sha_a, sha_b, sha_a]
+        "date": "2026-06-06",
+        "caption": "创建计划",
+        "image_sha256": sha_a
     });
     let (status, value) = request_json(
         app.app.clone(),
@@ -335,21 +347,14 @@ async fn plan_create_deduplicates_images_and_rejects_unknown_sha256() {
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
-    assert_eq!(
-        value["data"]["images"]
-            .as_array()
-            .expect("images")
-            .iter()
-            .map(|item| item["sha256"].as_str().expect("sha"))
-            .collect::<Vec<_>>(),
-        vec![valid_sha(10), valid_sha(11)]
-    );
+    assert_eq!(value["data"]["date"], "2026-06-06");
+    assert_eq!(value["data"]["caption"], "创建计划");
+    assert_eq!(value["data"]["image_sha256"], valid_sha(10));
 
     let bad_body = json!({
-        "start": "2026-06-06",
-        "end": "2026-06-07",
-        "caption": "未知",
-        "images": [sha_unknown]
+        "date": "2026-06-07",
+        "caption": "未知图片",
+        "image_sha256": sha_unknown
     });
     let (status, value) = request_json(
         app.app.clone(),
@@ -365,16 +370,15 @@ async fn plan_create_deduplicates_images_and_rejects_unknown_sha256() {
 }
 
 #[tokio::test]
-async fn plan_create_rejects_invalid_date_range() {
+async fn plan_create_rejects_invalid_date() {
     let app = test_app().await;
     let sha = valid_sha(13);
     seed_image(&app.pool, &sha, "ready", "A").await;
 
     let body = json!({
-        "start": "2026-06-08",
-        "end": "2026-06-07",
-        "caption": "日期错误",
-        "images": [sha]
+        "date": "2026-06-99",
+        "caption": "无效日期",
+        "image_sha256": sha
     });
     let (status, value) = request_json(
         app.app.clone(),
@@ -402,7 +406,7 @@ async fn init_schema_replaces_incompatible_legacy_tables() {
         .execute(&pool)
         .await
         .expect("create legacy images");
-    sqlx::query("CREATE TABLE plans (id INTEGER PRIMARY KEY AUTOINCREMENT, caption TEXT NOT NULL)")
+    sqlx::query("CREATE TABLE plans (caption TEXT NOT NULL)")
         .execute(&pool)
         .await
         .expect("create legacy plans");
@@ -414,38 +418,32 @@ async fn init_schema_replaces_incompatible_legacy_tables() {
         .execute(&pool)
         .await
         .expect("insert current image");
-    sqlx::query("INSERT INTO plans (start_date, end_date, caption, images) VALUES (?, ?, ?, ?)")
-        .bind("2026-06-06")
+    sqlx::query("INSERT INTO plans (date, caption, image_sha256) VALUES (?, ?, ?)")
         .bind("2026-06-06")
         .bind("current")
-        .bind("[]")
+        .bind(valid_sha(14))
         .execute(&pool)
         .await
         .expect("insert current plan");
 }
 
 #[tokio::test]
-async fn plan_update_deduplicates_images_and_returns_404_for_missing_plan() {
+async fn plan_update_by_date_and_returns_404_for_missing_plan() {
     let app = test_app().await;
     let sha_a = valid_sha(15);
     let sha_b = valid_sha(16);
     seed_image(&app.pool, &sha_a, "ready", "A").await;
     seed_image(&app.pool, &sha_b, "ready", "B").await;
-    insert_plan(&app.pool, "2026-06-06", "2026-06-06", "old", vec![&sha_a]).await;
+    insert_plan(&app.pool, "2026-06-06", "旧计划", &sha_a).await;
 
-    let id: i64 = sqlx::query_scalar("SELECT id FROM plans LIMIT 1")
-        .fetch_one(&app.pool)
-        .await
-        .expect("plan id");
     let body = json!({
-        "start": "2026-06-07",
-        "end": "2026-06-08",
-        "caption": "updated",
-        "images": [sha_b, sha_a, sha_b]
+        "date": "2026-06-07",
+        "caption": "更新计划",
+        "image_sha256": sha_b
     });
     let (status, value) = request_json(
         app.app.clone(),
-        admin_request(&app, &format!("/api/plans/{id}"))
+        admin_request(&app, "/api/plans/2026-06-06")
             .method("PUT")
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(body.to_string()))
@@ -453,26 +451,18 @@ async fn plan_update_deduplicates_images_and_returns_404_for_missing_plan() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(value["data"]["caption"], "updated");
-    assert_eq!(
-        value["data"]["images"]
-            .as_array()
-            .expect("images")
-            .iter()
-            .map(|item| item["sha256"].as_str().expect("sha"))
-            .collect::<Vec<_>>(),
-        vec![valid_sha(16), valid_sha(15)]
-    );
+    assert_eq!(value["data"]["date"], "2026-06-07");
+    assert_eq!(value["data"]["caption"], "更新计划");
+    assert_eq!(value["data"]["image_sha256"], valid_sha(16));
 
     let missing_body = json!({
-        "start": "2026-06-07",
-        "end": "2026-06-08",
-        "caption": "missing",
-        "images": []
+        "date": "2026-06-08",
+        "caption": "缺失计划",
+        "image_sha256": sha_a
     });
     let (status, value) = request_json(
         app.app.clone(),
-        admin_request(&app, "/api/plans/9999")
+        admin_request(&app, "/api/plans/2026-06-09")
             .method("PUT")
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(missing_body.to_string()))
@@ -484,20 +474,19 @@ async fn plan_update_deduplicates_images_and_returns_404_for_missing_plan() {
 }
 
 #[tokio::test]
-async fn plans_return_ready_sha256_for_users_and_full_image_state_for_admins() {
+async fn plans_return_ready_dates_for_users_and_all_dates_for_admins() {
     let app = test_app().await;
     let ready_sha = valid_sha(1);
     let failed_sha = valid_sha(2);
     seed_image(&app.pool, &ready_sha, "ready", "可用").await;
     seed_image(&app.pool, &failed_sha, "failed", "失败").await;
-    insert_plan(
-        &app.pool,
-        "2026-06-06",
-        "2099-12-31",
-        "权限差异",
-        vec![&ready_sha, &failed_sha],
-    )
-    .await;
+    let today = chrono::Local::now().date_naive();
+    let day0 = today.format("%Y-%m-%d").to_string();
+    let day1 = (today + chrono::Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
+    insert_plan(&app.pool, &day0, "可用计划", &ready_sha).await;
+    insert_plan(&app.pool, &day1, "失败计划", &failed_sha).await;
 
     let (_, user_value) = request_json(
         app.app.clone(),
@@ -506,7 +495,10 @@ async fn plans_return_ready_sha256_for_users_and_full_image_state_for_admins() {
             .expect("request"),
     )
     .await;
-    assert_eq!(user_value["data"][0]["images"], json!([ready_sha]));
+    assert_eq!(
+        user_value["data"],
+        json!([{ "date": day0, "caption": "可用计划", "image_sha256": ready_sha }])
+    );
 
     let (_, admin_value) = request_json(
         app.app.clone(),
@@ -515,9 +507,10 @@ async fn plans_return_ready_sha256_for_users_and_full_image_state_for_admins() {
             .expect("request"),
     )
     .await;
-    assert_eq!(admin_value["data"][0]["images"][0]["status"], "ready");
-    assert_eq!(admin_value["data"][0]["images"][1]["status"], "failed");
-    assert_eq!(admin_value["data"][0]["images"][1]["remark"], "失败");
+    assert_eq!(admin_value["data"][0]["caption"], "可用计划");
+    assert_eq!(admin_value["data"][0]["image_sha256"], valid_sha(1));
+    assert_eq!(admin_value["data"][1]["caption"], "失败计划");
+    assert_eq!(admin_value["data"][1]["image_sha256"], valid_sha(2));
 }
 
 #[tokio::test]

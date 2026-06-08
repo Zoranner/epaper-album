@@ -64,6 +64,11 @@
   gap: var(--space-1);
 }
 
+.base-field.small .base-field__control {
+  min-height: var(--button-height-sm);
+  font-size: var(--text-xs);
+}
+
 .base-field__label {
   color: var(--color-text-muted);
   font-size: var(--text-xs);
@@ -108,6 +113,7 @@
 .base-select {
   position: relative;
   display: block;
+  min-width: 132px;
 }
 
 .base-select select {
@@ -175,6 +181,7 @@
   padding: 0 var(--space-2);
   background: transparent;
   color: var(--color-text-body);
+  font-size: var(--text-sm);
   text-align: left;
   cursor: pointer;
 }
@@ -225,12 +232,31 @@
   background: var(--color-surface);
 }
 
-.base-dialog__header,
-.base-dialog__footer,
-.dialog-actions {
+.base-dialog__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.base-dialog__footer,
+.base-dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.base-dialog-actions__meta {
+  margin-right: auto;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.base-dialog-actions__buttons {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
   gap: var(--space-2);
 }
 
@@ -399,7 +425,7 @@
 .plan-table__head {
   min-height: 34px;
   display: grid;
-  grid-template-columns: 120px minmax(160px, 1fr) minmax(120px, 220px) 64px 44px;
+  grid-template-columns: 120px minmax(160px, 1fr) minmax(120px, 220px) minmax(160px, 220px) 44px;
   align-items: center;
   gap: var(--space-3);
   border-bottom: 1px solid var(--color-line);
@@ -412,7 +438,7 @@
 .plan-row {
   min-height: 58px;
   display: grid;
-  grid-template-columns: 120px minmax(160px, 1fr) minmax(120px, 220px) 64px 44px;
+  grid-template-columns: 120px minmax(160px, 1fr) minmax(120px, 220px) minmax(160px, 220px) 44px;
   align-items: center;
   gap: var(--space-3);
   border-bottom: 1px solid var(--color-line-soft);
@@ -472,12 +498,19 @@
 }
 
 .plan-row__meta {
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: flex-start;
   gap: var(--space-2);
   color: var(--color-text-muted);
   font-size: var(--text-xs);
+}
+
+.plan-row__meta code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .plan-row__actions {
@@ -520,7 +553,15 @@
 
 .picker-tile {
   min-height: 56px;
+  font-size: var(--text-xs);
+  line-height: 1.2;
   cursor: pointer;
+}
+
+.picker-tile:focus-visible,
+.base-action-menu__items button:focus-visible {
+  outline: 1px solid var(--color-primary);
+  outline-offset: 1px;
 }
 
 .picker-tile.selected {

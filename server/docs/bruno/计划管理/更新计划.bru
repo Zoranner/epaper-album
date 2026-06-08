@@ -5,7 +5,7 @@ meta {
 }
 
 put {
-  url: {{baseUrl}}/api/plans/:id
+  url: {{baseUrl}}/api/plans/:date
 }
 
 headers {
@@ -14,14 +14,13 @@ headers {
 }
 
 params:path {
-  id: 1
+  date: 2026-06-07
 }
 
 body:json {
   {
-    "start": "2026-06-07",
-    "end": "2026-06-07",
-    "caption": "晚风和海",
-    "images": []
+    "date": "2026-06-07",
+    "caption": "晚风",
+    "image_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
   }
 }

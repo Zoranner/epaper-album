@@ -16,9 +16,9 @@ export function createPlan(token: string, payload: PlanPayload): Promise<AdminPl
   );
 }
 
-export function updatePlan(token: string, id: number, payload: PlanPayload): Promise<AdminPlan> {
+export function updatePlan(token: string, date: string, payload: PlanPayload): Promise<AdminPlan> {
   return request<AdminPlan>(
-    `/plans/${id}`,
+    `/plans/${date}`,
     tokenInit(token, {
       method: 'PUT',
       body: JSON.stringify(payload),
@@ -26,9 +26,9 @@ export function updatePlan(token: string, id: number, payload: PlanPayload): Pro
   );
 }
 
-export function deletePlan(token: string, id: number): Promise<null> {
+export function deletePlan(token: string, date: string): Promise<null> {
   return request<null>(
-    `/plans/${id}`,
+    `/plans/${date}`,
     tokenInit(token, {
       method: 'DELETE',
     }),

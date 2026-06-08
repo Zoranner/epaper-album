@@ -322,19 +322,15 @@ mod tests {
     fn request(notice: Option<RenderNotice>) -> DisplayRefreshRequest {
         DisplayRefreshRequest {
             item: DisplayItem {
-                plan_id: 7,
                 plan_content_hash: Some("hash".to_string()),
                 date: LocalDate::parse("2026-06-08").unwrap(),
                 image_sha256: "photo".to_string(),
-                image_index: 0,
                 caption: "caption".to_string(),
             },
             display_state: DisplayState {
-                plan_id: Some(7),
                 plan_content_hash: Some("hash".to_string()),
                 date: Some(LocalDate::parse("2026-06-08").unwrap()),
                 image_sha256: Some("photo".to_string()),
-                image_index: 0,
                 caption: Some("caption".to_string()),
                 refreshed_at_unix_secs: Some(100),
             },

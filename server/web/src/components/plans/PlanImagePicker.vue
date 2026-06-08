@@ -5,6 +5,7 @@
       <BaseInput
         label=""
         placeholder="搜索备注或 sha256"
+        small
         :model-value="keyword"
         @update:model-value="keyword = $event"
       />

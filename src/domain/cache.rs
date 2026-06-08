@@ -16,7 +16,7 @@ pub fn missing_resources(snapshot: &PlanSnapshot, index: &ResourceIndex) -> Vec<
     snapshot
         .plans
         .iter()
-        .flat_map(|plan| plan.images.iter())
+        .map(|plan| &plan.image_sha256)
         .filter(|sha256| !index.contains(sha256))
         .fold(Vec::<String>::new(), |mut missing, sha256| {
             if !missing.iter().any(|known| known == sha256) {
@@ -104,22 +104,20 @@ pub fn cleanup_candidates_for_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{LocalDate, PlanItem};
-
-    fn date(value: &str) -> LocalDate {
-        LocalDate::parse(value).unwrap()
-    }
+    use crate::model::PlanItem;
 
     fn snapshot(images: &[&str]) -> PlanSnapshot {
         PlanSnapshot {
             content_hash: "hash-v1".to_string(),
-            plans: vec![PlanItem {
-                id: 1,
-                start: date("2026-06-06"),
-                end: date("2026-06-08"),
-                caption: "caption".to_string(),
-                images: images.iter().map(|image| image.to_string()).collect(),
-            }],
+            plans: images
+                .iter()
+                .enumerate()
+                .map(|(index, image)| PlanItem {
+                    date: crate::model::LocalDate::new(2026, 6, 6 + index as u8).unwrap(),
+                    caption: "caption".to_string(),
+                    image_sha256: image.to_string(),
+                })
+                .collect(),
         }
     }
 

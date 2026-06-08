@@ -1,29 +1,13 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use schema::{PlanItem, PlanPayload};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
 pub struct ImageRecord {
     pub sha256: String,
     pub status: String,
     pub remark: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct AdminPlan {
-    pub id: i64,
-    pub start: String,
-    pub end: String,
-    pub caption: String,
-    pub images: Vec<ImageRecord>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct UserPlan {
-    pub id: i64,
-    pub start: String,
-    pub end: String,
-    pub caption: String,
-    pub images: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -38,15 +22,6 @@ pub struct LoginResponse {
     pub jwt_token: String,
     #[serde(rename = "expiresAt")]
     pub expires_at: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct PlanPayload {
-    pub start: String,
-    pub end: String,
-    pub caption: String,
-    #[serde(default)]
-    pub images: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

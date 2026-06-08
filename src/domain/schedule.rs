@@ -26,23 +26,19 @@ pub fn daily_sync_due(
 }
 
 pub fn select_plan_for_date(plans: &[PlanItem], date: LocalDate) -> Option<&PlanItem> {
-    plans.iter().find(|plan| plan.contains_date(date))
+    plans
+        .iter()
+        .filter(|plan| plan.date <= date)
+        .max_by_key(|plan| plan.date)
 }
 
-pub fn select_display_item(
-    snapshot: &PlanSnapshot,
-    date: LocalDate,
-    rotation_slot: u64,
-) -> Option<DisplayItem> {
+pub fn select_display_item(snapshot: &PlanSnapshot, date: LocalDate) -> Option<DisplayItem> {
     let plan = select_plan_for_date(&snapshot.plans, date)?;
-    let (image_index, image_sha256) = plan.image_at_slot(rotation_slot)?;
 
     Some(DisplayItem {
-        plan_id: plan.id,
         plan_content_hash: Some(snapshot.content_hash.clone()),
-        date,
-        image_sha256: image_sha256.to_string(),
-        image_index,
+        date: plan.date,
+        image_sha256: plan.image_sha256.clone(),
         caption: plan.caption.clone(),
     })
 }
@@ -52,33 +48,21 @@ pub fn display_needs_refresh(previous: Option<&DisplayState>, next: &DisplayItem
         return true;
     };
 
-    previous.plan_id != Some(next.plan_id)
-        || previous.date != Some(next.date)
+    previous.date != Some(next.date)
         || previous.image_sha256.as_deref() != Some(next.image_sha256.as_str())
-        || previous.image_index != next.image_index
         || previous.caption.as_deref() != Some(next.caption.as_str())
 }
 
 pub fn next_plan_change_date(plans: &[PlanItem], date: LocalDate) -> Option<LocalDate> {
     plans
         .iter()
-        .filter_map(|plan| {
-            if plan.start > date {
-                return Some(plan.start);
-            }
-
-            if plan.contains_date(date) {
-                return Some(plan.end.next_day());
-            }
-
-            None
-        })
-        .filter(|candidate| *candidate > date)
+        .filter(|plan| plan.date > date)
+        .map(|plan| plan.date)
         .min()
 }
 
 pub fn has_valid_plan_on_or_after(plans: &[PlanItem], date: LocalDate) -> bool {
-    plans.iter().any(|plan| plan.end >= date)
+    plans.iter().any(|plan| plan.date >= date)
 }
 
 #[cfg(test)]
@@ -89,21 +73,19 @@ mod tests {
         LocalDate::parse(value).unwrap()
     }
 
-    fn plan(id: i64, start: &str, end: &str, caption: &str, images: &[&str]) -> PlanItem {
+    fn plan(date: &str, caption: &str, image_sha256: &str) -> PlanItem {
         PlanItem {
-            id,
-            start: date(start),
-            end: date(end),
+            date: self::date(date),
             caption: caption.to_string(),
-            images: images.iter().map(|image| image.to_string()).collect(),
+            image_sha256: image_sha256.to_string(),
         }
     }
 
     #[test]
-    fn selects_plan_by_inclusive_date_range() {
+    fn selects_plan_by_exact_date() {
         let plans = vec![
-            plan(1, "2026-06-01", "2026-06-05", "old", &["old"]),
-            plan(2, "2026-06-06", "2026-06-08", "today", &["today"]),
+            plan("2026-06-01", "old", "old"),
+            plan("2026-06-06", "today", "today"),
         ];
 
         let selected = select_plan_for_date(&plans, date("2026-06-06")).unwrap();
@@ -112,36 +94,69 @@ mod tests {
     }
 
     #[test]
-    fn selects_image_by_rotation_slot() {
-        let snapshot = PlanSnapshot {
-            content_hash: "hash-v1".to_string(),
-            plans: vec![plan(5, "2026-06-06", "2026-06-06", "caption", &["a", "b"])],
-        };
+    fn selects_latest_past_plan_when_date_has_no_plan() {
+        let plans = vec![
+            plan("2026-06-04", "day-4", "4"),
+            plan("2026-06-05", "day-5", "5"),
+            plan("2026-06-07", "day-7", "7"),
+            plan("2026-06-13", "future", "13"),
+        ];
 
-        let item = select_display_item(&snapshot, date("2026-06-06"), 3).unwrap();
+        let selected = select_plan_for_date(&plans, date("2026-06-10")).unwrap();
 
-        assert_eq!(item.plan_id, 5);
-        assert_eq!(item.plan_content_hash.as_deref(), Some("hash-v1"));
-        assert_eq!(item.image_index, 1);
-        assert_eq!(item.image_sha256, "b");
+        assert_eq!(selected.caption, "day-7");
     }
 
     #[test]
-    fn detects_when_display_plan_changed() {
+    fn exact_date_has_priority_over_past_plan() {
+        let plans = vec![
+            plan("2026-06-07", "day-7", "7"),
+            plan("2026-06-08", "day-8", "8"),
+            plan("2026-06-10", "day-10", "10"),
+            plan("2026-06-12", "future", "12"),
+        ];
+
+        let selected = select_plan_for_date(&plans, date("2026-06-10")).unwrap();
+
+        assert_eq!(selected.caption, "day-10");
+    }
+
+    #[test]
+    fn does_not_select_future_plan_without_past_or_current_plan() {
+        let plans = vec![
+            plan("2026-06-12", "future-12", "12"),
+            plan("2026-06-13", "future-13", "13"),
+        ];
+
+        assert!(select_plan_for_date(&plans, date("2026-06-10")).is_none());
+    }
+
+    #[test]
+    fn builds_display_item_from_selected_plan() {
+        let snapshot = PlanSnapshot {
+            content_hash: "hash-v1".to_string(),
+            plans: vec![plan("2026-06-06", "caption", "a")],
+        };
+
+        let item = select_display_item(&snapshot, date("2026-06-08")).unwrap();
+
+        assert_eq!(item.plan_content_hash.as_deref(), Some("hash-v1"));
+        assert_eq!(item.date, date("2026-06-06"));
+        assert_eq!(item.image_sha256, "a");
+    }
+
+    #[test]
+    fn detects_when_display_content_changed() {
         let next = DisplayItem {
-            plan_id: 2,
             plan_content_hash: Some("hash-v2".to_string()),
             date: date("2026-06-06"),
             image_sha256: "hash".to_string(),
-            image_index: 0,
             caption: "caption".to_string(),
         };
         let previous = DisplayState {
-            plan_id: Some(1),
             plan_content_hash: Some("hash-v1".to_string()),
-            date: Some(date("2026-06-06")),
+            date: Some(date("2026-06-05")),
             image_sha256: Some("hash".to_string()),
-            image_index: 0,
             caption: Some("caption".to_string()),
             refreshed_at_unix_secs: Some(1),
         };
@@ -152,19 +167,15 @@ mod tests {
     #[test]
     fn ignores_plan_content_hash_when_display_content_is_unchanged() {
         let next = DisplayItem {
-            plan_id: 1,
             plan_content_hash: Some("hash-v2".to_string()),
             date: date("2026-06-06"),
             image_sha256: "hash".to_string(),
-            image_index: 0,
             caption: "caption".to_string(),
         };
         let previous = DisplayState {
-            plan_id: Some(1),
             plan_content_hash: Some("hash-v1".to_string()),
             date: Some(date("2026-06-06")),
             image_sha256: Some("hash".to_string()),
-            image_index: 0,
             caption: Some("caption".to_string()),
             refreshed_at_unix_secs: Some(1),
         };
@@ -173,15 +184,15 @@ mod tests {
     }
 
     #[test]
-    fn computes_next_plan_change_from_current_plan_end() {
+    fn computes_next_plan_change_from_next_plan_date() {
         let plans = vec![
-            plan(1, "2026-06-06", "2026-06-08", "current", &["a"]),
-            plan(2, "2026-06-10", "2026-06-10", "future", &["b"]),
+            plan("2026-06-06", "current", "a"),
+            plan("2026-06-10", "future", "b"),
         ];
 
         assert_eq!(
             next_plan_change_date(&plans, date("2026-06-06")),
-            Some(date("2026-06-09"))
+            Some(date("2026-06-10"))
         );
     }
 
@@ -218,19 +229,5 @@ mod tests {
             Some(last_successful_sync),
             last_successful_sync + DAILY_SYNC_INTERVAL_SECONDS
         ));
-    }
-
-    #[test]
-    fn manual_forced_sync_does_not_move_daily_sync_anchor() {
-        let last_successful_daily_sync = 1_000;
-        let manual_forced_sync_finished_at = 2_000;
-
-        assert_eq!(
-            next_daily_sync_epoch_seconds(
-                last_successful_daily_sync,
-                manual_forced_sync_finished_at
-            ),
-            last_successful_daily_sync + DAILY_SYNC_INTERVAL_SECONDS
-        );
     }
 }

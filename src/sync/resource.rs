@@ -224,11 +224,9 @@ mod tests {
             "message": "ok",
             "data": [
                 {
-                    "id": 9,
-                    "start": "2026-06-08",
-                    "end": "2026-06-09",
+                    "date": "2026-06-08",
                     "caption": "caption",
-                    "images": []
+                    "image_sha256": "server-key"
                 }
             ]
         }"#;
@@ -239,7 +237,9 @@ mod tests {
         let snapshot =
             download_plan(&mut client, &mut store, "https://example.com", "secret", 2).unwrap();
 
-        assert_eq!(snapshot.plans[0].id, 9);
+        assert_eq!(snapshot.plans[0].date.to_string(), "2026-06-08");
+        assert_eq!(snapshot.plans[0].caption, "caption");
+        assert_eq!(snapshot.plans[0].image_sha256, "server-key");
         let stored_snapshot: PlanSnapshot = crate::storage::parse_json_str(
             std::str::from_utf8(store.plan.as_ref().unwrap()).unwrap(),
         )
@@ -255,11 +255,9 @@ mod tests {
             "message": "ok",
             "data": [
                 {
-                    "id": 9,
-                    "start": "2026-06-08",
-                    "end": "2026-06-09",
+                    "date": "2026-06-08",
                     "caption": "caption",
-                    "images": ["server-key"]
+                    "image_sha256": "server-key"
                 }
             ]
         }"#;

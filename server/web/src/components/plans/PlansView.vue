@@ -6,7 +6,7 @@
         <p>维护设备显示计划记录</p>
       </div>
       <div class="module-actions">
-        <BaseSelect v-model="daysValue" :options="dayOptions" />
+        <BaseSelect v-model="daysValue" small :options="dayOptions" />
         <BaseButton small type="button" variant="secondary" @click="loadPlans">
           <BaseIcon name="search" />
           查询
@@ -39,12 +39,12 @@
     <BaseDialog :open="Boolean(deletingPlan)" title="删除计划" @close="deletingPlan = null">
       <div v-if="deletingPlan" class="confirm-body">
         <p>确认删除计划“{{ deletingPlan.caption }}”？</p>
-        <div class="dialog-actions">
+        <BaseDialogActions>
           <BaseButton type="button" variant="secondary" @click="deletingPlan = null">取消</BaseButton>
           <BaseButton :loading="deleting" type="button" variant="danger" @click="deleteSelectedPlan">
             删除
           </BaseButton>
-        </div>
+        </BaseDialogActions>
       </div>
     </BaseDialog>
   </section>
@@ -62,11 +62,16 @@ import {
 } from '../../api';
 import BaseButton from '../base/BaseButton.vue';
 import BaseDialog from '../base/BaseDialog.vue';
+import BaseDialogActions from '../base/BaseDialogActions.vue';
 import BaseIcon from '../base/BaseIcon.vue';
 import BaseSelect, { type BaseSelectOption } from '../base/BaseSelect.vue';
 import PlanEditorDialog from './PlanEditorDialog.vue';
 import PlanTable from './PlanTable.vue';
 import { useAuthStore } from '../../composables/useAuthStore';
+
+export interface PlanView extends AdminPlan {
+  image: AdminImage | null;
+}
 
 const auth = useAuthStore();
 const days = ref(3);
@@ -76,12 +81,12 @@ const daysValue = computed({
     days.value = Number(value);
   },
 });
-const plans = ref<AdminPlan[]>([]);
+const plans = ref<PlanView[]>([]);
 const images = ref<AdminImage[]>([]);
 const previewUrls = ref<Record<string, string>>({});
 const editorOpen = ref(false);
-const editingPlan = ref<AdminPlan | null>(null);
-const deletingPlan = ref<AdminPlan | null>(null);
+const editingPlan = ref<PlanView | null>(null);
+const deletingPlan = ref<PlanView | null>(null);
 const deleting = ref(false);
 const error = ref('');
 const dayOptions: BaseSelectOption[] = Array.from({ length: 7 }, (_, index) => {
@@ -90,8 +95,8 @@ const dayOptions: BaseSelectOption[] = Array.from({ length: 7 }, (_, index) => {
 });
 const sortedPlans = computed(() =>
   [...plans.value].sort((left, right) => {
-    const byStart = left.start.localeCompare(right.start);
-    return byStart === 0 ? left.end.localeCompare(right.end) : byStart;
+    const byDate = left.date.localeCompare(right.date);
+    return byDate === 0 ? left.caption.localeCompare(right.caption) : byDate;
   }),
 );
 
@@ -106,9 +111,9 @@ async function loadPlans() {
       listPlansRequest(auth.token.value, days.value),
       listImages(auth.token.value),
     ]);
-    plans.value = nextPlans;
+    plans.value = withPlanImages(nextPlans, nextImages);
     images.value = nextImages;
-    await loadPreviews(nextPlans, nextImages);
+    await loadPreviews(plans.value, nextImages);
   } catch (loadError) {
     error.value = loadError instanceof Error ? loadError.message : '计划加载失败';
   }
@@ -119,7 +124,7 @@ function openCreate() {
   editorOpen.value = true;
 }
 
-function openEdit(plan: AdminPlan) {
+function openEdit(plan: PlanView) {
   editingPlan.value = plan;
   editorOpen.value = true;
 }
@@ -134,7 +139,7 @@ async function handleSaved() {
   await loadPlans();
 }
 
-function openDelete(plan: AdminPlan) {
+function openDelete(plan: PlanView) {
   deletingPlan.value = plan;
 }
 
@@ -145,7 +150,7 @@ async function deleteSelectedPlan() {
 
   deleting.value = true;
   try {
-    await deletePlan(auth.token.value, deletingPlan.value.id);
+    await deletePlan(auth.token.value, deletingPlan.value.date);
     deletingPlan.value = null;
     await loadPlans();
   } catch (deleteError) {
@@ -155,13 +160,11 @@ async function deleteSelectedPlan() {
   }
 }
 
-async function loadPreviews(nextPlans: AdminPlan[], nextImages: AdminImage[]) {
+async function loadPreviews(nextPlans: PlanView[], nextImages: AdminImage[]) {
   const readySha = new Set<string>();
   for (const plan of nextPlans) {
-    for (const image of plan.images) {
-      if (image.status === 'ready') {
-        readySha.add(image.sha256);
-      }
+    if (plan.image?.status === 'ready') {
+      readySha.add(plan.image.sha256);
     }
   }
   for (const image of nextImages) {
@@ -181,6 +184,14 @@ async function loadPreviews(nextPlans: AdminPlan[], nextImages: AdminImage[]) {
       await refreshPreview(sha256);
     }
   }
+}
+
+function withPlanImages(nextPlans: AdminPlan[], nextImages: AdminImage[]): PlanView[] {
+  const imageBySha = new Map(nextImages.map((image) => [image.sha256, image]));
+  return nextPlans.map((plan) => ({
+    ...plan,
+    image: imageBySha.get(plan.image_sha256) ?? null,
+  }));
 }
 
 async function refreshPreview(sha256: string) {
