@@ -1,4 +1,4 @@
-use crate::cloud::sprite_cache_key;
+use crate::cloud::sprite_sha256;
 use crate::device_runtime::{DeviceDisplay, DisplayRefreshRequest};
 use crate::epd::{run_epd_packed_frame, EpdBus, EpdError};
 use crate::render::{
@@ -176,8 +176,8 @@ where
         return Ok(None);
     }
 
-    let key = sprite_cache_key("caption", &request.item.caption);
-    reader.read_sprite_bmp(&key)
+    let sha256 = sprite_sha256("caption", &request.item.caption);
+    reader.read_sprite_bmp(&sha256)
 }
 
 fn read_date_sprite<R>(
@@ -191,8 +191,8 @@ where
         return Ok(None);
     };
 
-    let key = sprite_cache_key("date", &date.to_string());
-    reader.read_sprite_bmp(&key)
+    let sha256 = sprite_sha256("date", &date.to_string());
+    reader.read_sprite_bmp(&sha256)
 }
 
 fn read_notice_sprite<R>(
@@ -206,8 +206,8 @@ where
         return Ok(None);
     };
 
-    let key = sprite_cache_key("notice", notice.text());
-    reader.read_sprite_bmp(&key)
+    let sha256 = sprite_sha256("notice", notice.text());
+    reader.read_sprite_bmp(&sha256)
 }
 
 #[cfg(test)]
@@ -280,15 +280,15 @@ mod tests {
             solid_bmp(EPD_WIDTH, EPD_HEIGHT, Color::White),
         );
         reader.sprites.insert(
-            sprite_cache_key("caption", "caption"),
+            sprite_sha256("caption", "caption"),
             solid_bmp(8, 4, Color::Black),
         );
         reader.sprites.insert(
-            sprite_cache_key("date", "2026-06-08"),
+            sprite_sha256("date", "2026-06-08"),
             solid_bmp(8, 4, Color::Red),
         );
         reader.sprites.insert(
-            sprite_cache_key("notice", RenderNotice::LowBattery.text()),
+            sprite_sha256("notice", RenderNotice::LowBattery.text()),
             solid_bmp(8, 4, Color::Blue),
         );
         let bus = MockBus::default();

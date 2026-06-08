@@ -1,5 +1,5 @@
 use crate::cloud::{
-    image_url, parse_plan_response, plans_url, sprite_cache_key, sprite_url, CloudSyncError,
+    image_url, parse_plan_response, plans_url, sprite_sha256, sprite_url, CloudSyncError,
     HttpClient,
 };
 use crate::model::{CachedResource, PlanSnapshot};
@@ -95,9 +95,9 @@ pub fn download_sprite(
 ) -> Result<String, ResourceSyncError> {
     let url = sprite_url(base_url, kind, text)?;
     let bytes = client.get_bytes(&url, secret_key, MAX_SPRITE_BYTES)?;
-    let key = sprite_cache_key(kind, text);
-    save_or_error(store.save_sprite_bytes(&key, &bytes))?;
-    Ok(key)
+    let sha256 = sprite_sha256(kind, text);
+    save_or_error(store.save_sprite_bytes(&sha256, &bytes))?;
+    Ok(sha256)
 }
 
 fn save_or_error(result: StorageWrite) -> Result<(), ResourceSyncError> {
@@ -196,8 +196,8 @@ mod tests {
             self.result()
         }
 
-        fn save_sprite_bytes(&mut self, key: &str, content: &[u8]) -> StorageWrite {
-            self.sprites.insert(key.to_string(), content.to_vec());
+        fn save_sprite_bytes(&mut self, sha256: &str, content: &[u8]) -> StorageWrite {
+            self.sprites.insert(sha256.to_string(), content.to_vec());
             self.result()
         }
     }
@@ -310,14 +310,14 @@ mod tests {
     }
 
     #[test]
-    fn downloads_sprite_by_cache_key_without_image_sha_check() {
+    fn downloads_sprite_by_sha256_without_image_sha_check() {
         let mut client = MockHttpClient::default().with_response(
             "https://example.com/api/sprite?type=caption&text=%E6%99%9A%E9%A3%8E",
             b"sprite bytes",
         );
         let mut store = MockResourceStore::default();
 
-        let key = download_sprite(
+        let sha256 = download_sprite(
             &mut client,
             &mut store,
             "https://example.com",
@@ -327,7 +327,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(key, sprite_cache_key("caption", "晚风"));
-        assert_eq!(store.sprites.get(&key), Some(&b"sprite bytes".to_vec()));
+        assert_eq!(sha256, sprite_sha256("caption", "晚风"));
+        assert_eq!(store.sprites.get(&sha256), Some(&b"sprite bytes".to_vec()));
     }
 }

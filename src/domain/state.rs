@@ -1,4 +1,4 @@
-use crate::model::{DisplayItem, DisplayState};
+use crate::model::{DisplayItem, DisplayState, ResourceIndex};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -89,6 +89,8 @@ pub struct CacheState {
     pub used_bytes: u64,
     #[serde(default)]
     pub free_bytes: u64,
+    #[serde(default)]
+    pub resources: ResourceIndex,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -112,7 +114,7 @@ pub struct PersistentDeviceState {
 }
 
 impl PersistentDeviceState {
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             last_successful_sync_epoch_seconds: None,
             last_sync_error: None,
@@ -129,6 +131,7 @@ impl PersistentDeviceState {
                 resource_count: 0,
                 used_bytes: 0,
                 free_bytes: 0,
+                resources: ResourceIndex::default(),
             },
             last_refresh_reason: None,
             last_wake_reason: None,

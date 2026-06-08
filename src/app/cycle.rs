@@ -253,6 +253,7 @@ fn update_cache_state(state: &mut PersistentDeviceState, resource_index: &Resour
         .iter()
         .map(|resource| resource.byte_size)
         .sum();
+    state.cache.resources = resource_index.clone();
 }
 
 fn refresh_notice(low_battery: bool, sync_failed: bool) -> Option<RenderNotice> {

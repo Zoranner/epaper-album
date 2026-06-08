@@ -1,33 +1,21 @@
-use crate::model::{DisplayState, PlanSnapshot, ResourceIndex};
+use crate::model::PlanSnapshot;
 use crate::state::PersistentDeviceState;
 use crate::storage::{
     read_json_file, to_json_string, write_json_file_atomic, StorageJsonRead, StorageJsonWrite,
-    CACHE_INDEX_PATH, DISPLAY_STATE_PATH, PLANS_CURRENT_PATH,
+    PLAN_PATH, STATE_PATH,
 };
 use std::path::{Path, PathBuf};
-
-pub const DEVICE_STATE_PATH: &str = "/sdcard/epaper-album/device-state.json";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppPaths {
     pub plan_snapshot: PathBuf,
-    pub resource_index: PathBuf,
-    // device-state.json is authoritative; display-state.json is an optional display snapshot.
-    pub display_state: PathBuf,
     pub device_state: PathBuf,
 }
 
 impl AppPaths {
-    pub fn new(
-        plan_snapshot: impl Into<PathBuf>,
-        resource_index: impl Into<PathBuf>,
-        display_state: impl Into<PathBuf>,
-        device_state: impl Into<PathBuf>,
-    ) -> Self {
+    pub fn new(plan_snapshot: impl Into<PathBuf>, device_state: impl Into<PathBuf>) -> Self {
         Self {
             plan_snapshot: plan_snapshot.into(),
-            resource_index: resource_index.into(),
-            display_state: display_state.into(),
             device_state: device_state.into(),
         }
     }
@@ -36,10 +24,8 @@ impl AppPaths {
 impl Default for AppPaths {
     fn default() -> Self {
         Self {
-            plan_snapshot: PathBuf::from(PLANS_CURRENT_PATH),
-            resource_index: PathBuf::from(CACHE_INDEX_PATH),
-            display_state: PathBuf::from(DISPLAY_STATE_PATH),
-            device_state: PathBuf::from(DEVICE_STATE_PATH),
+            plan_snapshot: PathBuf::from(PLAN_PATH),
+            device_state: PathBuf::from(STATE_PATH),
         }
     }
 }
@@ -60,22 +46,6 @@ impl AppFiles {
 
     pub fn write_plan_snapshot(&self, snapshot: &PlanSnapshot) -> StorageJsonWrite {
         write_plan_snapshot_file(&self.paths.plan_snapshot, snapshot)
-    }
-
-    pub fn read_resource_index(&self) -> StorageJsonRead<ResourceIndex> {
-        read_resource_index_file(&self.paths.resource_index)
-    }
-
-    pub fn write_resource_index(&self, index: &ResourceIndex) -> StorageJsonWrite {
-        write_resource_index_file(&self.paths.resource_index, index)
-    }
-
-    pub fn read_display_state(&self) -> StorageJsonRead<DisplayState> {
-        read_display_state_file(&self.paths.display_state)
-    }
-
-    pub fn write_display_state(&self, state: &DisplayState) -> StorageJsonWrite {
-        write_display_state_file(&self.paths.display_state, state)
     }
 
     pub fn read_device_state(&self) -> StorageJsonRead<PersistentDeviceState> {
@@ -101,22 +71,6 @@ pub fn plan_snapshot_to_json(snapshot: &PlanSnapshot) -> Result<String, serde_js
     to_json_string(snapshot)
 }
 
-pub fn resource_index_from_json(content: &str) -> Result<ResourceIndex, serde_json::Error> {
-    crate::storage::parse_json_str(content)
-}
-
-pub fn resource_index_to_json(index: &ResourceIndex) -> Result<String, serde_json::Error> {
-    to_json_string(index)
-}
-
-pub fn display_state_from_json(content: &str) -> Result<DisplayState, serde_json::Error> {
-    crate::storage::parse_json_str(content)
-}
-
-pub fn display_state_to_json(state: &DisplayState) -> Result<String, serde_json::Error> {
-    to_json_string(state)
-}
-
 pub fn device_state_from_json(content: &str) -> Result<PersistentDeviceState, serde_json::Error> {
     crate::storage::parse_json_str(content)
 }
@@ -136,25 +90,6 @@ pub fn write_plan_snapshot_file(
     write_json_file_atomic(path, snapshot)
 }
 
-pub fn read_resource_index_file(path: impl AsRef<Path>) -> StorageJsonRead<ResourceIndex> {
-    read_json_file(path)
-}
-
-pub fn write_resource_index_file(
-    path: impl AsRef<Path>,
-    index: &ResourceIndex,
-) -> StorageJsonWrite {
-    write_json_file_atomic(path, index)
-}
-
-pub fn read_display_state_file(path: impl AsRef<Path>) -> StorageJsonRead<DisplayState> {
-    read_json_file(path)
-}
-
-pub fn write_display_state_file(path: impl AsRef<Path>, state: &DisplayState) -> StorageJsonWrite {
-    write_json_file_atomic(path, state)
-}
-
 pub fn read_device_state_file(path: impl AsRef<Path>) -> StorageJsonRead<PersistentDeviceState> {
     read_json_file(path)
 }
@@ -169,7 +104,7 @@ pub fn write_device_state_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CachedResource, LocalDate, PlanItem};
+    use crate::model::{CachedResource, DisplayState, LocalDate, PlanItem, ResourceIndex};
 
     fn date(value: &str) -> LocalDate {
         LocalDate::parse(value).unwrap()
@@ -205,10 +140,8 @@ mod tests {
     fn app_files_round_trip_persistent_json() {
         let temp_dir = tempfile::tempdir().unwrap();
         let files = AppFiles::new(AppPaths::new(
-            temp_dir.path().join("plans").join("current.json"),
-            temp_dir.path().join("cache-index.json"),
-            temp_dir.path().join("display-state.json"),
-            temp_dir.path().join("device-state.json"),
+            temp_dir.path().join("plan.json"),
+            temp_dir.path().join("state.json"),
         ));
         let snapshot = snapshot(&["a"]);
         let resource_index = index(&["a"]);
@@ -223,17 +156,10 @@ mod tests {
         };
         let mut device_state = PersistentDeviceState::default();
         device_state.set_current_display(&display_state);
+        device_state.cache.resources = resource_index;
 
         assert_eq!(
             files.write_plan_snapshot(&snapshot),
-            StorageJsonWrite::Written
-        );
-        assert_eq!(
-            files.write_resource_index(&resource_index),
-            StorageJsonWrite::Written
-        );
-        assert_eq!(
-            files.write_display_state(&display_state),
             StorageJsonWrite::Written
         );
         assert_eq!(
@@ -242,14 +168,6 @@ mod tests {
         );
 
         assert_eq!(files.read_plan_snapshot(), StorageJsonRead::Value(snapshot));
-        assert_eq!(
-            files.read_resource_index(),
-            StorageJsonRead::Value(resource_index)
-        );
-        assert_eq!(
-            files.read_display_state(),
-            StorageJsonRead::Value(display_state)
-        );
         assert_eq!(
             files.read_device_state(),
             StorageJsonRead::Value(device_state)
@@ -271,18 +189,11 @@ mod tests {
         };
         let mut device_state = PersistentDeviceState::default();
         device_state.set_current_display(&display_state);
+        device_state.cache.resources = resource_index.clone();
 
         assert_eq!(
             plan_snapshot_from_json(&plan_snapshot_to_json(&snapshot).unwrap()).unwrap(),
             snapshot
-        );
-        assert_eq!(
-            resource_index_from_json(&resource_index_to_json(&resource_index).unwrap()).unwrap(),
-            resource_index
-        );
-        assert_eq!(
-            display_state_from_json(&display_state_to_json(&display_state).unwrap()).unwrap(),
-            display_state
         );
         assert_eq!(
             device_state_from_json(&device_state_to_json(&device_state).unwrap()).unwrap(),

@@ -143,7 +143,7 @@ mod tests {
             StorageWrite::Written
         }
 
-        fn save_sprite_bytes(&mut self, _key: &str, _content: &[u8]) -> StorageWrite {
+        fn save_sprite_bytes(&mut self, _sha256: &str, _content: &[u8]) -> StorageWrite {
             StorageWrite::Written
         }
     }

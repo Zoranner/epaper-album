@@ -2,8 +2,6 @@
 use crate::app::RunTrigger;
 
 #[cfg(target_os = "espidf")]
-use crate::app_storage::DEVICE_STATE_PATH;
-#[cfg(target_os = "espidf")]
 use crate::cloud::espidf::EspIdfHttpClient;
 #[cfg(target_os = "espidf")]
 use crate::config::{Config, CONFIG_PATH};
@@ -19,7 +17,7 @@ use crate::device_sync::{CloudResourceSync, DeviceSyncError};
 #[cfg(target_os = "espidf")]
 use crate::epd::espidf::EspEpdBus;
 #[cfg(target_os = "espidf")]
-use crate::model::{LocalDate, ResourceIndex};
+use crate::model::LocalDate;
 #[cfg(target_os = "espidf")]
 use crate::pmic::espidf::init_axp2101_for_photo_painter;
 #[cfg(target_os = "espidf")]
@@ -35,7 +33,7 @@ use crate::state::PersistentDeviceState;
 use crate::storage::{
     read_json_file_mounted, read_text_file_mounted, with_mounted_sdcard_parts,
     write_json_file_atomic_mounted, MountedSdCardResourceStore, StorageJsonRead, StorageJsonWrite,
-    StorageRead, CACHE_INDEX_PATH, DISPLAY_STATE_PATH, PLANS_CURRENT_PATH,
+    StorageRead, PLAN_PATH, STATE_PATH,
 };
 #[cfg(target_os = "espidf")]
 use crate::wifi::espidf::{connect_wifi, ConnectedWifi, WifiConnectError};
@@ -103,11 +101,10 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
         pins.gpio38,
         || {
             let config = read_config_mounted();
-            let snapshot = read_optional_json_mounted(PLANS_CURRENT_PATH);
-            let resource_index =
-                read_optional_json_mounted(CACHE_INDEX_PATH).unwrap_or_else(ResourceIndex::default);
-            let persistent_state = read_optional_json_mounted(DEVICE_STATE_PATH)
+            let snapshot = read_optional_json_mounted(PLAN_PATH);
+            let persistent_state = read_optional_json_mounted(STATE_PATH)
                 .unwrap_or_else(PersistentDeviceState::default);
+            let resource_index = persistent_state.cache.resources.clone();
             let battery = BatteryStatus::unknown();
             let power_profile = PowerProfile::from(&battery);
             let due = profile_sync_due(
@@ -261,11 +258,9 @@ where
 #[cfg(target_os = "espidf")]
 fn write_cycle_files(cycle: &DeviceCycleResult) -> Result<(), EspDeviceRunOutcome> {
     if let Some(snapshot) = &cycle.snapshot {
-        write_json_checked(PLANS_CURRENT_PATH, snapshot)?;
+        write_json_checked(PLAN_PATH, snapshot)?;
     }
-    write_json_checked(CACHE_INDEX_PATH, &cycle.resource_index)?;
-    write_json_checked(DEVICE_STATE_PATH, &cycle.persistent_state)?;
-    write_json_checked(DISPLAY_STATE_PATH, &cycle.persistent_state.display_state())?;
+    write_json_checked(STATE_PATH, &cycle.persistent_state)?;
     Ok(())
 }
 

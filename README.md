@@ -79,7 +79,7 @@ I (...) epaper_album: next wake: Some(...), sleep seconds: Some(...)
 
 `device outcome` 表示 ESP-IDF 适配层结果，常见值包括 `completed`、`storage-mount-error`、`epd-init-error` 和 `state-write-error`。`cycle outcome` 表示业务周期结果，常见值包括 `SyncRequested`、`RefreshOnly`、`SleepOnly`、`LowBatterySkipSync`、`SyncFailed`、`RefreshFailed` 和 `NoUsablePhoto`。`next wake` 和 `sleep seconds` 来自调度计算，当前开发入口输出计划值，深度睡眠执行保持手动接入。
 
-TF 卡根目录放置 `/sdcard/config.toml`，设备即可读取 Wi-Fi、云端地址和 `secret-key`。云端计划引用的图片缓存到 `/sdcard/epaper-album/images/`，标题、日期和通知 sprite 缓存到 `/sdcard/epaper-album/sprites/`，运行状态写入 `/sdcard/epaper-album/device-state.json`。
+TF 卡根目录放置 `/sdcard/config.toml`，设备即可读取 Wi-Fi、云端地址和 `secret-key`。设备运行数据写入 `/sdcard/data/`：当前计划保存为 `plan.json`，运行状态保存为 `state.json`，图片缓存保存到 `images/{sha256}.bmp`，标题、日期和通知 sprite 缓存保存到 `sprites/{sha256}.bmp`。
 
 硬件照片自检阶段使用的 `test.bmp` 仍可作为屏幕链路排查资源。`test.bmp` 使用 `800x480`、24-bit、未压缩 BMP。仓库提供桌面照片处理脚本，可以把桌面 `sample.jpg` 转成六色屏测试图：
 

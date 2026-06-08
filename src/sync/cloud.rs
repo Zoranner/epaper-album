@@ -69,12 +69,12 @@ pub fn sprite_url(base_url: &str, kind: &str, text: &str) -> Result<String, Clou
     )
 }
 
-pub fn sprite_cache_key(kind: &str, text: &str) -> String {
+pub fn sprite_sha256(kind: &str, text: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(kind.as_bytes());
     hasher.update(b"\n");
     hasher.update(text.as_bytes());
-    format!("sprite-{}", hex_lower(&hasher.finalize()))
+    hex_lower(&hasher.finalize())
 }
 
 pub fn parse_plan_response(body: &[u8]) -> Result<PlanSnapshot, CloudSyncError> {
@@ -300,13 +300,13 @@ mod tests {
     }
 
     #[test]
-    fn builds_stable_sprite_cache_key() {
-        let first = sprite_cache_key("caption", "晚风");
-        let second = sprite_cache_key("caption", "晚风");
-        let changed = sprite_cache_key("date", "晚风");
+    fn builds_stable_sprite_sha256() {
+        let first = sprite_sha256("caption", "晚风");
+        let second = sprite_sha256("caption", "晚风");
+        let changed = sprite_sha256("date", "晚风");
 
         assert_eq!(first, second);
-        assert!(first.starts_with("sprite-"));
+        assert_eq!(first.len(), 64);
         assert_ne!(first, changed);
     }
 }

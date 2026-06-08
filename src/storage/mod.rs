@@ -3,12 +3,11 @@ pub mod app_files;
 use crate::model::PlanSnapshot;
 use std::path::{Path, PathBuf};
 
-pub const ALBUM_ROOT: &str = "/sdcard/epaper-album";
-pub const PLANS_CURRENT_PATH: &str = "/sdcard/epaper-album/plans/current.json";
-pub const CACHE_INDEX_PATH: &str = "/sdcard/epaper-album/cache-index.json";
-pub const DISPLAY_STATE_PATH: &str = "/sdcard/epaper-album/display-state.json";
-pub const IMAGES_DIR: &str = "/sdcard/epaper-album/images";
-pub const SPRITES_DIR: &str = "/sdcard/epaper-album/sprites";
+pub const DATA_ROOT: &str = "/sdcard/data";
+pub const PLAN_PATH: &str = "/sdcard/data/plan.json";
+pub const STATE_PATH: &str = "/sdcard/data/state.json";
+pub const IMAGES_DIR: &str = "/sdcard/data/images";
+pub const SPRITES_DIR: &str = "/sdcard/data/sprites";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StorageRead {
@@ -54,7 +53,7 @@ pub enum StorageJsonWrite {
 pub trait ResourceStore {
     fn save_plan_snapshot(&mut self, snapshot: &PlanSnapshot) -> StorageJsonWrite;
     fn save_image_bytes(&mut self, sha256: &str, content: &[u8]) -> StorageWrite;
-    fn save_sprite_bytes(&mut self, key: &str, content: &[u8]) -> StorageWrite;
+    fn save_sprite_bytes(&mut self, sha256: &str, content: &[u8]) -> StorageWrite;
 }
 
 #[derive(Debug, Default)]
@@ -65,29 +64,29 @@ pub struct MountedSdCardResourceStore;
 
 impl ResourceStore for SdCardResourceStore {
     fn save_plan_snapshot(&mut self, snapshot: &PlanSnapshot) -> StorageJsonWrite {
-        write_json_file_atomic(PLANS_CURRENT_PATH, snapshot)
+        write_json_file_atomic(PLAN_PATH, snapshot)
     }
 
     fn save_image_bytes(&mut self, sha256: &str, content: &[u8]) -> StorageWrite {
         write_binary_file_atomic(image_bmp_path(sha256), content)
     }
 
-    fn save_sprite_bytes(&mut self, key: &str, content: &[u8]) -> StorageWrite {
-        write_binary_file_atomic(sprite_bmp_path(key), content)
+    fn save_sprite_bytes(&mut self, sha256: &str, content: &[u8]) -> StorageWrite {
+        write_binary_file_atomic(sprite_bmp_path(sha256), content)
     }
 }
 
 impl ResourceStore for MountedSdCardResourceStore {
     fn save_plan_snapshot(&mut self, snapshot: &PlanSnapshot) -> StorageJsonWrite {
-        write_json_file_atomic_mounted(PLANS_CURRENT_PATH, snapshot)
+        write_json_file_atomic_mounted(PLAN_PATH, snapshot)
     }
 
     fn save_image_bytes(&mut self, sha256: &str, content: &[u8]) -> StorageWrite {
         write_binary_file_atomic_mounted(image_bmp_path(sha256), content)
     }
 
-    fn save_sprite_bytes(&mut self, key: &str, content: &[u8]) -> StorageWrite {
-        write_binary_file_atomic_mounted(sprite_bmp_path(key), content)
+    fn save_sprite_bytes(&mut self, sha256: &str, content: &[u8]) -> StorageWrite {
+        write_binary_file_atomic_mounted(sprite_bmp_path(sha256), content)
     }
 }
 
@@ -95,8 +94,8 @@ pub fn image_bmp_path(sha256: &str) -> PathBuf {
     Path::new(IMAGES_DIR).join(format!("{sha256}.bmp"))
 }
 
-pub fn sprite_bmp_path(key: &str) -> PathBuf {
-    Path::new(SPRITES_DIR).join(format!("{key}.bmp"))
+pub fn sprite_bmp_path(sha256: &str) -> PathBuf {
+    Path::new(SPRITES_DIR).join(format!("{sha256}.bmp"))
 }
 
 pub fn parse_json_str<T>(content: &str) -> Result<T, serde_json::Error>
@@ -443,19 +442,14 @@ mod tests {
 
     #[test]
     fn builds_album_resource_paths() {
-        assert_eq!(
-            Path::new(PLANS_CURRENT_PATH),
-            Path::new(ALBUM_ROOT).join("plans").join("current.json")
-        );
+        assert_eq!(Path::new(PLAN_PATH), Path::new(DATA_ROOT).join("plan.json"));
         assert_eq!(
             image_bmp_path("abc"),
-            Path::new(ALBUM_ROOT).join("images").join("abc.bmp")
+            Path::new(DATA_ROOT).join("images").join("abc.bmp")
         );
         assert_eq!(
-            sprite_bmp_path("battery-low"),
-            Path::new(ALBUM_ROOT)
-                .join("sprites")
-                .join("battery-low.bmp")
+            sprite_bmp_path("abc"),
+            Path::new(DATA_ROOT).join("sprites").join("abc.bmp")
         );
     }
 
