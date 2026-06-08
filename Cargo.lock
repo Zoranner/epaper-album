@@ -567,6 +567,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "embuild",
+ "epaper-album-core",
  "esp-idf-hal",
  "esp-idf-svc",
  "esp-idf-sys",
@@ -577,6 +578,13 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "toml",
+]
+
+[[package]]
+name = "epaper-album-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
