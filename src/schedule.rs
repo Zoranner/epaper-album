@@ -1,6 +1,7 @@
 use crate::model::{DisplayItem, DisplayState, LocalDate, PlanItem, PlanSnapshot};
+use crate::power::BATTERY_SYNC_INTERVAL_SECONDS;
 
-pub const DAILY_SYNC_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
+pub const DAILY_SYNC_INTERVAL_SECONDS: u64 = BATTERY_SYNC_INTERVAL_SECONDS;
 
 pub fn next_daily_sync_epoch_seconds(
     last_successful_sync_epoch_seconds: u64,

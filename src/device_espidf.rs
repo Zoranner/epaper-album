@@ -23,12 +23,12 @@ use crate::model::{LocalDate, ResourceIndex};
 #[cfg(target_os = "espidf")]
 use crate::pmic::espidf::init_axp2101_for_photo_painter;
 #[cfg(target_os = "espidf")]
-use crate::power::{next_wakeup_sleep_plan, BatteryStatus, SleepPlan};
-#[cfg(target_os = "espidf")]
-use crate::schedule::{
-    daily_sync_due, next_daily_sync_epoch_seconds, next_plan_change_date,
-    DAILY_SYNC_INTERVAL_SECONDS,
+use crate::power::{
+    next_profile_sync_epoch_seconds, next_wakeup_sleep_plan, profile_sync_due, BatteryStatus,
+    PowerProfile, SleepPlan,
 };
+#[cfg(target_os = "espidf")]
+use crate::schedule::{next_plan_change_date, DAILY_SYNC_INTERVAL_SECONDS};
 #[cfg(target_os = "espidf")]
 use crate::state::PersistentDeviceState;
 #[cfg(target_os = "espidf")]
@@ -108,7 +108,10 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
                 read_optional_json_mounted(CACHE_INDEX_PATH).unwrap_or_else(ResourceIndex::default);
             let persistent_state = read_optional_json_mounted(DEVICE_STATE_PATH)
                 .unwrap_or_else(PersistentDeviceState::default);
-            let due = daily_sync_due(
+            let battery = BatteryStatus::unknown();
+            let power_profile = PowerProfile::from(&battery);
+            let due = profile_sync_due(
+                power_profile,
                 persistent_state.last_successful_sync_epoch_seconds,
                 now_epoch_seconds,
             );
@@ -136,7 +139,7 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
                     now_epoch_seconds,
                     date,
                     rotation_slot: rotation_slot(now_epoch_seconds),
-                    battery: BatteryStatus::unknown(),
+                    battery,
                     daily_sync_due: due,
                 },
                 &mut sync,
@@ -285,11 +288,13 @@ fn build_sleep_plan(
     now_epoch_seconds: u64,
     date: LocalDate,
 ) -> SleepPlan {
-    let next_sync = cycle
-        .persistent_state
-        .last_successful_sync_epoch_seconds
-        .map(|last_sync| next_daily_sync_epoch_seconds(last_sync, now_epoch_seconds))
-        .unwrap_or(now_epoch_seconds.saturating_add(DAILY_SYNC_INTERVAL_SECONDS));
+    let power_profile = PowerProfile::from(&cycle.battery);
+    let next_sync = next_profile_sync_epoch_seconds(
+        power_profile,
+        cycle.persistent_state.last_successful_sync_epoch_seconds,
+        now_epoch_seconds,
+    )
+    .unwrap_or(now_epoch_seconds.saturating_add(DAILY_SYNC_INTERVAL_SECONDS));
     let next_plan_change = cycle
         .snapshot
         .as_ref()

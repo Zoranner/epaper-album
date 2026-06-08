@@ -67,6 +67,7 @@ pub struct DeviceCycleResult {
     pub snapshot: Option<PlanSnapshot>,
     pub resource_index: ResourceIndex,
     pub persistent_state: PersistentDeviceState,
+    pub battery: BatteryStatus,
     pub display_decision: DisplayDecision,
     pub outcome: DeviceCycleOutcome,
     pub sync_attempted: bool,
@@ -233,6 +234,7 @@ where
         snapshot,
         resource_index,
         persistent_state,
+        battery,
         display_decision: decision,
         outcome,
         sync_attempted,
@@ -468,6 +470,7 @@ mod tests {
         assert!(sync.requests.is_empty());
         assert_eq!(display.requests.len(), 1);
         assert_eq!(result.outcome, DeviceCycleOutcome::LowBatterySkipSync);
+        assert!(result.battery.low_battery);
         assert!(!result.daily_sync_consumed);
         assert!(result.refresh_succeeded);
     }
