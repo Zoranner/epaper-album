@@ -1,0 +1,70 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  min-width: 320px;
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--color-text-body);
+  background: var(--color-bg);
+  font-family: var(--font-ui);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+code {
+  font-family: var(--font-mono);
+}
+
+h1,
+h2,
+h3,
+p,
+dl,
+dd {
+  margin: 0;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  min-height: var(--control-height);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-body);
+  outline: none;
+}
+
+input,
+select {
+  padding: 0 var(--space-2);
+}
+
+textarea {
+  min-height: 84px;
+  padding: var(--space-2);
+  resize: vertical;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--color-primary);
+}

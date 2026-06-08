@@ -1,0 +1,45 @@
+:root {
+  --color-bg: #f7f8f6;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f2f4f1;
+  --color-line: #d7ddd3;
+  --color-line-soft: #e7ebe4;
+  --color-text: #202421;
+  --color-text-body: #2b302c;
+  --color-text-muted: #687069;
+  --color-primary: #155e75;
+  --color-primary-hover: #0f4d60;
+  --color-primary-soft: #e8f2f5;
+  --color-danger: #a33a3a;
+  --color-danger-hover: #872f2f;
+  --color-success-bg: #e4f5e9;
+  --color-success-text: #176137;
+  --color-warning-bg: #f8edcf;
+  --color-warning-text: #83530d;
+  --color-error-bg: #f7e1e1;
+  --color-error-text: #8f2626;
+
+  --font-ui: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 18px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-pill: 999px;
+
+  --control-height: 32px;
+  --button-height: 32px;
+  --button-height-sm: 28px;
+}
