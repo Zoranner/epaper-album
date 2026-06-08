@@ -1,3 +1,5 @@
+pub mod cycle;
+
 use crate::power::BatteryStatus;
 use crate::schedule::{display_needs_refresh, select_plan_for_date};
 use crate::state::{PersistentDeviceState, WakeReason};

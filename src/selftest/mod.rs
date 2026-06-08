@@ -1,3 +1,6 @@
+#[cfg(target_os = "espidf")]
+pub mod hardware;
+
 use crate::config::Config;
 #[cfg(not(target_os = "espidf"))]
 use crate::display::{DisplayRefreshMode, EpaperDisplay, MockDisplay};

@@ -1,3 +1,5 @@
+pub mod app_files;
+
 use crate::model::PlanSnapshot;
 use std::path::{Path, PathBuf};
 
