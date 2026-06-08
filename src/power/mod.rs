@@ -338,8 +338,16 @@ pub mod espidf {
 
     use esp_idf_hal::reset::WakeupReason;
     use esp_idf_hal::sleep::DeepSleep;
+    use esp_idf_sys::{
+        esp, gpio_config, gpio_config_t, gpio_get_level, gpio_int_type_t_GPIO_INTR_DISABLE,
+        gpio_mode_t_GPIO_MODE_INPUT, gpio_num_t_GPIO_NUM_4, gpio_pulldown_t_GPIO_PULLDOWN_DISABLE,
+        gpio_pullup_t_GPIO_PULLUP_ENABLE,
+    };
 
     pub const SELF_TEST_TIMER_WAKE_SECONDS: u64 = 20;
+    pub const SELF_TEST_KEY_GPIO: i32 = gpio_num_t_GPIO_NUM_4;
+    const SELF_TEST_KEY_HOLD_MS: u32 = 1_800;
+    const SELF_TEST_KEY_SAMPLE_MS: u32 = 30;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum WakeProbe {
@@ -376,6 +384,42 @@ pub mod espidf {
 
     pub fn wake_probe() -> WakeProbe {
         WakeupReason::get().into()
+    }
+
+    pub fn self_test_key_long_pressed() -> bool {
+        if configure_self_test_key().is_err() {
+            return false;
+        }
+
+        if !self_test_key_pressed() {
+            return false;
+        }
+
+        let samples = SELF_TEST_KEY_HOLD_MS / SELF_TEST_KEY_SAMPLE_MS;
+        for _ in 0..samples {
+            esp_idf_hal::delay::FreeRtos::delay_ms(SELF_TEST_KEY_SAMPLE_MS);
+            if !self_test_key_pressed() {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn configure_self_test_key() -> Result<(), esp_idf_sys::EspError> {
+        let config = gpio_config_t {
+            pin_bit_mask: 1u64 << SELF_TEST_KEY_GPIO,
+            mode: gpio_mode_t_GPIO_MODE_INPUT,
+            pull_up_en: gpio_pullup_t_GPIO_PULLUP_ENABLE,
+            pull_down_en: gpio_pulldown_t_GPIO_PULLDOWN_DISABLE,
+            intr_type: gpio_int_type_t_GPIO_INTR_DISABLE,
+        };
+
+        unsafe { esp!(gpio_config(&config)) }
+    }
+
+    fn self_test_key_pressed() -> bool {
+        unsafe { gpio_get_level(SELF_TEST_KEY_GPIO) == 0 }
     }
 
     pub fn enter_timer_deep_sleep(seconds: u64) -> Result<(), esp_idf_sys::EspError> {

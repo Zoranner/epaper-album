@@ -1,83 +1,35 @@
 use crate::config::{Config, CONFIG_PATH};
 use crate::display::{Color, SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::epd::{
-    espidf::EspEpdBus, run_epd_hardware_self_test, run_epd_packed_frame,
-    set_logical_packed_frame_pixel, EPD_FRAME_BYTES, EPD_ROW_BYTES,
+    espidf::EspEpdBus, pack_epd_pixels, run_epd_packed_frame, set_logical_packed_frame_pixel,
+    EPD_FRAME_BYTES,
 };
 use crate::pmic::espidf::{chip_id_is_axp2101, init_axp2101_for_photo_painter};
 use crate::power::espidf::WakeProbe;
-use crate::render::{OverlaySlot, TextStyle};
+use crate::render::{glyph_pattern, TextStyle};
 use crate::selftest::{ConfigProbe, RenderProbe, SelfTestReport, StorageProbe};
-use crate::storage::{with_mounted_sdcard_parts, StorageBinaryRead, StorageRead};
+use crate::storage::{with_mounted_sdcard_parts, StorageRead};
 use crate::wifi::espidf::{probe_test_network, HttpProbe, WifiProbe};
-use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
-const TEST_BMP_PATH: &str = "/sdcard/test.bmp";
 const WAKE_TEST_MARKER_PATH: &str = "/sdcard/wake-test.txt";
-const TITLE_TEXT_WIDTH: usize = 89;
-const TITLE_TEXT_HEIGHT: usize = 20;
-const TITLE_TEXT_BYTES_PER_ROW: usize = 12;
-const TITLE_TEXT_BITMAP: [u8; 240] = [
-    0x01, 0xC0, 0x00, 0x0E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xC0, 0x00, 0x0E,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xC0, 0x00, 0x07, 0x00, 0x01, 0xFF, 0xF0,
-    0x00, 0x00, 0x00, 0x00, 0x01, 0xC0, 0x07, 0xFF, 0xFE, 0x01, 0xFF, 0xF0, 0x00, 0x00, 0x06, 0x00,
-    0xFF, 0xFF, 0xC7, 0xFF, 0xFE, 0x01, 0xFF, 0xF0, 0x00, 0x00, 0x0E, 0x00, 0xFF, 0xFF, 0xC0, 0xE0,
-    0x70, 0x00, 0x0E, 0x00, 0x00, 0x00, 0x0E, 0x00, 0xE1, 0xC1, 0xC0, 0xE0, 0x70, 0x00, 0x0E, 0x00,
-    0xF8, 0x1F, 0x3F, 0x80, 0xE1, 0xC1, 0xC0, 0xE0, 0xF0, 0x00, 0x0E, 0x01, 0xFC, 0x3F, 0x3F, 0x80,
-    0xE1, 0xC1, 0xC0, 0x70, 0xE0, 0x00, 0x0E, 0x03, 0xFE, 0x7F, 0x3F, 0x80, 0xE1, 0xC1, 0xC0, 0x70,
-    0xE0, 0x00, 0x0E, 0x07, 0x0E, 0x71, 0x0E, 0x00, 0xE1, 0xC1, 0xC0, 0x39, 0xC0, 0x00, 0x0E, 0x07,
-    0xFE, 0x7E, 0x0E, 0x00, 0xFF, 0xFF, 0xC0, 0x3B, 0xC0, 0x00, 0x0E, 0x07, 0xFE, 0x3F, 0x0E, 0x00,
-    0xFF, 0xFF, 0xC0, 0x1F, 0x80, 0x00, 0x0E, 0x07, 0x00, 0x1F, 0x8E, 0x00, 0xE1, 0xC1, 0xC0, 0x1F,
-    0x80, 0x00, 0x0E, 0x07, 0x84, 0x43, 0x8E, 0x00, 0xE1, 0xC1, 0xC0, 0x1F, 0xC0, 0x00, 0x0E, 0x03,
-    0xFC, 0x7F, 0x8F, 0x80, 0x01, 0xC0, 0x00, 0x3F, 0xE0, 0x00, 0x0E, 0x03, 0xFC, 0x7F, 0x0F, 0x80,
-    0x01, 0xC0, 0x00, 0xF9, 0xF0, 0x00, 0x0E, 0x00, 0xF8, 0x7E, 0x07, 0x80, 0x01, 0xC0, 0x03, 0xE0,
-    0x7C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xC0, 0x07, 0x80, 0x3E, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x01, 0xC0, 0x02, 0x00, 0x0C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-];
-const DATE_TEXT_WIDTH: usize = 112;
-const DATE_TEXT_HEIGHT: usize = 15;
-const DATE_TEXT_BYTES_PER_ROW: usize = 14;
-const DATE_TEXT_BITMAP: [u8; 210] = [
-    0x1E, 0x01, 0xE0, 0x1E, 0x00, 0xF8, 0x00, 0x0F, 0x00, 0x7C, 0x00, 0x07, 0x83, 0xFF, 0x7F, 0x03,
-    0xF8, 0x7F, 0x03, 0xF8, 0x00, 0x1F, 0xC1, 0xFC, 0x00, 0x0F, 0xE3, 0xFF, 0x7F, 0x87, 0xF8, 0x7F,
-    0x83, 0xF8, 0x00, 0x3F, 0xC1, 0xFC, 0x00, 0x1F, 0xE3, 0xFF, 0x43, 0x87, 0x3C, 0x43, 0x87, 0x88,
-    0x00, 0x39, 0xE3, 0xC4, 0x00, 0x1C, 0xF0, 0x0E, 0x03, 0x8E, 0x1C, 0x03, 0x87, 0x00, 0x00, 0x70,
-    0xE3, 0x80, 0x00, 0x38, 0x70, 0x0E, 0x03, 0x8E, 0x1C, 0x03, 0x8E, 0xF0, 0x00, 0x70, 0xE7, 0x78,
-    0x00, 0x38, 0x70, 0x1C, 0x07, 0x8E, 0x1C, 0x07, 0x8F, 0xF8, 0x00, 0x70, 0xE7, 0xFC, 0x00, 0x38,
-    0x70, 0x1C, 0x0F, 0x0E, 0x1C, 0x0F, 0x0F, 0xFC, 0x00, 0x70, 0xE7, 0xFE, 0x00, 0x38, 0x70, 0x38,
-    0x1E, 0x0E, 0x1C, 0x1E, 0x0F, 0x1C, 0x7E, 0x70, 0xE7, 0x8E, 0x3F, 0x38, 0x70, 0x38, 0x3C, 0x0E,
-    0x1C, 0x3C, 0x0E, 0x1C, 0x7E, 0x70, 0xE7, 0x0E, 0x3F, 0x38, 0x70, 0x70, 0x78, 0x0E, 0x1C, 0x78,
-    0x0E, 0x1C, 0x00, 0x70, 0xE7, 0x0E, 0x00, 0x38, 0x70, 0x70, 0x70, 0x0F, 0x38, 0x70, 0x0F, 0x3C,
-    0x00, 0x79, 0xC7, 0x9E, 0x00, 0x3C, 0xE0, 0x70, 0xFF, 0x87, 0xF8, 0xFF, 0x87, 0xF8, 0x00, 0x3F,
-    0xC3, 0xFC, 0x00, 0x1F, 0xE0, 0xE0, 0xFF, 0x87, 0xF0, 0xFF, 0x83, 0xF8, 0x00, 0x3F, 0x81, 0xFC,
-    0x00, 0x1F, 0xC0, 0xE0, 0xFF, 0x81, 0xE0, 0xFF, 0x81, 0xE0, 0x00, 0x0F, 0x00, 0xF0, 0x00, 0x07,
-    0x80, 0xE0,
-];
-const NOTICE_TEXT_WIDTH: usize = 93;
-const NOTICE_TEXT_HEIGHT: usize = 15;
-const NOTICE_TEXT_BYTES_PER_ROW: usize = 12;
-const NOTICE_TEXT_BITMAP: [u8; 180] = [
-    0x0F, 0xC1, 0xE0, 0x39, 0xFE, 0x3F, 0xC0, 0xE0, 0x01, 0xE0, 0xF0, 0x78, 0x1F, 0xF0, 0xE0, 0x71,
-    0xFE, 0x3F, 0xE0, 0xE0, 0x03, 0xF0, 0x70, 0x70, 0x3F, 0xF0, 0xE0, 0x71, 0xFE, 0x3F, 0xF0, 0xE0,
-    0x03, 0xF0, 0x78, 0x70, 0x78, 0x78, 0xF0, 0x71, 0xC0, 0x38, 0xF0, 0xE0, 0x03, 0xF0, 0x38, 0xE0,
-    0x70, 0x3C, 0x70, 0xE1, 0xC0, 0x38, 0x70, 0xE0, 0x07, 0xF8, 0x3C, 0xE0, 0xE0, 0x1C, 0x70, 0xE1,
-    0xC0, 0x38, 0x70, 0xE0, 0x07, 0x38, 0x1D, 0xC0, 0xE0, 0x1C, 0x70, 0xE1, 0xFC, 0x38, 0xF0, 0xE0,
-    0x07, 0x38, 0x1D, 0xC0, 0xE0, 0x1C, 0x39, 0xC1, 0xFC, 0x3F, 0xE0, 0xE0, 0x0F, 0x3C, 0x0F, 0x80,
-    0xE0, 0x1C, 0x39, 0xC1, 0xFC, 0x3F, 0xC0, 0xE0, 0x0E, 0x1C, 0x0F, 0x80, 0xE0, 0x1C, 0x39, 0xC1,
-    0xC0, 0x3F, 0xC0, 0xE0, 0x0F, 0xFC, 0x07, 0x00, 0xF0, 0x38, 0x1F, 0x81, 0xC0, 0x39, 0xE0, 0xE0,
-    0x1F, 0xFE, 0x07, 0x00, 0x78, 0x78, 0x1F, 0x81, 0xC0, 0x38, 0xF0, 0xE0, 0x1F, 0xFE, 0x07, 0x00,
-    0x3F, 0xF0, 0x1F, 0x81, 0xFE, 0x38, 0x70, 0xFF, 0x9C, 0x0E, 0x07, 0x00, 0x1F, 0xE0, 0x0F, 0x01,
-    0xFE, 0x38, 0x78, 0xFF, 0xBC, 0x0F, 0x07, 0x00, 0x0F, 0xC0, 0x0F, 0x01, 0xFE, 0x38, 0x3C, 0xFF,
-    0xB8, 0x0F, 0x07, 0x00,
+const SELF_TEST_PANEL_X: usize = 80;
+const SELF_TEST_PANEL_Y: usize = 76;
+const SELF_TEST_PANEL_WIDTH: usize = SCREEN_WIDTH - SELF_TEST_PANEL_X * 2;
+const SELF_TEST_PANEL_HEIGHT: usize = SCREEN_HEIGHT - SELF_TEST_PANEL_Y * 2;
+const SELF_TEST_PANEL_BORDER: usize = 4;
+const SELF_TEST_BARS: [Color; 6] = [
+    Color::Green,
+    Color::Blue,
+    Color::Red,
+    Color::Yellow,
+    Color::Black,
+    Color::White,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EpdProbe {
     Refreshed,
-    PhotoRefreshed,
-    ImageFormatError,
-    ImageReadError,
     InitError,
     BusyTimeout,
     TransportError,
@@ -87,9 +39,6 @@ impl EpdProbe {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Refreshed => "refreshed",
-            Self::PhotoRefreshed => "photo-refreshed",
-            Self::ImageFormatError => "image-format-error",
-            Self::ImageReadError => "image-read-error",
             Self::InitError => "init-error",
             Self::BusyTimeout => "busy-timeout",
             Self::TransportError => "transport-error",
@@ -104,6 +53,7 @@ pub struct HardwareSelfTestReport {
     pub wifi: WifiProbe,
     pub http: HttpProbe,
     pub wake_marker: WakeMarkerProbe,
+    pub wake: WakeProbe,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -144,6 +94,7 @@ pub fn run_espidf_hardware_self_test(wake: WakeProbe) -> HardwareSelfTestReport 
                 wifi: WifiProbe::InitError,
                 http: HttpProbe::Skipped,
                 wake_marker: WakeMarkerProbe::ReadError,
+                wake,
             };
         }
     };
@@ -165,7 +116,7 @@ pub fn run_espidf_hardware_self_test(wake: WakeProbe) -> HardwareSelfTestReport 
         }
     }
 
-    let (config_read, image_read, wake_marker) = match with_mounted_sdcard_parts(
+    let (config_read, wake_marker) = match with_mounted_sdcard_parts(
         peripherals.sdmmc1,
         pins.gpio41,
         pins.gpio39,
@@ -175,41 +126,18 @@ pub fn run_espidf_hardware_self_test(wake: WakeProbe) -> HardwareSelfTestReport 
         pins.gpio38,
         || {
             let config_read = read_text_from_mounted_path(Path::new(CONFIG_PATH));
-            let image_read = read_epd_frame_from_mounted_bmp(Path::new(TEST_BMP_PATH));
             let wake_marker = probe_wake_marker(Path::new(WAKE_TEST_MARKER_PATH), wake);
-            Ok((config_read, image_read, wake_marker))
+            Ok((config_read, wake_marker))
         },
     ) {
         Ok(Ok(files)) => files,
-        Ok(Err(_)) => (
-            StorageRead::ReadError,
-            StorageBinaryRead::ReadError,
-            WakeMarkerProbe::ReadError,
-        ),
-        Err(_) => (
-            StorageRead::MountError,
-            StorageBinaryRead::MountError,
-            WakeMarkerProbe::ReadError,
-        ),
+        Ok(Err(_)) | Err(_) => (StorageRead::MountError, WakeMarkerProbe::ReadError),
     };
 
     let storage = probe_storage(&config_read);
     let config = probe_config(config_read);
     let network = probe_test_network(peripherals.modem, config.value.as_ref());
-    let epd = match EspEpdBus::new(
-        peripherals.spi3,
-        pins.gpio10,
-        pins.gpio11,
-        pins.gpio9,
-        pins.gpio8,
-        pins.gpio12,
-        pins.gpio13,
-    ) {
-        Ok(mut bus) => refresh_epd_from_self_test_image(&mut bus, image_read),
-        Err(_) => EpdProbe::InitError,
-    };
-
-    HardwareSelfTestReport {
+    let mut report = HardwareSelfTestReport {
         base: SelfTestReport {
             storage,
             config: config.probe,
@@ -218,182 +146,164 @@ pub fn run_espidf_hardware_self_test(wake: WakeProbe) -> HardwareSelfTestReport 
                 slept: false,
             },
         },
-        epd,
+        epd: EpdProbe::Refreshed,
         wifi: network.wifi,
         http: network.http,
         wake_marker,
-    }
-}
-
-fn refresh_epd_from_self_test_image(
-    bus: &mut EspEpdBus,
-    image_read: StorageBinaryRead,
-) -> EpdProbe {
-    match image_read {
-        StorageBinaryRead::Bytes(frame) => {
-            log::info!(
-                target: "epaper_album",
-                "test.bmp: {} frame bytes, photo-refresh",
-                frame.len()
-            );
-
-            match run_epd_packed_frame(bus, &frame) {
-                Ok(()) => EpdProbe::PhotoRefreshed,
-                Err(error) => epd_error_probe(error),
-            }
-        }
-        StorageBinaryRead::Missing => match run_epd_hardware_self_test(bus) {
-            Ok(()) => EpdProbe::Refreshed,
-            Err(error) => epd_error_probe(error),
-        },
-        StorageBinaryRead::FormatError => EpdProbe::ImageFormatError,
-        StorageBinaryRead::ReadError => EpdProbe::ImageReadError,
-        StorageBinaryRead::MountError => EpdProbe::ImageReadError,
-    }
-}
-
-fn read_epd_frame_from_mounted_bmp(image_path: &Path) -> StorageBinaryRead {
-    match read_epd_frame_from_mounted_bmp_result(image_path) {
-        Ok(frame) => StorageBinaryRead::Bytes(frame),
-        Err(ReadImageError::Missing) => StorageBinaryRead::Missing,
-        Err(ReadImageError::Format) => StorageBinaryRead::FormatError,
-        Err(ReadImageError::Read) => StorageBinaryRead::ReadError,
-    }
-}
-
-fn read_epd_frame_from_mounted_bmp_result(image_path: &Path) -> Result<Vec<u8>, ReadImageError> {
-    let mut file = match std::fs::File::open(image_path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(ReadImageError::Missing);
-        }
-        Err(_) => return Err(ReadImageError::Read),
+        wake,
     };
-    let total_len = file.metadata().map_err(|_| ReadImageError::Read)?.len();
-    let mut header_bytes = [0u8; 54];
-    file.read_exact(&mut header_bytes)
-        .map_err(|_| ReadImageError::Read)?;
-    let header = crate::bmp::parse_bmp_header(&header_bytes, total_len)
-        .map_err(|_| ReadImageError::Format)?;
-    let row_stride = crate::bmp::bmp_24bit_row_stride();
-    let mut row_bgr = vec![0u8; row_stride];
-    let mut frame = vec![0u8; EPD_FRAME_BYTES];
 
-    for panel_y in 0..crate::epd::EPD_HEIGHT {
-        let source_y = crate::epd::EPD_HEIGHT - 1 - panel_y;
-        let bmp_file_y = if header.top_down {
-            source_y
-        } else {
-            crate::epd::EPD_HEIGHT - 1 - source_y
-        };
-        let offset = header.pixel_offset + (bmp_file_y * row_stride) as u64;
-        file.seek(SeekFrom::Start(offset))
-            .map_err(|_| ReadImageError::Read)?;
-        file.read_exact(&mut row_bgr)
-            .map_err(|_| ReadImageError::Read)?;
-        let row_start = panel_y * EPD_ROW_BYTES;
-        let row = (&mut frame[row_start..row_start + EPD_ROW_BYTES])
-            .try_into()
-            .map_err(|_| ReadImageError::Read)?;
-        crate::bmp::fill_epd_row_from_bgr_mirrored(&row_bgr, row)
-            .map_err(|_| ReadImageError::Format)?;
-    }
+    report.epd = match EspEpdBus::new(
+        peripherals.spi3,
+        pins.gpio10,
+        pins.gpio11,
+        pins.gpio9,
+        pins.gpio8,
+        pins.gpio12,
+        pins.gpio13,
+    ) {
+        Ok(mut bus) => refresh_epd_from_self_test_report(&mut bus, &report),
+        Err(_) => EpdProbe::InitError,
+    };
 
-    draw_self_test_overlay(&mut frame);
-
-    Ok(frame)
+    report
 }
 
-fn draw_self_test_overlay(frame: &mut [u8]) {
-    let style = TextStyle {
+fn refresh_epd_from_self_test_report(
+    bus: &mut EspEpdBus,
+    report: &HardwareSelfTestReport,
+) -> EpdProbe {
+    let mut frame = vec![pack_epd_pixels(Color::White, Color::White); EPD_FRAME_BYTES];
+    draw_self_test_frame(&mut frame, report);
+
+    match run_epd_packed_frame(bus, &frame) {
+        Ok(()) => EpdProbe::Refreshed,
+        Err(error) => epd_error_probe(error),
+    }
+}
+
+fn draw_self_test_frame(frame: &mut [u8], report: &HardwareSelfTestReport) {
+    draw_color_bars(frame);
+    draw_panel(frame);
+
+    let header_style = TextStyle {
         foreground: Color::Black,
         background: Color::White,
-        padding_x: 10,
-        padding_y: 8,
-        margin_x: 18,
-        margin_y: 18,
-        glyph_width: 10,
-        glyph_height: 14,
-        glyph_gap: 2,
+        padding_x: 0,
+        padding_y: 0,
+        margin_x: 0,
+        margin_y: 0,
+        glyph_width: 16,
+        glyph_height: 24,
+        glyph_gap: 4,
+    };
+    let body_style = TextStyle {
+        glyph_width: 11,
+        glyph_height: 17,
+        glyph_gap: 3,
+        ..header_style
     };
 
-    draw_bitmap_text(
+    let content_x = SELF_TEST_PANEL_X + 42;
+    let mut y = SELF_TEST_PANEL_Y + 34;
+    draw_text_on_frame(frame, content_x, y, "EPAPER ALBUM SELF TEST", &header_style);
+
+    y += 58;
+    let lines = [
+        format!("WAKE: {}", report.wake.label()),
+        format!("STORAGE: {}", report.base.storage.label()),
+        format!("CONFIG: {}", report.base.config.label()),
+        format!("WIFI: {}", report.wifi.label()),
+        format!("HTTP: {}", report.http.label()),
+        format!("WAKE MARKER: {}", report.wake_marker.label()),
+        format!("EPD: {}", report.epd.label()),
+    ];
+
+    for line in lines {
+        draw_text_on_frame(frame, content_x, y, &line, &body_style);
+        y += 34;
+    }
+}
+
+fn draw_color_bars(frame: &mut [u8]) {
+    let band_height = SCREEN_HEIGHT / SELF_TEST_BARS.len();
+    for y in 0..SCREEN_HEIGHT {
+        let color = SELF_TEST_BARS[(y / band_height).min(SELF_TEST_BARS.len() - 1)];
+        for x in 0..SCREEN_WIDTH {
+            set_logical_packed_frame_pixel(frame, x, y, color);
+        }
+    }
+}
+
+fn draw_panel(frame: &mut [u8]) {
+    fill_frame_rect(
         frame,
-        OverlaySlot::BottomLeft,
-        &style,
-        &BitmapText {
-            width: TITLE_TEXT_WIDTH,
-            height: TITLE_TEXT_HEIGHT,
-            bytes_per_row: TITLE_TEXT_BYTES_PER_ROW,
-            bitmap: &TITLE_TEXT_BITMAP,
-        },
+        SELF_TEST_PANEL_X,
+        SELF_TEST_PANEL_Y,
+        SELF_TEST_PANEL_WIDTH,
+        SELF_TEST_PANEL_HEIGHT,
+        Color::Black,
     );
-    draw_bitmap_text(
+    fill_frame_rect(
         frame,
-        OverlaySlot::BottomRight,
-        &style,
-        &BitmapText {
-            width: DATE_TEXT_WIDTH,
-            height: DATE_TEXT_HEIGHT,
-            bytes_per_row: DATE_TEXT_BYTES_PER_ROW,
-            bitmap: &DATE_TEXT_BITMAP,
-        },
-    );
-    draw_bitmap_text(
-        frame,
-        OverlaySlot::TopLeft,
-        &style,
-        &BitmapText {
-            width: NOTICE_TEXT_WIDTH,
-            height: NOTICE_TEXT_HEIGHT,
-            bytes_per_row: NOTICE_TEXT_BYTES_PER_ROW,
-            bitmap: &NOTICE_TEXT_BITMAP,
-        },
+        SELF_TEST_PANEL_X + SELF_TEST_PANEL_BORDER,
+        SELF_TEST_PANEL_Y + SELF_TEST_PANEL_BORDER,
+        SELF_TEST_PANEL_WIDTH - SELF_TEST_PANEL_BORDER * 2,
+        SELF_TEST_PANEL_HEIGHT - SELF_TEST_PANEL_BORDER * 2,
+        Color::White,
     );
 }
 
-struct BitmapText<'a> {
+fn draw_text_on_frame(frame: &mut [u8], x: usize, y: usize, text: &str, style: &TextStyle) {
+    let mut cursor_x = x.saturating_add(style.padding_x);
+    let glyph_y = y.saturating_add(style.padding_y);
+    for character in text.chars() {
+        if character.is_whitespace() {
+            cursor_x = cursor_x
+                .saturating_add(style.glyph_width)
+                .saturating_add(style.glyph_gap);
+            continue;
+        }
+
+        draw_glyph_on_frame(
+            frame,
+            cursor_x,
+            glyph_y,
+            character,
+            style.glyph_width,
+            style.glyph_height,
+            style.foreground,
+        );
+        cursor_x = cursor_x
+            .saturating_add(style.glyph_width)
+            .saturating_add(style.glyph_gap);
+    }
+}
+
+fn draw_glyph_on_frame(
+    frame: &mut [u8],
+    x: usize,
+    y: usize,
+    character: char,
     width: usize,
     height: usize,
-    bytes_per_row: usize,
-    bitmap: &'a [u8],
-}
+    color: Color,
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
 
-fn draw_bitmap_text(frame: &mut [u8], slot: OverlaySlot, style: &TextStyle, text: &BitmapText<'_>) {
-    let block_width = text.width.saturating_add(style.padding_x.saturating_mul(2));
-    let block_height = text
-        .height
-        .saturating_add(style.padding_y.saturating_mul(2));
-    let (x, y) = frame_overlay_origin(slot, block_width, block_height, style);
-    fill_frame_rect(frame, x, y, block_width, block_height, style.background);
-
-    let bitmap_x = x.saturating_add(style.padding_x);
-    let bitmap_y = y.saturating_add(style.padding_y);
-    draw_bitmap_text_pixels(frame, bitmap_x, bitmap_y, style.foreground, text);
-}
-
-fn frame_overlay_origin(
-    slot: OverlaySlot,
-    block_width: usize,
-    block_height: usize,
-    style: &TextStyle,
-) -> (usize, usize) {
-    let left = style.margin_x.min(SCREEN_WIDTH.saturating_sub(block_width));
-    let right = SCREEN_WIDTH
-        .saturating_sub(style.margin_x)
-        .saturating_sub(block_width);
-    let top = style
-        .margin_y
-        .min(SCREEN_HEIGHT.saturating_sub(block_height));
-    let bottom = SCREEN_HEIGHT
-        .saturating_sub(style.margin_y)
-        .saturating_sub(block_height);
-
-    match slot {
-        OverlaySlot::BottomLeft => (left, bottom),
-        OverlaySlot::BottomRight => (right, bottom),
-        OverlaySlot::TopLeft => (left, top),
-        OverlaySlot::TopRight => (right, top),
+    let pattern = glyph_pattern(character);
+    for glyph_y in 0..height {
+        let source_y = glyph_y * pattern.len() / height;
+        let row = pattern[source_y];
+        for glyph_x in 0..width {
+            let source_x = glyph_x * 5 / width;
+            let bit = 1 << (4 - source_x);
+            if row & bit != 0 {
+                set_logical_packed_frame_pixel(frame, x + glyph_x, y + glyph_y, color);
+            }
+        }
     }
 }
 
@@ -410,46 +320,9 @@ fn fill_frame_rect(
 
     for pixel_y in y..end_y {
         for pixel_x in x..end_x {
-            set_overlay_pixel(frame, pixel_x, pixel_y, color);
+            set_logical_packed_frame_pixel(frame, pixel_x, pixel_y, color);
         }
     }
-}
-
-fn draw_bitmap_text_pixels(
-    frame: &mut [u8],
-    x: usize,
-    y: usize,
-    color: Color,
-    text: &BitmapText<'_>,
-) {
-    for pixel_y in 0..text.height {
-        for pixel_x in 0..text.width {
-            let byte = text.bitmap[pixel_y * text.bytes_per_row + pixel_x / 8];
-            let bit = 1 << (7 - pixel_x % 8);
-            if byte & bit != 0 {
-                set_overlay_pixel(
-                    frame,
-                    x.saturating_add(pixel_x),
-                    y.saturating_add(pixel_y),
-                    color,
-                );
-            }
-        }
-    }
-}
-
-fn set_overlay_pixel(frame: &mut [u8], x: usize, y: usize, color: Color) -> bool {
-    if x >= SCREEN_WIDTH || y >= SCREEN_HEIGHT {
-        return false;
-    }
-
-    set_logical_packed_frame_pixel(frame, x, y, color)
-}
-
-enum ReadImageError {
-    Missing,
-    Format,
-    Read,
 }
 
 fn read_text_from_mounted_path(path: &Path) -> StorageRead {
@@ -482,6 +355,7 @@ fn epd_error_probe(error: crate::epd::EpdError) -> EpdProbe {
 
 pub fn print_hardware_self_test_report(report: &HardwareSelfTestReport) {
     log::info!(target: "epaper_album", "epaper-album self-test");
+    log::info!(target: "epaper_album", "wake: {}", report.wake.label());
     log::info!(target: "epaper_album", "storage: {}", report.base.storage.label());
     log::info!(target: "epaper_album", "config: {}", report.base.config.label());
     log::info!(

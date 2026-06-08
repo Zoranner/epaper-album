@@ -8,11 +8,20 @@ fn run_device() {
     let wake = epaper_album::power::espidf::wake_probe();
     log::info!(target: "epaper_album", "wake: {}", wake.label());
 
+    if epaper_album::power::espidf::self_test_key_long_pressed() {
+        log::info!(target: "epaper_album", "self-test key: long-pressed");
+        let report = epaper_album::hardware_selftest::run_espidf_hardware_self_test(wake);
+        epaper_album::hardware_selftest::print_hardware_self_test_report(&report);
+        return;
+    }
+
     let trigger = match wake {
         epaper_album::power::espidf::WakeProbe::Timer => {
             epaper_album::app::RunTrigger::Wake(epaper_album::state::WakeReason::Timer)
         }
-        epaper_album::power::espidf::WakeProbe::Button => epaper_album::app::RunTrigger::Manual,
+        epaper_album::power::espidf::WakeProbe::Button => {
+            epaper_album::app::RunTrigger::Wake(epaper_album::state::WakeReason::Button)
+        }
         epaper_album::power::espidf::WakeProbe::Unknown => epaper_album::app::RunTrigger::Startup,
         epaper_album::power::espidf::WakeProbe::Ulp
         | epaper_album::power::espidf::WakeProbe::Other(_) => {

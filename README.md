@@ -81,13 +81,21 @@ I (...) epaper_album: next wake: Some(...), sleep seconds: Some(...)
 
 TF 卡根目录放置 `/sdcard/config.toml`，设备即可读取 Wi-Fi、云端地址和 `secret-key`。设备运行数据写入 `/sdcard/data/`：当前计划保存为 `plan.json`，运行状态保存为 `state.json`，图片缓存保存到 `images/{sha256}.bmp`，标题、日期和通知 sprite 缓存保存到 `sprites/{sha256}.bmp`。
 
-硬件照片自检阶段使用的 `test.bmp` 仍可作为屏幕链路排查资源。`test.bmp` 使用 `800x480`、24-bit、未压缩 BMP。仓库提供桌面照片处理脚本，可以把桌面 `sample.jpg` 转成六色屏测试图：
+## 硬件自检
+
+设备启动时长按 KEY 按键约 2 秒，会进入硬件自检流程。KEY 使用 GPIO4，内部上拉，低电平按下。自检会读取 TF 卡、解析 `/sdcard/config.toml`、按配置测试 Wi-Fi 和 HTTP，并刷新墨水屏。
+
+自检屏幕保留六色色条作为底图，中间区域覆盖白底黑字的点阵报告面板，显示 `WAKE`、`STORAGE`、`CONFIG`、`WIFI`、`HTTP`、`WAKE MARKER` 和 `EPD` 状态。串口监视器同步输出同一组状态日志。
+
+## 照片处理测试
+
+仓库提供桌面照片处理脚本，可以把桌面 `sample.jpg` 转成 800x480、24-bit、未压缩 BMP，用于照片显示链路测试：
 
 ```powershell
 .\scripts\prepare-test-bmp.ps1
 ```
 
-脚本默认输出到桌面 `test.bmp`，复制到 TF 卡根目录后重新烧录或重启设备即可执行照片刷屏自检。
+脚本默认输出到桌面 `test.bmp`，可以作为服务端上传、TF 卡缓存和显示刷新流程的测试图片来源。
 
 ## 产物说明
 
