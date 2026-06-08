@@ -10,12 +10,12 @@
         @update:model-value="remark = $event"
       />
       <p v-if="error" class="form-error">{{ error }}</p>
-      <div class="dialog-actions">
+      <BaseDialogActions>
         <BaseButton type="button" variant="secondary" @click="$emit('close')">取消</BaseButton>
         <BaseButton :disabled="!selectedFile" :loading="uploading" type="submit" variant="primary">
           上传
         </BaseButton>
-      </div>
+      </BaseDialogActions>
     </form>
   </BaseDialog>
 </template>
@@ -25,6 +25,7 @@ import { ref, watch } from 'vue';
 import { uploadImage, type AdminImage } from '../../api';
 import BaseButton from '../base/BaseButton.vue';
 import BaseDialog from '../base/BaseDialog.vue';
+import BaseDialogActions from '../base/BaseDialogActions.vue';
 import BaseFileInput from '../base/BaseFileInput.vue';
 import BaseInput from '../base/BaseInput.vue';
 import { useAuthStore } from '../../composables/useAuthStore';

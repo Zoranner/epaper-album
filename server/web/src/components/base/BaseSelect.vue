@@ -1,5 +1,5 @@
 <template>
-  <label class="base-field" :class="{ 'has-error': error }">
+  <label class="base-field" :class="{ 'has-error': error, small }">
     <span v-if="label" class="base-field__label">{{ label }}</span>
     <span class="base-select">
       <select
@@ -37,6 +37,7 @@ withDefaults(
     error?: string;
     disabled?: boolean;
     required?: boolean;
+    small?: boolean;
   }>(),
   {
     label: '',
@@ -44,6 +45,7 @@ withDefaults(
     error: '',
     disabled: false,
     required: false,
+    small: false,
   },
 );
 

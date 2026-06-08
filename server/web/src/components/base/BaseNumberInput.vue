@@ -1,5 +1,5 @@
 <template>
-  <label class="base-field" :class="{ 'has-error': error }">
+  <label class="base-field" :class="{ 'has-error': error, small }">
     <span v-if="label" class="base-field__label">{{ label }}</span>
     <input
       class="base-field__control"
@@ -34,6 +34,7 @@ const props = withDefaults(
     step?: number | string;
     disabled?: boolean;
     required?: boolean;
+    small?: boolean;
   }>(),
   {
     label: '',
@@ -45,6 +46,7 @@ const props = withDefaults(
     step: 1,
     disabled: false,
     required: false,
+    small: false,
   },
 );
 

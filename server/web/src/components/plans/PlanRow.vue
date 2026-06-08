@@ -23,7 +23,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import BaseActionMenu, { type BaseActionMenuItem } from '../base/BaseActionMenu.vue';
-import type { PlanView } from './PlansView.vue';
+import type { PlanView } from './types';
 
 const props = defineProps<{
   plan: PlanView;

@@ -1,5 +1,5 @@
 <template>
-  <label class="base-field" :class="{ 'has-error': error }">
+  <label class="base-field" :class="{ 'has-error': error, small }">
     <span v-if="label" class="base-field__label">{{ label }}</span>
     <input
       class="base-field__control"
@@ -30,6 +30,7 @@ withDefaults(
     maxlength?: number | string;
     disabled?: boolean;
     required?: boolean;
+    small?: boolean;
   }>(),
   {
     label: '',
@@ -41,6 +42,7 @@ withDefaults(
     maxlength: undefined,
     disabled: false,
     required: false,
+    small: false,
   },
 );
 

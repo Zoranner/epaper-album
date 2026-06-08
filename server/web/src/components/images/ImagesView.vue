@@ -9,11 +9,12 @@
         <BaseInput
           label=""
           placeholder="搜索备注或 sha256"
+          small
           type="search"
           :model-value="keyword"
           @update:model-value="keyword = $event"
         />
-        <BaseSelect v-model="statusFilter" :options="statusOptions" />
+        <BaseSelect v-model="statusFilter" small :options="statusOptions" />
         <BaseButton small type="button" variant="secondary" @click="loadImages">
           <BaseIcon name="search" />
           查询

@@ -67,11 +67,8 @@ import BaseIcon from '../base/BaseIcon.vue';
 import BaseSelect, { type BaseSelectOption } from '../base/BaseSelect.vue';
 import PlanEditorDialog from './PlanEditorDialog.vue';
 import PlanTable from './PlanTable.vue';
+import type { PlanView } from './types';
 import { useAuthStore } from '../../composables/useAuthStore';
-
-export interface PlanView extends AdminPlan {
-  image: AdminImage | null;
-}
 
 const auth = useAuthStore();
 const days = ref(3);

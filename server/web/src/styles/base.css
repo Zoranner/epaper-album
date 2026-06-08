@@ -49,6 +49,7 @@ select {
   border-radius: var(--radius-sm);
   background: var(--color-surface);
   color: var(--color-text-body);
+  font-size: var(--text-sm);
   outline: none;
 }
 

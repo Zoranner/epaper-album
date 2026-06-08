@@ -43,7 +43,7 @@ import BaseDialogActions from '../base/BaseDialogActions.vue';
 import BaseDateInput from '../base/BaseDateInput.vue';
 import BaseInput from '../base/BaseInput.vue';
 import PlanImagePicker from './PlanImagePicker.vue';
-import type { PlanView } from './PlansView.vue';
+import type { PlanView } from './types';
 import { useAuthStore } from '../../composables/useAuthStore';
 
 const props = defineProps<{

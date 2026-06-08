@@ -7,9 +7,7 @@
             <h2 v-if="title" class="base-dialog__title">{{ title }}</h2>
             <p v-if="description" class="base-dialog__description">{{ description }}</p>
           </div>
-          <button class="base-button ghost small base-dialog__close" type="button" @click="$emit('close')">
-            关闭
-          </button>
+          <BaseIconButton icon="close" label="关闭" @click="$emit('close')" />
         </header>
         <slot></slot>
         <footer v-if="$slots.footer" class="base-dialog__footer">
@@ -21,6 +19,8 @@
 </template>
 
 <script setup lang="ts">
+import BaseIconButton from './BaseIconButton.vue';
+
 withDefaults(
   defineProps<{
     open: boolean;

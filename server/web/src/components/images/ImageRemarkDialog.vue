@@ -10,10 +10,10 @@
         @update:model-value="remark = $event"
       />
       <p v-if="error" class="form-error">{{ error }}</p>
-      <div class="dialog-actions">
+      <BaseDialogActions>
         <BaseButton type="button" variant="secondary" @click="$emit('close')">取消</BaseButton>
         <BaseButton :loading="saving" type="submit" variant="primary">保存</BaseButton>
-      </div>
+      </BaseDialogActions>
     </form>
   </BaseDialog>
 </template>
@@ -23,6 +23,7 @@ import { ref, watch } from 'vue';
 import { updateImageRemark, type AdminImage } from '../../api';
 import BaseButton from '../base/BaseButton.vue';
 import BaseDialog from '../base/BaseDialog.vue';
+import BaseDialogActions from '../base/BaseDialogActions.vue';
 import BaseInput from '../base/BaseInput.vue';
 import { useAuthStore } from '../../composables/useAuthStore';
 

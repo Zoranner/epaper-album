@@ -6,6 +6,7 @@
     :label="label"
     :model-value="modelValue"
     :required="required"
+    :small="small"
     type="date"
     @update:model-value="$emit('update:modelValue', $event)"
   />
@@ -22,6 +23,7 @@ withDefaults(
     error?: string;
     disabled?: boolean;
     required?: boolean;
+    small?: boolean;
   }>(),
   {
     label: '',
@@ -29,6 +31,7 @@ withDefaults(
     error: '',
     disabled: false,
     required: false,
+    small: false,
   },
 );
 

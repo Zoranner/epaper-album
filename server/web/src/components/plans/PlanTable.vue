@@ -21,8 +21,8 @@
 
 <script setup lang="ts">
 import BaseEmpty from '../base/BaseEmpty.vue';
-import type { PlanView } from './PlansView.vue';
 import PlanRow from './PlanRow.vue';
+import type { PlanView } from './types';
 
 defineProps<{
   plans: PlanView[];
