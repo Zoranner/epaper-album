@@ -10,15 +10,7 @@
     </div>
     <div class="image-tile__footer">
       <span>{{ statusText }}</span>
-      <div class="tile-menu">
-        <button type="button">...</button>
-        <div class="tile-menu__items">
-          <button type="button" @click="$emit('editRemark')">编辑备注</button>
-          <button v-if="image.status === 'ready'" type="button" @click="$emit('refreshPreview')">
-            刷新预览
-          </button>
-        </div>
-      </div>
+      <BaseActionMenu :items="menuItems" @select="selectAction" />
     </div>
   </article>
 </template>
@@ -26,13 +18,14 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { AdminImage } from '../../api';
+import BaseActionMenu, { type BaseActionMenuItem } from '../base/BaseActionMenu.vue';
 
 const props = defineProps<{
   image: AdminImage;
   previewUrl?: string;
 }>();
 
-defineEmits<{
+const emit = defineEmits<{
   editRemark: [];
   refreshPreview: [];
 }>();
@@ -49,6 +42,22 @@ const statusText = computed(() => {
   }
   return '待处理';
 });
+const menuItems = computed<BaseActionMenuItem[]>(() => {
+  const items: BaseActionMenuItem[] = [{ key: 'edit', label: '编辑备注', icon: 'edit' }];
+  if (props.image.status === 'ready') {
+    items.push({ key: 'refresh', label: '刷新预览', icon: 'refresh' });
+  }
+  return items;
+});
+
+function selectAction(key: string) {
+  if (key === 'edit') {
+    emit('editRemark');
+  }
+  if (key === 'refresh') {
+    emit('refreshPreview');
+  }
+}
 
 function shortSha(sha256: string) {
   return sha256.length > 16 ? `${sha256.slice(0, 8)}...${sha256.slice(-6)}` : sha256;

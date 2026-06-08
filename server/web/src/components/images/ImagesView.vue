@@ -13,15 +13,15 @@
           :model-value="keyword"
           @update:model-value="keyword = $event"
         />
-        <select v-model="statusFilter" aria-label="状态筛选">
-          <option value="all">全部状态</option>
-          <option value="ready">可显示</option>
-          <option value="pending">待处理</option>
-          <option value="processing">处理中</option>
-          <option value="failed">处理失败</option>
-        </select>
-        <BaseButton small type="button" variant="secondary" @click="loadImages">查询</BaseButton>
-        <BaseButton small type="button" variant="primary" @click="openUpload">上传图片</BaseButton>
+        <BaseSelect v-model="statusFilter" :options="statusOptions" />
+        <BaseButton small type="button" variant="secondary" @click="loadImages">
+          <BaseIcon name="search" />
+          查询
+        </BaseButton>
+        <BaseButton small type="button" variant="primary" @click="openUpload">
+          <BaseIcon name="upload" />
+          上传图片
+        </BaseButton>
       </div>
     </header>
 
@@ -57,7 +57,9 @@ import {
   type ImageStatus,
 } from '../../api';
 import BaseButton from '../base/BaseButton.vue';
+import BaseIcon from '../base/BaseIcon.vue';
 import BaseInput from '../base/BaseInput.vue';
+import BaseSelect, { type BaseSelectOption } from '../base/BaseSelect.vue';
 import ImageGrid from './ImageGrid.vue';
 import ImageRemarkDialog from './ImageRemarkDialog.vue';
 import ImageUploadDialog from './ImageUploadDialog.vue';
@@ -71,6 +73,13 @@ const previewUrls = ref<Record<string, string>>({});
 const uploadOpen = ref(false);
 const remarkImage = ref<AdminImage | null>(null);
 const error = ref('');
+const statusOptions: BaseSelectOption[] = [
+  { label: '全部状态', value: 'all' },
+  { label: '可显示', value: 'ready' },
+  { label: '待处理', value: 'pending' },
+  { label: '处理中', value: 'processing' },
+  { label: '处理失败', value: 'failed' },
+];
 
 const filteredImages = computed(() => {
   const term = keyword.value.trim().toLowerCase();

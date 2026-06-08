@@ -2,17 +2,24 @@
   <section class="plan-picker">
     <div class="plan-picker__toolbar">
       <strong>选择图片</strong>
-      <input v-model.trim="keyword" placeholder="搜索备注或 sha256" />
+      <BaseInput
+        label=""
+        placeholder="搜索备注或 sha256"
+        :model-value="keyword"
+        @update:model-value="keyword = $event"
+      />
     </div>
     <BaseEmpty v-if="filteredImages.length === 0" small>暂无可选图片</BaseEmpty>
     <div v-else class="picker-grid">
       <button
         v-for="image in filteredImages"
         :key="image.sha256"
+        :aria-pressed="selected === image.sha256"
         class="picker-tile"
-        :class="{ selected: selected.includes(image.sha256), [image.status]: true }"
+        :class="{ selected: selected === image.sha256, [image.status]: true }"
+        :title="image.remark || image.sha256"
         type="button"
-        @click="$emit('toggle', image.sha256)"
+        @click="$emit('select', image.sha256)"
       >
         <img v-if="previewUrls[image.sha256]" :src="previewUrls[image.sha256]" :alt="image.sha256" />
         <span v-else>{{ statusText(image.status) }}</span>
@@ -25,15 +32,16 @@
 import { computed, ref } from 'vue';
 import type { AdminImage, ImageStatus } from '../../api';
 import BaseEmpty from '../base/BaseEmpty.vue';
+import BaseInput from '../base/BaseInput.vue';
 
 const props = defineProps<{
   images: AdminImage[];
-  selected: string[];
+  selected: string;
   previewUrls: Record<string, string>;
 }>();
 
 defineEmits<{
-  toggle: [sha256: string];
+  select: [sha256: string];
 }>();
 
 const keyword = ref('');

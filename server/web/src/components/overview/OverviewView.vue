@@ -60,7 +60,7 @@
         <div v-for="plan in plans" :key="plan.id" class="recent-plan-row">
           <span>{{ plan.caption }}</span>
           <code>{{ plan.start }} 至 {{ plan.end }}</code>
-          <strong>{{ plan.images.length }} 张</strong>
+          <strong>{{ plan.images.length > 0 ? 1 : 0 }} 张</strong>
         </div>
       </div>
     </section>
@@ -85,7 +85,7 @@ const processingCount = computed(
   () => images.value.filter((image) => image.status === 'pending' || image.status === 'processing').length,
 );
 const failedCount = computed(() => images.value.filter((image) => image.status === 'failed').length);
-const planImageCount = computed(() => plans.value.reduce((sum, plan) => sum + plan.images.length, 0));
+const planImageCount = computed(() => plans.value.reduce((sum, plan) => sum + (plan.images.length > 0 ? 1 : 0), 0));
 
 async function loadOverview() {
   if (!auth.token.value) {

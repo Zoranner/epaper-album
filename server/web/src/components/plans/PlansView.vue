@@ -3,33 +3,29 @@
     <header class="module-toolbar">
       <div>
         <h2>计划管理</h2>
-        <p>按日期维护设备显示排期</p>
+        <p>维护设备显示计划记录</p>
       </div>
       <div class="module-actions">
-        <BaseNumberInput
-          label=""
-          :max="7"
-          :min="1"
-          :model-value="days"
-          @update:model-value="days = $event"
-        />
-        <BaseButton small type="button" variant="secondary" @click="loadPlans">查询</BaseButton>
-        <BaseButton small type="button" variant="primary" @click="openCreate">新增计划</BaseButton>
+        <BaseSelect v-model="daysValue" :options="dayOptions" />
+        <BaseButton small type="button" variant="secondary" @click="loadPlans">
+          <BaseIcon name="search" />
+          查询
+        </BaseButton>
+        <BaseButton small type="button" variant="primary" @click="openCreate">
+          <BaseIcon name="plus" />
+          新增计划
+        </BaseButton>
       </div>
     </header>
 
     <p v-if="error" class="form-error">{{ error }}</p>
-    <div v-else class="schedule-list">
-      <PlanDayGroup
-        v-for="group in dayGroups"
-        :key="group.date"
-        :date="group.date"
-        :plans="group.plans"
-        :preview-urls="previewUrls"
-        @delete-plan="openDelete"
-        @edit-plan="openEdit"
-      />
-    </div>
+    <PlanTable
+      v-else
+      :plans="sortedPlans"
+      :preview-urls="previewUrls"
+      @delete-plan="openDelete"
+      @edit-plan="openEdit"
+    />
 
     <PlanEditorDialog
       :images="images"
@@ -66,18 +62,20 @@ import {
 } from '../../api';
 import BaseButton from '../base/BaseButton.vue';
 import BaseDialog from '../base/BaseDialog.vue';
-import BaseNumberInput from '../base/BaseNumberInput.vue';
-import PlanDayGroup from './PlanDayGroup.vue';
+import BaseIcon from '../base/BaseIcon.vue';
+import BaseSelect, { type BaseSelectOption } from '../base/BaseSelect.vue';
 import PlanEditorDialog from './PlanEditorDialog.vue';
+import PlanTable from './PlanTable.vue';
 import { useAuthStore } from '../../composables/useAuthStore';
-
-interface DayGroup {
-  date: string;
-  plans: AdminPlan[];
-}
 
 const auth = useAuthStore();
 const days = ref(3);
+const daysValue = computed({
+  get: () => String(days.value),
+  set: (value: string) => {
+    days.value = Number(value);
+  },
+});
 const plans = ref<AdminPlan[]>([]);
 const images = ref<AdminImage[]>([]);
 const previewUrls = ref<Record<string, string>>({});
@@ -86,14 +84,16 @@ const editingPlan = ref<AdminPlan | null>(null);
 const deletingPlan = ref<AdminPlan | null>(null);
 const deleting = ref(false);
 const error = ref('');
-
-const dayGroups = computed<DayGroup[]>(() => {
-  const dates = nextDates(days.value);
-  return dates.map((date) => ({
-    date,
-    plans: plans.value.filter((plan) => plan.start <= date && plan.end >= date),
-  }));
+const dayOptions: BaseSelectOption[] = Array.from({ length: 7 }, (_, index) => {
+  const value = String(index + 1);
+  return { label: `最近 ${value} 天`, value };
 });
+const sortedPlans = computed(() =>
+  [...plans.value].sort((left, right) => {
+    const byStart = left.start.localeCompare(right.start);
+    return byStart === 0 ? left.end.localeCompare(right.end) : byStart;
+  }),
+);
 
 async function loadPlans() {
   if (!auth.token.value) {
@@ -210,18 +210,6 @@ function clearPreviews() {
     URL.revokeObjectURL(url);
   }
   previewUrls.value = {};
-}
-
-function nextDates(count: number) {
-  const safeCount = Math.min(7, Math.max(1, Math.trunc(count || 3)));
-  const result: string[] = [];
-  const today = new Date();
-  for (let index = 0; index < safeCount; index += 1) {
-    const date = new Date(today);
-    date.setDate(today.getDate() + index);
-    result.push(date.toISOString().slice(0, 10));
-  }
-  return result;
 }
 
 onMounted(() => {

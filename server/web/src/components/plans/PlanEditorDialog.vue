@@ -9,17 +9,15 @@
           :model-value="draft.caption"
           @update:model-value="draft.caption = $event"
         />
-        <BaseInput
+        <BaseDateInput
           label="开始日期"
           required
-          type="date"
           :model-value="draft.start"
           @update:model-value="draft.start = $event"
         />
-        <BaseInput
+        <BaseDateInput
           label="结束日期"
           required
-          type="date"
           :model-value="draft.end"
           @update:model-value="draft.end = $event"
         />
@@ -28,13 +26,13 @@
       <PlanImagePicker
         :images="images"
         :preview-urls="previewUrls"
-        :selected="draft.images"
-        @toggle="toggleImage"
+        :selected="selectedImage"
+        @select="selectImage"
       />
 
       <p v-if="error" class="form-error">{{ error }}</p>
       <div class="dialog-actions">
-        <span>已选 {{ draft.images.length }} 张</span>
+        <span>{{ selectedImage ? '已选 1 张' : '未选图片' }}</span>
         <BaseButton type="button" variant="secondary" @click="$emit('close')">取消</BaseButton>
         <BaseButton :loading="saving" type="submit" variant="primary">保存</BaseButton>
       </div>
@@ -47,6 +45,7 @@ import { reactive, ref, watch } from 'vue';
 import { createPlan, updatePlan, type AdminImage, type AdminPlan, type PlanPayload } from '../../api';
 import BaseButton from '../base/BaseButton.vue';
 import BaseDialog from '../base/BaseDialog.vue';
+import BaseDateInput from '../base/BaseDateInput.vue';
 import BaseInput from '../base/BaseInput.vue';
 import PlanImagePicker from './PlanImagePicker.vue';
 import { useAuthStore } from '../../composables/useAuthStore';
@@ -94,19 +93,19 @@ async function submit() {
   }
 }
 
-function toggleImage(sha256: string) {
-  if (draft.images.includes(sha256)) {
-    draft.images = draft.images.filter((item) => item !== sha256);
-    return;
-  }
-  draft.images = [...draft.images, sha256];
+const selectedImage = ref('');
+
+function selectImage(sha256: string) {
+  selectedImage.value = selectedImage.value === sha256 ? '' : sha256;
+  draft.images = selectedImage.value ? [selectedImage.value] : [];
 }
 
 function loadDraft(plan: AdminPlan | null) {
   draft.start = plan?.start ?? '';
   draft.end = plan?.end ?? '';
   draft.caption = plan?.caption ?? '';
-  draft.images = plan?.images.map((image) => image.sha256) ?? [];
+  selectedImage.value = plan?.images[0]?.sha256 ?? '';
+  draft.images = selectedImage.value ? [selectedImage.value] : [];
   error.value = '';
 }
 
