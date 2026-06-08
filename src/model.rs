@@ -1,1 +1,1 @@
-pub use epaper_album_core::*;
+pub use schema::*;
