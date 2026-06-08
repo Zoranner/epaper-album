@@ -449,7 +449,7 @@
   border-bottom: 0;
 }
 
-.plan-row__range {
+.plan-row__date {
   color: var(--color-text);
   font-size: var(--text-sm);
   font-weight: 600;

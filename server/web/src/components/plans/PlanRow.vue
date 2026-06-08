@@ -1,6 +1,6 @@
 <template>
   <article class="plan-row">
-    <div class="plan-row__range">{{ formattedDate }}</div>
+    <div class="plan-row__date">{{ formattedDate }}</div>
     <div class="plan-row__main">
       <strong>{{ plan.caption }}</strong>
     </div>

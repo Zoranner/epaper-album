@@ -41,8 +41,8 @@
             <dd>{{ plans.length }}</dd>
           </div>
           <div>
-            <dt>计划图片</dt>
-            <dd>{{ planImageCount }}</dd>
+            <dt>已配图片计划</dt>
+            <dd>{{ configuredPlanCount }}</dd>
           </div>
           <div>
             <dt>查询范围</dt>
@@ -60,7 +60,7 @@
         <div v-for="plan in plans" :key="plan.date" class="recent-plan-row">
           <span>{{ plan.caption }}</span>
           <code>{{ plan.date }}</code>
-          <strong>{{ plan.image_sha256 ? 1 : 0 }} 张</strong>
+          <strong>{{ shortSha(plan.image_sha256) }}</strong>
         </div>
       </div>
     </section>
@@ -85,7 +85,11 @@ const processingCount = computed(
   () => images.value.filter((image) => image.status === 'pending' || image.status === 'processing').length,
 );
 const failedCount = computed(() => images.value.filter((image) => image.status === 'failed').length);
-const planImageCount = computed(() => plans.value.reduce((sum, plan) => sum + (plan.image_sha256 ? 1 : 0), 0));
+const configuredPlanCount = computed(() => plans.value.reduce((sum, plan) => sum + (plan.image_sha256 ? 1 : 0), 0));
+
+function shortSha(sha256: string) {
+  return sha256.length > 16 ? `${sha256.slice(0, 8)}...${sha256.slice(-6)}` : sha256 || '未配图';
+}
 
 async function loadOverview() {
   if (!auth.token.value) {

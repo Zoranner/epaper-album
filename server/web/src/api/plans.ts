@@ -16,9 +16,9 @@ export function createPlan(token: string, payload: PlanPayload): Promise<AdminPl
   );
 }
 
-export function updatePlan(token: string, date: string, payload: PlanPayload): Promise<AdminPlan> {
+export function updatePlan(token: string, originalDate: string, payload: PlanPayload): Promise<AdminPlan> {
   return request<AdminPlan>(
-    `/plans/${date}`,
+    `/plans/${originalDate}`,
     tokenInit(token, {
       method: 'PUT',
       body: JSON.stringify(payload),
