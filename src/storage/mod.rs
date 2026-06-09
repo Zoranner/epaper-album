@@ -175,14 +175,14 @@ where
 }
 
 pub fn write_text_file_atomic_mounted(path: impl AsRef<Path>, content: &str) -> StorageWrite {
-    match write_file_atomic(path.as_ref(), content.as_bytes()) {
+    match write_mounted_file(path.as_ref(), content.as_bytes()) {
         Ok(()) => StorageWrite::Written,
         Err(_) => StorageWrite::WriteError,
     }
 }
 
 pub fn write_binary_file_atomic_mounted(path: impl AsRef<Path>, content: &[u8]) -> StorageWrite {
-    match write_file_atomic(path.as_ref(), content) {
+    match write_mounted_file(path.as_ref(), content) {
         Ok(()) => StorageWrite::Written,
         Err(_) => StorageWrite::WriteError,
     }
@@ -299,6 +299,14 @@ fn write_espidf_file_atomic(path: &Path, content: &[u8]) -> StorageWrite {
         Ok(Err(_)) => StorageWrite::WriteError,
         Err(_) => StorageWrite::MountError,
     }
+}
+
+fn write_mounted_file(path: &Path, content: &[u8]) -> Result<(), std::io::Error> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    std::fs::write(path, content)
 }
 
 fn write_file_atomic(path: &Path, content: &[u8]) -> Result<(), std::io::Error> {

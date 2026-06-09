@@ -238,9 +238,9 @@ pub fn render_photo_page(input: &RenderInput<'_>) -> ScreenBuffer {
 }
 
 pub fn render_builtin_error_page_packed_frame(input: &BuiltinErrorPageInput<'_>) -> Vec<u8> {
-    let mut buffer = ScreenBuffer::default();
-    render_builtin_error_page_into(&mut buffer, input);
-    pack_screen_buffer(&buffer)
+    let mut frame = vec![pack_epd_pixels(Color::White, Color::White); EPD_FRAME_BYTES];
+    render_builtin_error_page_into_frame(&mut frame, input);
+    frame
 }
 
 pub fn render_epd_packed_frame_from_bmps(
@@ -301,9 +301,7 @@ pub fn render_into(buffer: &mut ScreenBuffer, input: &RenderInput<'_>) {
     }
 }
 
-fn render_builtin_error_page_into(buffer: &mut ScreenBuffer, input: &BuiltinErrorPageInput<'_>) {
-    buffer.clear(Color::White);
-
+fn render_builtin_error_page_into_frame(frame: &mut [u8], input: &BuiltinErrorPageInput<'_>) {
     let title_style = TextStyle {
         foreground: Color::White,
         background: Color::Black,
@@ -337,46 +335,109 @@ fn render_builtin_error_page_into(buffer: &mut ScreenBuffer, input: &BuiltinErro
     let title_size = text_size(title, &title_style).unwrap_or((0, 0));
     let title_x = SCREEN_WIDTH.saturating_sub(title_size.0) / 2;
     let title_y = 64usize;
-    draw_solid_block(
-        buffer,
+    fill_packed_frame_rect(
+        frame,
         0,
         title_y.saturating_sub(18),
         SCREEN_WIDTH,
         96,
         Color::Black,
     );
-    draw_text_at(buffer, title_x, title_y, title, &title_style);
+    draw_text_on_packed_frame(frame, title_x, title_y, title, &title_style);
 
     let message = input.message;
     let message_size = text_size(message, &body_style).unwrap_or((0, 0));
     let message_x = SCREEN_WIDTH.saturating_sub(message_size.0) / 2;
-    draw_text_at(buffer, message_x, 210, message, &body_style);
+    draw_text_on_packed_frame(frame, message_x, 210, message, &body_style);
 
     if !input.hint.is_empty() {
         let hint_size = text_size(input.hint, &hint_style).unwrap_or((0, 0));
         let hint_x = SCREEN_WIDTH.saturating_sub(hint_size.0) / 2;
-        draw_text_at(buffer, hint_x, 280, input.hint, &hint_style);
+        draw_text_on_packed_frame(frame, hint_x, 280, input.hint, &hint_style);
     }
 
     if !input.detail.is_empty() {
         let detail_size = text_size(input.detail, &hint_style).unwrap_or((0, 0));
         let detail_x = SCREEN_WIDTH.saturating_sub(detail_size.0) / 2;
-        draw_text_at(buffer, detail_x, 330, input.detail, &hint_style);
+        draw_text_on_packed_frame(frame, detail_x, 330, input.detail, &hint_style);
     }
 }
 
-fn pack_screen_buffer(buffer: &ScreenBuffer) -> Vec<u8> {
-    let mut frame = vec![pack_epd_pixels(Color::White, Color::White); EPD_FRAME_BYTES];
+fn draw_text_on_packed_frame(frame: &mut [u8], x: usize, y: usize, text: &str, style: &TextStyle) {
+    let Some((block_width, block_height)) = text_size(text, style) else {
+        return;
+    };
 
-    for y in 0..SCREEN_HEIGHT {
-        for x in 0..SCREEN_WIDTH {
-            if let Some(color) = buffer.get_pixel(x, y) {
-                set_logical_packed_frame_pixel(&mut frame, x, y, color);
+    fill_packed_frame_rect(frame, x, y, block_width, block_height, style.background);
+
+    let mut cursor_x = x.saturating_add(style.padding_x);
+    let glyph_y = y.saturating_add(style.padding_y);
+    for character in text.chars() {
+        if character.is_whitespace() {
+            cursor_x = cursor_x
+                .saturating_add(style.glyph_width)
+                .saturating_add(style.glyph_gap);
+            continue;
+        }
+
+        draw_glyph_on_packed_frame(
+            frame,
+            cursor_x,
+            glyph_y,
+            character,
+            style.glyph_width,
+            style.glyph_height,
+            style.foreground,
+        );
+        cursor_x = cursor_x
+            .saturating_add(style.glyph_width)
+            .saturating_add(style.glyph_gap);
+    }
+}
+
+fn draw_glyph_on_packed_frame(
+    frame: &mut [u8],
+    x: usize,
+    y: usize,
+    character: char,
+    width: usize,
+    height: usize,
+    color: Color,
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+
+    let pattern = glyph_pattern(character);
+    for glyph_y in 0..height {
+        let source_y = glyph_y * PLACEHOLDER_GLYPH_HEIGHT / height;
+        let row = pattern[source_y];
+        for glyph_x in 0..width {
+            let source_x = glyph_x * PLACEHOLDER_GLYPH_WIDTH / width;
+            let bit = 1 << (PLACEHOLDER_GLYPH_WIDTH - 1 - source_x);
+            if row & bit != 0 {
+                set_logical_packed_frame_pixel(frame, x + glyph_x, y + glyph_y, color);
             }
         }
     }
+}
 
-    frame
+fn fill_packed_frame_rect(
+    frame: &mut [u8],
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    color: Color,
+) {
+    let end_x = x.saturating_add(width).min(SCREEN_WIDTH);
+    let end_y = y.saturating_add(height).min(SCREEN_HEIGHT);
+
+    for pixel_y in y..end_y {
+        for pixel_x in x..end_x {
+            set_logical_packed_frame_pixel(frame, pixel_x, pixel_y, color);
+        }
+    }
 }
 
 pub fn draw_solid_block(
