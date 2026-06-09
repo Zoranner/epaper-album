@@ -81,6 +81,16 @@ I (...) epaper_album: next wake: Some(...), sleep seconds: Some(...)
 
 TF 卡根目录放置 `/sdcard/config.toml`，设备即可读取 Wi-Fi、云端地址和 `secret-key`。设备运行数据写入 `/sdcard/data/`：当前计划保存为 `plan.json`，运行状态保存为 `state.json`，图片缓存保存到 `images/{sha256}.bmp`，标题、日期和通知 sprite 缓存保存到 `sprites/{sha256}.bmp`。
 
+设备遇到影响运行流程的硬错误时，会刷新内置英文错误页，覆盖 TF 卡不可用、配置缺失、同步失败和无可用图片等状态。低电量、同步失败但仍可显示缓存照片等弱状态继续使用照片页左上角通知。
+
+仓库提供 TF 卡配置示例：
+
+```text
+examples/sdcard/config.toml
+```
+
+将该文件复制到 TF 卡根目录并填写实际配置即可启动设备运行流程。
+
 ## 硬件自检
 
 设备启动时长按 KEY 按键约 2 秒，会进入硬件自检流程。KEY 使用 GPIO4，内部上拉，低电平按下。自检会读取 TF 卡、解析 `/sdcard/config.toml`、按配置测试 Wi-Fi 和 HTTP，并刷新墨水屏。

@@ -10,7 +10,7 @@ use crate::device_display::{MountedSdCardDisplayResourceReader, PackedFrameDispl
 #[cfg(target_os = "espidf")]
 use crate::device_runtime::{
     run_device_cycle, DeviceCloudSync, DeviceCycleInput, DeviceCycleOutcome, DeviceCycleResult,
-    SyncRequest, SyncResult,
+    DeviceDisplay, ErrorRefreshRequest, SyncRequest, SyncResult,
 };
 #[cfg(target_os = "espidf")]
 use crate::device_sync::{CloudResourceSync, DeviceSyncError};
@@ -90,6 +90,25 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
 
     let now_epoch_seconds = now_epoch_seconds();
     let date = today();
+    let epd_bus = match EspEpdBus::new(
+        peripherals.spi3,
+        pins.gpio10,
+        pins.gpio11,
+        pins.gpio9,
+        pins.gpio8,
+        pins.gpio12,
+        pins.gpio13,
+    ) {
+        Ok(epd_bus) => epd_bus,
+        Err(_) => {
+            return EspDeviceRunReport {
+                outcome: EspDeviceRunOutcome::EpdInitError,
+                cycle: None,
+                sleep_plan: None,
+            };
+        }
+    };
+    let mut display = PackedFrameDisplay::new(MountedSdCardDisplayResourceReader, epd_bus);
 
     let result = with_mounted_sdcard_parts(
         peripherals.sdmmc1,
@@ -113,19 +132,6 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
                 now_epoch_seconds,
             );
             let mut sync = EspDeviceCloudSync::new(peripherals.modem);
-            let epd_bus = match EspEpdBus::new(
-                peripherals.spi3,
-                pins.gpio10,
-                pins.gpio11,
-                pins.gpio9,
-                pins.gpio8,
-                pins.gpio12,
-                pins.gpio13,
-            ) {
-                Ok(epd_bus) => epd_bus,
-                Err(_) => return Ok(Err(EspDeviceRunOutcome::EpdInitError)),
-            };
-            let mut display = PackedFrameDisplay::new(MountedSdCardDisplayResourceReader, epd_bus);
             let cycle = run_device_cycle(
                 DeviceCycleInput {
                     config,
@@ -161,16 +167,32 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
             cycle: None,
             sleep_plan: None,
         },
-        Ok(Err(_)) => EspDeviceRunReport {
-            outcome: EspDeviceRunOutcome::StorageMountError,
-            cycle: None,
-            sleep_plan: None,
-        },
-        Err(_) => EspDeviceRunReport {
-            outcome: EspDeviceRunOutcome::StorageMountError,
-            cycle: None,
-            sleep_plan: None,
-        },
+        Ok(Err(_)) | Err(_) => {
+            refresh_storage_error_page(&mut display, now_epoch_seconds);
+            EspDeviceRunReport {
+                outcome: EspDeviceRunOutcome::StorageMountError,
+                cycle: None,
+                sleep_plan: None,
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "espidf")]
+fn refresh_storage_error_page<D>(display: &mut D, now_epoch_seconds: u64)
+where
+    D: DeviceDisplay,
+{
+    let result = display.refresh_error_page(ErrorRefreshRequest {
+        title: "STORAGE ERROR".to_string(),
+        message: "TF CARD IS NOT AVAILABLE".to_string(),
+        hint: "CHECK TF CARD AND SLOT".to_string(),
+        detail: "MOUNT /SDCARD FAILED".to_string(),
+        now_epoch_seconds,
+    });
+
+    if let Err(error) = result {
+        log::warn!(target: "epaper_album", "storage error page: {error}");
     }
 }
 

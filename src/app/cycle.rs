@@ -54,10 +54,20 @@ pub struct DisplayRefreshRequest {
     pub now_epoch_seconds: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ErrorRefreshRequest {
+    pub title: String,
+    pub message: String,
+    pub hint: String,
+    pub detail: String,
+    pub now_epoch_seconds: u64,
+}
+
 pub trait DeviceDisplay {
     type Error: fmt::Display;
 
     fn refresh(&mut self, request: DisplayRefreshRequest) -> Result<(), Self::Error>;
+    fn refresh_error_page(&mut self, request: ErrorRefreshRequest) -> Result<(), Self::Error>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -211,6 +221,24 @@ where
                 refresh_failed = true;
             }
         }
+    } else if let Some(request) = error_refresh_request(
+        config.as_ref(),
+        &decision,
+        persistent_state.last_sync_error.as_deref(),
+        sync_failed,
+        now_epoch_seconds,
+    ) {
+        refresh_attempted = true;
+
+        match display.refresh_error_page(request) {
+            Ok(()) => {
+                refresh_succeeded = true;
+            }
+            Err(error) => {
+                persistent_state.last_sync_error = Some(error.to_string());
+                refresh_failed = true;
+            }
+        }
     }
 
     let outcome = cycle_outcome(
@@ -260,6 +288,63 @@ fn refresh_notice(low_battery: bool, sync_failed: bool) -> Option<RenderNotice> 
     None
 }
 
+fn error_refresh_request(
+    config: Option<&Config>,
+    decision: &DisplayDecision,
+    sync_error: Option<&str>,
+    sync_failed: bool,
+    now_epoch_seconds: u64,
+) -> Option<ErrorRefreshRequest> {
+    if config.is_none_or(|config| !config.has_required_values()) {
+        return Some(ErrorRefreshRequest {
+            title: "CONFIG ERROR".to_string(),
+            message: "DEVICE CONFIG IS MISSING".to_string(),
+            hint: "CHECK /SDCARD/CONFIG.TOML".to_string(),
+            detail: "WIFI BASE URL AND SECRET KEY REQUIRED".to_string(),
+            now_epoch_seconds,
+        });
+    }
+
+    match decision {
+        DisplayDecision::MissingConfig => Some(ErrorRefreshRequest {
+            title: "CONFIG ERROR".to_string(),
+            message: "DEVICE CONFIG IS MISSING".to_string(),
+            hint: "CHECK /SDCARD/CONFIG.TOML".to_string(),
+            detail: "WIFI BASE URL AND SECRET KEY REQUIRED".to_string(),
+            now_epoch_seconds,
+        }),
+        DisplayDecision::NoUsablePhoto(reason) => {
+            if sync_failed {
+                return Some(ErrorRefreshRequest {
+                    title: "SYNC ERROR".to_string(),
+                    message: "CANNOT UPDATE SERVER DATA".to_string(),
+                    hint: "CHECK WIFI BASE URL AND SECRET KEY".to_string(),
+                    detail: sync_error.unwrap_or("SYNC FAILED").to_string(),
+                    now_epoch_seconds,
+                });
+            }
+
+            let (message, detail) = match reason {
+                NoUsablePhotoReason::NoPlanForDate => {
+                    ("NO PLAN FOR CURRENT DATE", "WAITING FOR TODAY OR PAST PLAN")
+                }
+                NoUsablePhotoReason::ResourceNotCached => {
+                    ("PLANNED IMAGE IS NOT READY", "IMAGE CACHE IS MISSING")
+                }
+            };
+
+            Some(ErrorRefreshRequest {
+                title: "NO PHOTO".to_string(),
+                message: message.to_string(),
+                hint: "CHECK SERVER PLAN AND IMAGE CACHE".to_string(),
+                detail: detail.to_string(),
+                now_epoch_seconds,
+            })
+        }
+        DisplayDecision::RefreshRequired { .. } | DisplayDecision::SleepOnly { .. } => None,
+    }
+}
+
 fn cycle_outcome(
     decision: &DisplayDecision,
     config: Option<&Config>,
@@ -279,6 +364,10 @@ fn cycle_outcome(
 
     if refresh_failed {
         return DeviceCycleOutcome::RefreshFailed;
+    }
+
+    if let DisplayDecision::NoUsablePhoto(reason) = decision {
+        return DeviceCycleOutcome::NoUsablePhoto(reason.clone());
     }
 
     if sync_failed {
@@ -334,6 +423,7 @@ mod tests {
     struct FakeDisplay {
         result: Option<Result<(), FakeError>>,
         requests: Vec<DisplayRefreshRequest>,
+        error_requests: Vec<ErrorRefreshRequest>,
     }
 
     impl DeviceDisplay for FakeDisplay {
@@ -341,6 +431,11 @@ mod tests {
 
         fn refresh(&mut self, request: DisplayRefreshRequest) -> Result<(), Self::Error> {
             self.requests.push(request);
+            self.result.take().unwrap_or(Ok(()))
+        }
+
+        fn refresh_error_page(&mut self, request: ErrorRefreshRequest) -> Result<(), Self::Error> {
+            self.error_requests.push(request);
             self.result.take().unwrap_or(Ok(()))
         }
     }
@@ -533,6 +628,9 @@ mod tests {
 
         assert_eq!(sync.requests.len(), 1);
         assert_eq!(display.requests.len(), 0);
+        assert_eq!(display.error_requests.len(), 1);
+        assert_eq!(display.error_requests[0].title, "NO PHOTO");
+        assert_eq!(display.error_requests[0].now_epoch_seconds, 100);
         assert_eq!(
             result.display_decision,
             DisplayDecision::NoUsablePhoto(NoUsablePhotoReason::ResourceNotCached)
@@ -540,6 +638,50 @@ mod tests {
         assert_eq!(
             result.outcome,
             DeviceCycleOutcome::NoUsablePhoto(NoUsablePhotoReason::ResourceNotCached)
+        );
+        assert!(result.refresh_succeeded);
+    }
+
+    #[test]
+    fn missing_config_refreshes_error_page_without_photo_refresh() {
+        let mut input = input(None, ResourceIndex::default());
+        input.config = None;
+        let mut sync = FakeSync::default();
+        let mut display = FakeDisplay::default();
+
+        let result = run_device_cycle(input, &mut sync, &mut display);
+
+        assert!(sync.requests.is_empty());
+        assert!(display.requests.is_empty());
+        assert_eq!(display.error_requests.len(), 1);
+        assert_eq!(display.error_requests[0].title, "CONFIG ERROR");
+        assert_eq!(display.error_requests[0].now_epoch_seconds, 100);
+        assert_eq!(result.outcome, DeviceCycleOutcome::MissingConfig);
+        assert!(result.refresh_succeeded);
+    }
+
+    #[test]
+    fn sync_failure_without_displayable_cache_refreshes_no_photo_error_page() {
+        let input = input(Some(snapshot("hash-v1", "a")), ResourceIndex::default());
+        let mut sync = FakeSync {
+            result: Some(Err(FakeError("network down"))),
+            requests: Vec::new(),
+        };
+        let mut display = FakeDisplay::default();
+
+        let result = run_device_cycle(input, &mut sync, &mut display);
+
+        assert_eq!(sync.requests.len(), 1);
+        assert!(display.requests.is_empty());
+        assert_eq!(display.error_requests.len(), 1);
+        assert_eq!(display.error_requests[0].title, "SYNC ERROR");
+        assert_eq!(
+            result.outcome,
+            DeviceCycleOutcome::NoUsablePhoto(NoUsablePhotoReason::ResourceNotCached)
+        );
+        assert_eq!(
+            result.persistent_state.last_sync_error.as_deref(),
+            Some("network down")
         );
     }
 }

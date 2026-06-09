@@ -90,6 +90,35 @@ impl RenderNotice {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BuiltinErrorPageInput<'a> {
+    pub title: &'a str,
+    pub message: &'a str,
+    pub hint: &'a str,
+    pub detail: &'a str,
+}
+
+impl<'a> BuiltinErrorPageInput<'a> {
+    pub const fn new(title: &'a str, message: &'a str) -> Self {
+        Self {
+            title,
+            message,
+            hint: "",
+            detail: "",
+        }
+    }
+
+    pub const fn with_hint(mut self, hint: &'a str) -> Self {
+        self.hint = hint;
+        self
+    }
+
+    pub const fn with_detail(mut self, detail: &'a str) -> Self {
+        self.detail = detail;
+        self
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SpriteBmps<'a> {
     pub caption: Option<&'a [u8]>,
@@ -208,6 +237,12 @@ pub fn render_photo_page(input: &RenderInput<'_>) -> ScreenBuffer {
     buffer
 }
 
+pub fn render_builtin_error_page_packed_frame(input: &BuiltinErrorPageInput<'_>) -> Vec<u8> {
+    let mut buffer = ScreenBuffer::default();
+    render_builtin_error_page_into(&mut buffer, input);
+    pack_screen_buffer(&buffer)
+}
+
 pub fn render_epd_packed_frame_from_bmps(
     input: &PackedFrameRenderInput<'_>,
 ) -> Result<Vec<u8>, RenderError> {
@@ -264,6 +299,84 @@ pub fn render_into(buffer: &mut ScreenBuffer, input: &RenderInput<'_>) {
     if let Some(notice) = input.notice {
         draw_text(buffer, OverlaySlot::TopLeft, notice.text(), &input.style);
     }
+}
+
+fn render_builtin_error_page_into(buffer: &mut ScreenBuffer, input: &BuiltinErrorPageInput<'_>) {
+    buffer.clear(Color::White);
+
+    let title_style = TextStyle {
+        foreground: Color::White,
+        background: Color::Black,
+        padding_x: 18,
+        padding_y: 14,
+        margin_x: 0,
+        margin_y: 0,
+        glyph_width: 16,
+        glyph_height: 22,
+        glyph_gap: 4,
+    };
+    let body_style = TextStyle {
+        foreground: Color::Black,
+        background: Color::White,
+        padding_x: 0,
+        padding_y: 0,
+        margin_x: 0,
+        margin_y: 0,
+        glyph_width: 10,
+        glyph_height: 14,
+        glyph_gap: 3,
+    };
+    let hint_style = TextStyle {
+        glyph_width: 8,
+        glyph_height: 11,
+        glyph_gap: 2,
+        ..body_style
+    };
+
+    let title = input.title;
+    let title_size = text_size(title, &title_style).unwrap_or((0, 0));
+    let title_x = SCREEN_WIDTH.saturating_sub(title_size.0) / 2;
+    let title_y = 64usize;
+    draw_solid_block(
+        buffer,
+        0,
+        title_y.saturating_sub(18),
+        SCREEN_WIDTH,
+        96,
+        Color::Black,
+    );
+    draw_text_at(buffer, title_x, title_y, title, &title_style);
+
+    let message = input.message;
+    let message_size = text_size(message, &body_style).unwrap_or((0, 0));
+    let message_x = SCREEN_WIDTH.saturating_sub(message_size.0) / 2;
+    draw_text_at(buffer, message_x, 210, message, &body_style);
+
+    if !input.hint.is_empty() {
+        let hint_size = text_size(input.hint, &hint_style).unwrap_or((0, 0));
+        let hint_x = SCREEN_WIDTH.saturating_sub(hint_size.0) / 2;
+        draw_text_at(buffer, hint_x, 280, input.hint, &hint_style);
+    }
+
+    if !input.detail.is_empty() {
+        let detail_size = text_size(input.detail, &hint_style).unwrap_or((0, 0));
+        let detail_x = SCREEN_WIDTH.saturating_sub(detail_size.0) / 2;
+        draw_text_at(buffer, detail_x, 330, input.detail, &hint_style);
+    }
+}
+
+fn pack_screen_buffer(buffer: &ScreenBuffer) -> Vec<u8> {
+    let mut frame = vec![pack_epd_pixels(Color::White, Color::White); EPD_FRAME_BYTES];
+
+    for y in 0..SCREEN_HEIGHT {
+        for x in 0..SCREEN_WIDTH {
+            if let Some(color) = buffer.get_pixel(x, y) {
+                set_logical_packed_frame_pixel(&mut frame, x, y, color);
+            }
+        }
+    }
+
+    frame
 }
 
 pub fn draw_solid_block(
@@ -632,6 +745,33 @@ mod tests {
         .unwrap();
 
         assert_eq!(logical_frame_color(&frame, EPD_WIDTH - 1, 0), Color::White);
+    }
+
+    #[test]
+    fn builtin_error_page_renders_full_packed_frame_with_title_ink() {
+        let frame = render_builtin_error_page_packed_frame(
+            &BuiltinErrorPageInput::new("WIFI ERROR", "CANNOT CONNECT")
+                .with_hint("CHECK WIFI SETTINGS")
+                .with_detail("WIFI connect-failed"),
+        );
+
+        assert_eq!(frame.len(), EPD_FRAME_BYTES);
+        assert!(has_non_white_pixel_in_title_area(&frame));
+    }
+
+    #[test]
+    fn builtin_error_page_hint_and_detail_are_optional() {
+        let frame = render_builtin_error_page_packed_frame(&BuiltinErrorPageInput::new(
+            "NO PHOTO",
+            "WAITING FOR IMAGE",
+        ));
+
+        assert_eq!(frame.len(), EPD_FRAME_BYTES);
+        assert!(has_non_white_pixel_in_title_area(&frame));
+    }
+
+    fn has_non_white_pixel_in_title_area(frame: &[u8]) -> bool {
+        (46..160).any(|y| (0..EPD_WIDTH).any(|x| logical_frame_color(frame, x, y) != Color::White))
     }
 
     fn logical_frame_color(frame: &[u8], x: usize, y: usize) -> Color {

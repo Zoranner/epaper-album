@@ -1,9 +1,9 @@
 use crate::cloud::sprite_sha256;
-use crate::device_runtime::{DeviceDisplay, DisplayRefreshRequest};
+use crate::device_runtime::{DeviceDisplay, DisplayRefreshRequest, ErrorRefreshRequest};
 use crate::epd::{run_epd_packed_frame, EpdBus, EpdError};
 use crate::render::{
-    render_epd_packed_frame_from_bmps, PackedFrameRenderInput, RenderError, SpriteBmps,
-    SpritePlacement,
+    render_builtin_error_page_packed_frame, render_epd_packed_frame_from_bmps,
+    BuiltinErrorPageInput, PackedFrameRenderInput, RenderError, SpriteBmps, SpritePlacement,
 };
 use crate::storage::{image_bmp_path, read_binary_file, sprite_bmp_path, StorageBinaryRead};
 use std::fmt;
@@ -163,6 +163,16 @@ where
 
         run_epd_packed_frame(&mut self.bus, &frame).map_err(DeviceDisplayError::Epd)
     }
+
+    fn refresh_error_page(&mut self, request: ErrorRefreshRequest) -> Result<(), Self::Error> {
+        let frame = render_builtin_error_page_packed_frame(
+            &BuiltinErrorPageInput::new(&request.title, &request.message)
+                .with_hint(&request.hint)
+                .with_detail(&request.detail),
+        );
+
+        run_epd_packed_frame(&mut self.bus, &frame).map_err(DeviceDisplayError::Epd)
+    }
 }
 
 fn read_caption_sprite<R>(
@@ -225,12 +235,15 @@ mod tests {
     struct MockReader {
         photos: BTreeMap<String, Vec<u8>>,
         sprites: BTreeMap<String, Vec<u8>>,
+        photo_reads: usize,
+        sprite_reads: usize,
     }
 
     impl DisplayResourceReader for MockReader {
         type Error = DisplayReadError;
 
         fn read_photo_bmp(&mut self, sha256: &str) -> Result<Vec<u8>, Self::Error> {
+            self.photo_reads += 1;
             self.photos
                 .get(sha256)
                 .cloned()
@@ -238,6 +251,7 @@ mod tests {
         }
 
         fn read_sprite_bmp(&mut self, key: &str) -> Result<Option<Vec<u8>>, Self::Error> {
+            self.sprite_reads += 1;
             Ok(self.sprites.get(key).cloned())
         }
     }
@@ -317,6 +331,29 @@ mod tests {
         let (_reader, bus) = display.into_parts();
 
         assert_eq!(bus.row_count, EPD_HEIGHT);
+    }
+
+    #[test]
+    fn display_error_page_renders_without_reading_resources() {
+        let reader = MockReader::default();
+        let bus = MockBus::default();
+        let mut display = PackedFrameDisplay::new(reader, bus);
+
+        display
+            .refresh_error_page(ErrorRefreshRequest {
+                title: "CONFIG ERROR".to_string(),
+                message: "DEVICE CONFIG IS MISSING".to_string(),
+                hint: "CHECK /SDCARD/CONFIG.TOML".to_string(),
+                detail: "WIFI BASE URL AND SECRET KEY REQUIRED".to_string(),
+                now_epoch_seconds: 100,
+            })
+            .unwrap();
+        let (reader, bus) = display.into_parts();
+
+        assert_eq!(reader.photo_reads, 0);
+        assert_eq!(reader.sprite_reads, 0);
+        assert_eq!(bus.row_count, EPD_HEIGHT);
+        assert_eq!(bus.frame_bytes, EPD_FRAME_BYTES);
     }
 
     fn request(notice: Option<RenderNotice>) -> DisplayRefreshRequest {
