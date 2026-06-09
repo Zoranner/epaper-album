@@ -1,20 +1,20 @@
 <template>
-  <label class="base-field" :class="{ 'has-error': error }">
-    <span v-if="label" class="base-field__label">{{ label }}</span>
-    <span class="base-file-input__row">
+  <label class="field" :class="{ 'has-error': error }">
+    <span v-if="label" class="field__label">{{ label }}</span>
+    <span class="file-input__row">
       <input
-        class="base-file-input__native"
+        class="file-input__native"
         :accept="accept"
         :disabled="disabled"
         :required="required"
         type="file"
         @change="updateFile"
       />
-      <span class="base-button secondary small" aria-hidden="true">{{ buttonText }}</span>
-      <span class="base-file-input__name">{{ fileName || placeholder }}</span>
+      <span class="button secondary small" aria-hidden="true">{{ buttonText }}</span>
+      <span class="file-input__name">{{ fileName || placeholder }}</span>
     </span>
-    <span v-if="error" class="base-field__error">{{ error }}</span>
-    <span v-else-if="hint" class="base-field__hint">{{ hint }}</span>
+    <span v-if="error" class="field__error">{{ error }}</span>
+    <span v-else-if="hint" class="field__hint">{{ hint }}</span>
   </label>
 </template>
 

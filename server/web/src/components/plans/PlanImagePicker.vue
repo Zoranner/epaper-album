@@ -2,7 +2,7 @@
   <section class="plan-picker">
     <div class="plan-picker__toolbar">
       <strong>选择图片</strong>
-      <BaseInput
+      <Input
         label=""
         placeholder="搜索备注或 sha256"
         small
@@ -10,7 +10,7 @@
         @update:model-value="keyword = $event"
       />
     </div>
-    <BaseEmpty v-if="filteredImages.length === 0" small>暂无可选图片</BaseEmpty>
+    <EmptyState v-if="filteredImages.length === 0" small>暂无可选图片</EmptyState>
     <div v-else class="picker-grid">
       <button
         v-for="image in filteredImages"
@@ -32,8 +32,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import type { AdminImage, ImageStatus } from '../../api';
-import BaseEmpty from '../base/BaseEmpty.vue';
-import BaseInput from '../base/BaseInput.vue';
+import EmptyState from '../feedback/EmptyState.vue';
+import Input from '../input/Input.vue';
 
 const props = defineProps<{
   images: AdminImage[];

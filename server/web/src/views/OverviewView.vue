@@ -5,9 +5,9 @@
         <h2>概览</h2>
         <p>当前资源和排期状态</p>
       </div>
-      <BaseButton small :loading="loading" type="button" variant="secondary" @click="loadOverview">
+      <Button small :loading="loading" type="button" variant="secondary" @click="loadOverview">
         刷新
-      </BaseButton>
+      </Button>
     </header>
 
     <div class="summary-table">
@@ -55,7 +55,7 @@
     <section class="recent-plans">
       <h3>最近计划</h3>
       <p v-if="error" class="form-error">{{ error }}</p>
-      <BaseEmpty v-else-if="plans.length === 0" small>暂无计划</BaseEmpty>
+      <EmptyState v-else-if="plans.length === 0" small>暂无计划</EmptyState>
       <div v-else class="recent-plan-list">
         <div v-for="plan in plans" :key="plan.date" class="recent-plan-row">
           <span>{{ plan.caption }}</span>
@@ -69,10 +69,9 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import { listImages, listPlans, type AdminImage, type AdminPlan } from '../../api';
-import BaseButton from '../base/BaseButton.vue';
-import BaseEmpty from '../base/BaseEmpty.vue';
-import { useAuthStore } from '../../composables/useAuthStore';
+import { listImages, listPlans, type AdminImage, type AdminPlan } from '../api';
+import { Button, EmptyState } from '../components';
+import { useAuthStore } from '../composables/useAuthStore';
 
 const auth = useAuthStore();
 const images = ref<AdminImage[]>([]);

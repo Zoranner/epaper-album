@@ -6,15 +6,13 @@
         <p>维护设备显示计划记录</p>
       </div>
       <div class="module-actions">
-        <BaseSelect v-model="daysValue" small :options="dayOptions" />
-        <BaseButton small type="button" variant="secondary" @click="loadPlans">
-          <BaseIcon name="search" />
+        <Select v-model="daysValue" small :options="dayOptions" />
+        <Button icon="search" small type="button" variant="secondary" @click="loadPlans">
           查询
-        </BaseButton>
-        <BaseButton small type="button" variant="primary" @click="openCreate">
-          <BaseIcon name="plus" />
+        </Button>
+        <Button icon="plus" small type="button" variant="primary" @click="openCreate">
           新增计划
-        </BaseButton>
+        </Button>
       </div>
     </header>
 
@@ -36,17 +34,17 @@
       @saved="handleSaved"
     />
 
-    <BaseDialog :open="Boolean(deletingPlan)" title="删除计划" @close="deletingPlan = null">
+    <Dialog :open="Boolean(deletingPlan)" title="删除计划" @close="deletingPlan = null">
       <div v-if="deletingPlan" class="confirm-body">
         <p>确认删除计划“{{ deletingPlan.caption }}”？</p>
-        <BaseDialogActions>
-          <BaseButton type="button" variant="secondary" @click="deletingPlan = null">取消</BaseButton>
-          <BaseButton :loading="deleting" type="button" variant="danger" @click="deleteSelectedPlan">
+        <DialogActions>
+          <Button type="button" variant="secondary" @click="deletingPlan = null">取消</Button>
+          <Button :loading="deleting" type="button" variant="danger" @click="deleteSelectedPlan">
             删除
-          </BaseButton>
-        </BaseDialogActions>
+          </Button>
+        </DialogActions>
       </div>
-    </BaseDialog>
+    </Dialog>
   </section>
 </template>
 
@@ -59,16 +57,12 @@ import {
   listPlans as listPlansRequest,
   type AdminImage,
   type AdminPlan,
-} from '../../api';
-import BaseButton from '../base/BaseButton.vue';
-import BaseDialog from '../base/BaseDialog.vue';
-import BaseDialogActions from '../base/BaseDialogActions.vue';
-import BaseIcon from '../base/BaseIcon.vue';
-import BaseSelect, { type BaseSelectOption } from '../base/BaseSelect.vue';
-import PlanEditorDialog from './PlanEditorDialog.vue';
-import PlanTable from './PlanTable.vue';
-import type { PlanView } from './types';
-import { useAuthStore } from '../../composables/useAuthStore';
+} from '../api';
+import { Button, Dialog, DialogActions, Select, type SelectOption } from '../components';
+import PlanEditorDialog from '../components/plans/PlanEditorDialog.vue';
+import PlanTable from '../components/plans/PlanTable.vue';
+import type { PlanView } from '../components/plans/types';
+import { useAuthStore } from '../composables/useAuthStore';
 
 const auth = useAuthStore();
 const days = ref(3);
@@ -86,7 +80,7 @@ const editingPlan = ref<PlanView | null>(null);
 const deletingPlan = ref<PlanView | null>(null);
 const deleting = ref(false);
 const error = ref('');
-const dayOptions: BaseSelectOption[] = Array.from({ length: 7 }, (_, index) => {
+const dayOptions: SelectOption[] = Array.from({ length: 7 }, (_, index) => {
   const value = String(index + 1);
   return { label: `最近 ${value} 天`, value };
 });

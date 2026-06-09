@@ -6,14 +6,14 @@
         <p>管理员登录</p>
       </header>
 
-      <BaseInput
+      <Input
         autocomplete="username"
         label="账号"
         required
         :model-value="auth.loginForm.username"
         @update:model-value="auth.loginForm.username = $event"
       />
-      <BaseInput
+      <Input
         autocomplete="current-password"
         label="密码"
         required
@@ -24,17 +24,16 @@
 
       <p v-if="error" class="form-error">{{ error }}</p>
 
-      <BaseButton block :loading="auth.loggingIn.value" type="submit" variant="primary">
+      <Button block :loading="auth.loggingIn.value" type="submit" variant="primary">
         登录
-      </BaseButton>
+      </Button>
     </form>
   </main>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue';
-import BaseButton from '../components/base/BaseButton.vue';
-import BaseInput from '../components/base/BaseInput.vue';
+import { Button, Input } from '../components';
 import { useAuthStore } from '../composables/useAuthStore';
 
 const emit = defineEmits<{

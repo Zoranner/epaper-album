@@ -1,15 +1,15 @@
 <template>
-  <BaseDialog :open="open" :title="plan ? '编辑计划' : '新增计划'" @close="$emit('close')">
+  <Dialog :open="open" :title="plan ? '编辑计划' : '新增计划'" @close="$emit('close')">
     <form class="plan-dialog" @submit.prevent="submit">
       <div class="plan-dialog__fields">
-        <BaseInput
+        <Input
           label="标题"
           :maxlength="80"
           required
           :model-value="draft.caption"
           @update:model-value="draft.caption = $event"
         />
-        <BaseDateInput
+        <DatePicker
           label="日期"
           required
           :model-value="draft.date"
@@ -25,23 +25,23 @@
       />
 
       <p v-if="error" class="form-error">{{ error }}</p>
-      <BaseDialogActions>
+      <DialogActions>
         <template #meta>{{ selectedImage ? '已选 1 张' : '未选图片' }}</template>
-        <BaseButton type="button" variant="secondary" @click="$emit('close')">取消</BaseButton>
-        <BaseButton :loading="saving" type="submit" variant="primary">保存</BaseButton>
-      </BaseDialogActions>
+        <Button type="button" variant="secondary" @click="$emit('close')">取消</Button>
+        <Button :loading="saving" type="submit" variant="primary">保存</Button>
+      </DialogActions>
     </form>
-  </BaseDialog>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
 import { reactive, ref, watch } from 'vue';
 import { createPlan, updatePlan, type AdminImage, type PlanPayload } from '../../api';
-import BaseButton from '../base/BaseButton.vue';
-import BaseDialog from '../base/BaseDialog.vue';
-import BaseDialogActions from '../base/BaseDialogActions.vue';
-import BaseDateInput from '../base/BaseDateInput.vue';
-import BaseInput from '../base/BaseInput.vue';
+import Button from '../base/Button.vue';
+import DatePicker from '../input/DatePicker.vue';
+import Input from '../input/Input.vue';
+import Dialog from '../overlay/Dialog.vue';
+import DialogActions from '../overlay/DialogActions.vue';
 import PlanImagePicker from './PlanImagePicker.vue';
 import type { PlanView } from './types';
 import { useAuthStore } from '../../composables/useAuthStore';
@@ -75,6 +75,9 @@ async function submit() {
   saving.value = true;
   error.value = '';
   try {
+    if (!draft.date) {
+      throw new Error('请选择日期');
+    }
     if (!draft.image_sha256) {
       throw new Error('请选择一张图片');
     }
@@ -99,11 +102,19 @@ function selectImage(sha256: string) {
 }
 
 function loadDraft(plan: PlanView | null) {
-  draft.date = plan?.date ?? '';
+  draft.date = plan?.date ?? todayDate();
   draft.caption = plan?.caption ?? '';
   selectedImage.value = plan?.image_sha256 ?? '';
   draft.image_sha256 = selectedImage.value;
   error.value = '';
+}
+
+function todayDate() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 watch(

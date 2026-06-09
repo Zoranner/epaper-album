@@ -1,11 +1,14 @@
 <template>
-  <component :is="iconComponent" class="base-icon" aria-hidden="true" />
+  <component :is="iconComponent" class="icon" aria-hidden="true" />
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue';
 import {
+  CalendarDays,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Edit3,
   MoreHorizontal,
   Plus,
@@ -16,22 +19,30 @@ import {
   X,
 } from 'lucide-vue-next';
 
+export type IconName =
+  | 'calendar'
+  | 'chevron-down'
+  | 'chevron-left'
+  | 'chevron-right'
+  | 'more'
+  | 'plus'
+  | 'search'
+  | 'upload'
+  | 'edit'
+  | 'trash'
+  | 'refresh'
+  | 'close';
+
 const props = defineProps<{
-  name:
-    | 'chevron-down'
-    | 'more'
-    | 'plus'
-    | 'search'
-    | 'upload'
-    | 'edit'
-    | 'trash'
-    | 'refresh'
-    | 'close';
+  name: IconName;
 }>();
 
 const iconComponent = computed(() => {
   const icons = {
+    calendar: CalendarDays,
     'chevron-down': ChevronDown,
+    'chevron-left': ChevronLeft,
+    'chevron-right': ChevronRight,
     more: MoreHorizontal,
     plus: Plus,
     search: Search,

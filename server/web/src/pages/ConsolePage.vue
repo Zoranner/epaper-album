@@ -8,10 +8,10 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
-import OverviewView from '../components/overview/OverviewView.vue';
-import ImagesView from '../components/images/ImagesView.vue';
-import PlansView from '../components/plans/PlansView.vue';
 import ConsoleFrame, { type ConsoleSection } from '../layouts/ConsoleFrame.vue';
+import ImagesView from '../views/ImagesView.vue';
+import OverviewView from '../views/OverviewView.vue';
+import PlansView from '../views/PlansView.vue';
 
 defineEmits<{
   logout: [];

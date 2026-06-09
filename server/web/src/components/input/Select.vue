@@ -1,9 +1,9 @@
 <template>
-  <label class="base-field" :class="{ 'has-error': error, small }">
-    <span v-if="label" class="base-field__label">{{ label }}</span>
-    <span class="base-select">
+  <label class="field" :class="{ 'has-error': error, small }">
+    <span v-if="label" class="field__label">{{ label }}</span>
+    <span class="select">
       <select
-        class="base-field__control"
+        class="field__control"
         :disabled="disabled"
         :required="required"
         :value="modelValue"
@@ -13,17 +13,17 @@
           {{ option.label }}
         </option>
       </select>
-      <BaseIcon name="chevron-down" />
+      <Icon name="chevron-down" />
     </span>
-    <span v-if="error" class="base-field__error">{{ error }}</span>
-    <span v-else-if="hint" class="base-field__hint">{{ hint }}</span>
+    <span v-if="error" class="field__error">{{ error }}</span>
+    <span v-else-if="hint" class="field__hint">{{ hint }}</span>
   </label>
 </template>
 
 <script setup lang="ts">
-import BaseIcon from './BaseIcon.vue';
+import Icon from '../display/Icon.vue';
 
-export interface BaseSelectOption {
+export interface SelectOption {
   label: string;
   value: string;
 }
@@ -31,7 +31,7 @@ export interface BaseSelectOption {
 withDefaults(
   defineProps<{
     modelValue: string;
-    options: BaseSelectOption[];
+    options: SelectOption[];
     label?: string;
     hint?: string;
     error?: string;

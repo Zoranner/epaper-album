@@ -10,7 +10,7 @@
     </div>
     <div class="image-tile__footer">
       <span>{{ statusText }}</span>
-      <BaseActionMenu :items="menuItems" @select="selectAction" />
+      <ActionMenu :items="menuItems" @select="selectAction" />
     </div>
   </article>
 </template>
@@ -18,7 +18,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { AdminImage } from '../../api';
-import BaseActionMenu, { type BaseActionMenuItem } from '../base/BaseActionMenu.vue';
+import ActionMenu, { type ActionMenuItem } from '../navigation/ActionMenu.vue';
 
 const props = defineProps<{
   image: AdminImage;
@@ -42,8 +42,8 @@ const statusText = computed(() => {
   }
   return '待处理';
 });
-const menuItems = computed<BaseActionMenuItem[]>(() => {
-  const items: BaseActionMenuItem[] = [{ key: 'edit', label: '编辑备注', icon: 'edit' }];
+const menuItems = computed<ActionMenuItem[]>(() => {
+  const items: ActionMenuItem[] = [{ key: 'edit', label: '编辑备注', icon: 'edit' }];
   if (props.image.status === 'ready') {
     items.push({ key: 'refresh', label: '刷新预览', icon: 'refresh' });
   }

@@ -1,13 +1,15 @@
 <template>
-  <div ref="menuRef" class="base-action-menu" @keydown.esc="closeMenu">
-    <BaseIconButton
+  <div ref="menuRef" class="action-menu" @keydown.esc="closeMenu">
+    <Button
       :aria-expanded="open"
       aria-haspopup="menu"
       icon="more"
+      icon-only
       label="操作"
+      variant="ghost"
       @click="toggleMenu"
     />
-    <div v-if="open" class="base-action-menu__items" role="menu">
+    <div v-if="open" class="action-menu__items" role="menu">
       <button
         v-for="item in items"
         :key="item.key"
@@ -16,7 +18,7 @@
         type="button"
         @click="selectItem(item.key)"
       >
-        <BaseIcon v-if="item.icon" :name="item.icon" />
+        <Icon v-if="item.icon" :name="item.icon" />
         <span>{{ item.label }}</span>
       </button>
     </div>
@@ -25,18 +27,18 @@
 
 <script setup lang="ts">
 import { onBeforeUnmount, ref } from 'vue';
-import BaseIcon from './BaseIcon.vue';
-import BaseIconButton from './BaseIconButton.vue';
+import Button from '../base/Button.vue';
+import Icon, { type IconName } from '../display/Icon.vue';
 
-export interface BaseActionMenuItem {
+export interface ActionMenuItem {
   key: string;
   label: string;
-  icon?: InstanceType<typeof BaseIcon>['$props']['name'];
+  icon?: IconName;
   danger?: boolean;
 }
 
 defineProps<{
-  items: BaseActionMenuItem[];
+  items: ActionMenuItem[];
 }>();
 
 const emit = defineEmits<{

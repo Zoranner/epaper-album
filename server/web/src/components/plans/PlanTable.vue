@@ -1,5 +1,5 @@
 <template>
-  <BaseEmpty v-if="plans.length === 0" small>暂无计划</BaseEmpty>
+  <EmptyState v-if="plans.length === 0" small>暂无计划</EmptyState>
   <div v-else class="plan-table">
     <div class="plan-table__head">
       <span>日期</span>
@@ -20,7 +20,7 @@
 </template>
 
 <script setup lang="ts">
-import BaseEmpty from '../base/BaseEmpty.vue';
+import EmptyState from '../feedback/EmptyState.vue';
 import PlanRow from './PlanRow.vue';
 import type { PlanView } from './types';
 

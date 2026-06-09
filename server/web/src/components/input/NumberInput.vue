@@ -1,8 +1,8 @@
 <template>
-  <label class="base-field" :class="{ 'has-error': error, small }">
-    <span v-if="label" class="base-field__label">{{ label }}</span>
+  <label class="field" :class="{ 'has-error': error, small }">
+    <span v-if="label" class="field__label">{{ label }}</span>
     <input
-      class="base-field__control"
+      class="field__control"
       :disabled="disabled"
       :max="max"
       :min="min"
@@ -14,8 +14,8 @@
       @change="$emit('change')"
       @input="updateValue"
     />
-    <span v-if="error" class="base-field__error">{{ error }}</span>
-    <span v-else-if="hint" class="base-field__hint">{{ hint }}</span>
+    <span v-if="error" class="field__error">{{ error }}</span>
+    <span v-else-if="hint" class="field__hint">{{ hint }}</span>
   </label>
 </template>
 

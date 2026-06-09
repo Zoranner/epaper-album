@@ -20,7 +20,7 @@
 
       <div class="console-account">
         <span>管理员</span>
-        <BaseButton small type="button" variant="ghost" @click="$emit('logout')">退出</BaseButton>
+        <Button small type="button" variant="ghost" @click="$emit('logout')">退出</Button>
       </div>
     </header>
 
@@ -31,7 +31,7 @@
 </template>
 
 <script setup lang="ts">
-import BaseButton from '../components/base/BaseButton.vue';
+import { Button } from '../components';
 
 export type ConsoleSection = 'overview' | 'images' | 'plans';
 

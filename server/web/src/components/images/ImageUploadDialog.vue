@@ -1,8 +1,8 @@
 <template>
-  <BaseDialog :open="open" title="上传图片" @close="$emit('close')">
+  <Dialog :open="open" title="上传图片" @close="$emit('close')">
     <form class="dialog-form" @submit.prevent="submit">
-      <BaseFileInput label="原始图片" required accept="image/*" @select="selectedFile = $event" />
-      <BaseInput
+      <FileInput label="原始图片" required accept="image/*" @select="selectedFile = $event" />
+      <Input
         label="备注"
         :maxlength="120"
         placeholder="例如：海边晚风"
@@ -10,24 +10,24 @@
         @update:model-value="remark = $event"
       />
       <p v-if="error" class="form-error">{{ error }}</p>
-      <BaseDialogActions>
-        <BaseButton type="button" variant="secondary" @click="$emit('close')">取消</BaseButton>
-        <BaseButton :disabled="!selectedFile" :loading="uploading" type="submit" variant="primary">
+      <DialogActions>
+        <Button type="button" variant="secondary" @click="$emit('close')">取消</Button>
+        <Button :disabled="!selectedFile" :loading="uploading" type="submit" variant="primary">
           上传
-        </BaseButton>
-      </BaseDialogActions>
+        </Button>
+      </DialogActions>
     </form>
-  </BaseDialog>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
 import { ref, watch } from 'vue';
 import { uploadImage, type AdminImage } from '../../api';
-import BaseButton from '../base/BaseButton.vue';
-import BaseDialog from '../base/BaseDialog.vue';
-import BaseDialogActions from '../base/BaseDialogActions.vue';
-import BaseFileInput from '../base/BaseFileInput.vue';
-import BaseInput from '../base/BaseInput.vue';
+import Button from '../base/Button.vue';
+import FileInput from '../input/FileInput.vue';
+import Input from '../input/Input.vue';
+import Dialog from '../overlay/Dialog.vue';
+import DialogActions from '../overlay/DialogActions.vue';
 import { useAuthStore } from '../../composables/useAuthStore';
 
 const props = defineProps<{

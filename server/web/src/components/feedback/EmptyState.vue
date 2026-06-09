@@ -1,7 +1,7 @@
 <template>
-  <div class="base-empty" :class="{ small }">
-    <p v-if="title" class="base-empty__title">{{ title }}</p>
-    <p v-if="description" class="base-empty__description">{{ description }}</p>
+  <div class="empty-state" :class="{ small }">
+    <p v-if="title" class="empty-state__title">{{ title }}</p>
+    <p v-if="description" class="empty-state__description">{{ description }}</p>
     <slot></slot>
   </div>
 </template>

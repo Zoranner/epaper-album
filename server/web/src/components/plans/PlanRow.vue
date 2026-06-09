@@ -15,14 +15,14 @@
       <code>{{ plan.image_sha256 || '-' }}</code>
     </div>
     <div class="plan-row__actions">
-      <BaseActionMenu :items="menuItems" @select="selectAction" />
+      <ActionMenu :items="menuItems" @select="selectAction" />
     </div>
   </article>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import BaseActionMenu, { type BaseActionMenuItem } from '../base/BaseActionMenu.vue';
+import ActionMenu, { type ActionMenuItem } from '../navigation/ActionMenu.vue';
 import type { PlanView } from './types';
 
 const props = defineProps<{
@@ -37,7 +37,7 @@ const emit = defineEmits<{
 
 const planImage = computed(() => props.plan.image ?? null);
 const formattedDate = computed(() => formatDate(props.plan.date));
-const menuItems: BaseActionMenuItem[] = [
+const menuItems: ActionMenuItem[] = [
   { key: 'edit', label: '编辑', icon: 'edit' },
   { key: 'delete', label: '删除', icon: 'trash', danger: true },
 ];

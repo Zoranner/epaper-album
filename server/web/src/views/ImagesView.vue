@@ -6,7 +6,7 @@
         <p>素材按电子相册显示比例管理</p>
       </div>
       <div class="module-actions">
-        <BaseInput
+        <Input
           label=""
           placeholder="搜索备注或 sha256"
           small
@@ -14,15 +14,13 @@
           :model-value="keyword"
           @update:model-value="keyword = $event"
         />
-        <BaseSelect v-model="statusFilter" small :options="statusOptions" />
-        <BaseButton small type="button" variant="secondary" @click="loadImages">
-          <BaseIcon name="search" />
+        <Select v-model="statusFilter" small :options="statusOptions" />
+        <Button icon="search" small type="button" variant="secondary" @click="loadImages">
           查询
-        </BaseButton>
-        <BaseButton small type="button" variant="primary" @click="openUpload">
-          <BaseIcon name="upload" />
+        </Button>
+        <Button icon="upload" small type="button" variant="primary" @click="openUpload">
           上传图片
-        </BaseButton>
+        </Button>
       </div>
     </header>
 
@@ -56,15 +54,12 @@ import {
   listImages as listImagesRequest,
   type AdminImage,
   type ImageStatus,
-} from '../../api';
-import BaseButton from '../base/BaseButton.vue';
-import BaseIcon from '../base/BaseIcon.vue';
-import BaseInput from '../base/BaseInput.vue';
-import BaseSelect, { type BaseSelectOption } from '../base/BaseSelect.vue';
-import ImageGrid from './ImageGrid.vue';
-import ImageRemarkDialog from './ImageRemarkDialog.vue';
-import ImageUploadDialog from './ImageUploadDialog.vue';
-import { useAuthStore } from '../../composables/useAuthStore';
+} from '../api';
+import { Button, Input, Select, type SelectOption } from '../components';
+import ImageGrid from '../components/images/ImageGrid.vue';
+import ImageRemarkDialog from '../components/images/ImageRemarkDialog.vue';
+import ImageUploadDialog from '../components/images/ImageUploadDialog.vue';
+import { useAuthStore } from '../composables/useAuthStore';
 
 const auth = useAuthStore();
 const images = ref<AdminImage[]>([]);
@@ -74,7 +69,7 @@ const previewUrls = ref<Record<string, string>>({});
 const uploadOpen = ref(false);
 const remarkImage = ref<AdminImage | null>(null);
 const error = ref('');
-const statusOptions: BaseSelectOption[] = [
+const statusOptions: SelectOption[] = [
   { label: '全部状态', value: 'all' },
   { label: '可显示', value: 'ready' },
   { label: '待处理', value: 'pending' },

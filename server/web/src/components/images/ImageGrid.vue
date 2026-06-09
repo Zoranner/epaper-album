@@ -1,5 +1,5 @@
 <template>
-  <BaseEmpty v-if="images.length === 0" small>暂无图片</BaseEmpty>
+  <EmptyState v-if="images.length === 0" small>暂无图片</EmptyState>
   <div v-else class="image-grid">
     <ImageTile
       v-for="image in images"
@@ -14,7 +14,7 @@
 
 <script setup lang="ts">
 import type { AdminImage } from '../../api';
-import BaseEmpty from '../base/BaseEmpty.vue';
+import EmptyState from '../feedback/EmptyState.vue';
 import ImageTile from './ImageTile.vue';
 
 defineProps<{
