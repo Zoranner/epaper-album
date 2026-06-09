@@ -1,0 +1,4 @@
+wifi_ssid = "YOUR_WIFI_SSID"
+wifi_password = "YOUR_WIFI_PASSWORD"
+base_url = "https://example.com/epaper"
+secret-key = "local-secret-key"
