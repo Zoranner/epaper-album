@@ -104,11 +104,14 @@ pub fn run_espidf_hardware_self_test(wake: WakeProbe) -> HardwareSelfTestReport 
         Ok(probe) => {
             log::info!(
                 target: "epaper_album",
-                "pmic: chip=0x{:02x} axp2101={} dc=0x{:02x} ldo=0x{:02x}",
+                "pmic: chip=0x{:02x} axp2101={} dc=0x{:02x} ldo=0x{:02x} battery={:?} percent={:?} low={}",
                 probe.chip_id,
                 chip_id_is_axp2101(probe),
                 probe.dc_onoff,
-                probe.ldo_onoff0
+                probe.ldo_onoff0,
+                probe.battery.charge_state,
+                probe.battery.percent,
+                probe.battery.low_battery
             );
         }
         Err(_) => {

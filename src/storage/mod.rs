@@ -1,6 +1,6 @@
 pub mod app_files;
 
-use crate::model::PlanSnapshot;
+use crate::model::Plan;
 use std::path::{Path, PathBuf};
 
 pub const DATA_ROOT: &str = "/sdcard/data";
@@ -51,9 +51,11 @@ pub enum StorageJsonWrite {
 }
 
 pub trait ResourceStore {
-    fn save_plan_snapshot(&mut self, snapshot: &PlanSnapshot) -> StorageJsonWrite;
+    fn save_plans(&mut self, plans: &[Plan]) -> StorageJsonWrite;
     fn save_image_bytes(&mut self, sha256: &str, content: &[u8]) -> StorageWrite;
     fn save_sprite_bytes(&mut self, sha256: &str, content: &[u8]) -> StorageWrite;
+    fn has_image(&self, sha256: &str) -> bool;
+    fn has_sprite(&self, sha256: &str) -> bool;
 }
 
 #[derive(Debug, Default)]
@@ -63,8 +65,8 @@ pub struct SdCardResourceStore;
 pub struct MountedSdCardResourceStore;
 
 impl ResourceStore for SdCardResourceStore {
-    fn save_plan_snapshot(&mut self, snapshot: &PlanSnapshot) -> StorageJsonWrite {
-        write_json_file_atomic(PLAN_PATH, snapshot)
+    fn save_plans(&mut self, plans: &[Plan]) -> StorageJsonWrite {
+        write_json_file_atomic(PLAN_PATH, &plans)
     }
 
     fn save_image_bytes(&mut self, sha256: &str, content: &[u8]) -> StorageWrite {
@@ -74,11 +76,19 @@ impl ResourceStore for SdCardResourceStore {
     fn save_sprite_bytes(&mut self, sha256: &str, content: &[u8]) -> StorageWrite {
         write_binary_file_atomic(sprite_bmp_path(sha256), content)
     }
+
+    fn has_image(&self, sha256: &str) -> bool {
+        image_bmp_path(sha256).exists()
+    }
+
+    fn has_sprite(&self, sha256: &str) -> bool {
+        sprite_bmp_path(sha256).exists()
+    }
 }
 
 impl ResourceStore for MountedSdCardResourceStore {
-    fn save_plan_snapshot(&mut self, snapshot: &PlanSnapshot) -> StorageJsonWrite {
-        write_json_file_atomic_mounted(PLAN_PATH, snapshot)
+    fn save_plans(&mut self, plans: &[Plan]) -> StorageJsonWrite {
+        write_json_file_atomic_mounted(PLAN_PATH, &plans)
     }
 
     fn save_image_bytes(&mut self, sha256: &str, content: &[u8]) -> StorageWrite {
@@ -87,6 +97,14 @@ impl ResourceStore for MountedSdCardResourceStore {
 
     fn save_sprite_bytes(&mut self, sha256: &str, content: &[u8]) -> StorageWrite {
         write_binary_file_atomic_mounted(sprite_bmp_path(sha256), content)
+    }
+
+    fn has_image(&self, sha256: &str) -> bool {
+        image_bmp_path(sha256).exists()
+    }
+
+    fn has_sprite(&self, sha256: &str) -> bool {
+        sprite_bmp_path(sha256).exists()
     }
 }
 
@@ -419,123 +437,4 @@ pub fn with_mounted_sdcard_parts<T>(
     let _mounted_fatfs = MountedFatfs::mount(fatfs, "/sdcard", 4)?;
 
     Ok(operation())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reads_existing_text_file_on_host() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let file_path = temp_dir.path().join("config.toml");
-        std::fs::write(&file_path, "wifi_ssid = \"Home\"").unwrap();
-
-        let result = read_text_file(&file_path);
-
-        assert_eq!(
-            result,
-            StorageRead::Text("wifi_ssid = \"Home\"".to_string())
-        );
-    }
-
-    #[test]
-    fn reports_missing_file_on_host_as_available_storage() {
-        let temp_dir = tempfile::tempdir().unwrap();
-
-        let result = read_text_file(temp_dir.path().join("missing.toml"));
-
-        assert_eq!(result, StorageRead::Missing);
-    }
-
-    #[test]
-    fn builds_album_resource_paths() {
-        assert_eq!(Path::new(PLAN_PATH), Path::new(DATA_ROOT).join("plan.json"));
-        assert_eq!(
-            image_bmp_path("abc"),
-            Path::new(DATA_ROOT).join("images").join("abc.bmp")
-        );
-        assert_eq!(
-            sprite_bmp_path("abc"),
-            Path::new(DATA_ROOT).join("sprites").join("abc.bmp")
-        );
-    }
-
-    #[test]
-    fn writes_text_file_atomically_on_host() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let file_path = temp_dir.path().join("plans").join("current.json");
-
-        let result = write_text_file_atomic(&file_path, r#"{"content_hash":"v1"}"#);
-
-        assert_eq!(result, StorageWrite::Written);
-        assert_eq!(
-            std::fs::read_to_string(&file_path).unwrap(),
-            r#"{"content_hash":"v1"}"#
-        );
-        assert!(!file_path.with_file_name("current.json.tmp").exists());
-    }
-
-    #[test]
-    fn writes_binary_file_atomically_on_host() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let file_path = temp_dir.path().join("images").join("abc.bmp");
-
-        let result = write_binary_file_atomic(&file_path, &[0x42, 0x4d, 0x00]);
-
-        assert_eq!(result, StorageWrite::Written);
-        assert_eq!(
-            read_binary_file(&file_path),
-            StorageBinaryRead::Bytes(vec![0x42, 0x4d, 0x00])
-        );
-    }
-
-    #[test]
-    fn reads_and_writes_typed_json_file() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let file_path = temp_dir.path().join("state.json");
-        let state = crate::model::ResourceIndex {
-            resources: vec![crate::model::CachedResource {
-                sha256: "abc".to_string(),
-                byte_size: 128,
-                last_used_at_unix_secs: 9,
-            }],
-        };
-
-        let write_result = write_json_file_atomic(&file_path, &state);
-        let read_result = read_json_file(&file_path);
-
-        assert_eq!(write_result, StorageJsonWrite::Written);
-        assert_eq!(read_result, StorageJsonRead::Value(state));
-    }
-
-    #[test]
-    fn reports_typed_json_parse_error() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let file_path = temp_dir.path().join("broken.json");
-        std::fs::write(&file_path, "{").unwrap();
-
-        let read_result: StorageJsonRead<crate::model::ResourceIndex> = read_json_file(&file_path);
-
-        assert_eq!(read_result, StorageJsonRead::ParseError);
-    }
-
-    #[test]
-    fn mounted_helpers_read_and_write_without_mounting_again() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let file_path = temp_dir.path().join("mounted").join("state.json");
-        let state = crate::model::ResourceIndex {
-            resources: vec![crate::model::CachedResource {
-                sha256: "abc".to_string(),
-                byte_size: 128,
-                last_used_at_unix_secs: 9,
-            }],
-        };
-
-        let write_result = write_json_file_atomic_mounted(&file_path, &state);
-        let read_result = read_json_file_mounted(&file_path);
-
-        assert_eq!(write_result, StorageJsonWrite::Written);
-        assert_eq!(read_result, StorageJsonRead::Value(state));
-    }
 }

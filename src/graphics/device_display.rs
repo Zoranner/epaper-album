@@ -1,4 +1,3 @@
-use crate::cloud::sprite_sha256;
 use crate::device_runtime::{DeviceDisplay, DisplayRefreshRequest, ErrorRefreshRequest};
 use crate::epd::{run_epd_packed_frame, EpdBus, EpdError};
 use crate::render::{
@@ -13,6 +12,7 @@ const OVERLAY_MARGIN: usize = 18;
 pub trait DisplayResourceReader {
     type Error: fmt::Display;
 
+    fn has_photo(&self, sha256: &str) -> bool;
     fn read_photo_bmp(&mut self, sha256: &str) -> Result<Vec<u8>, Self::Error>;
     fn read_sprite_bmp(&mut self, key: &str) -> Result<Option<Vec<u8>>, Self::Error>;
 }
@@ -25,6 +25,10 @@ pub struct MountedSdCardDisplayResourceReader;
 
 impl DisplayResourceReader for SdCardDisplayResourceReader {
     type Error = DisplayReadError;
+
+    fn has_photo(&self, sha256: &str) -> bool {
+        image_bmp_path(sha256).exists()
+    }
 
     fn read_photo_bmp(&mut self, sha256: &str) -> Result<Vec<u8>, Self::Error> {
         match read_binary_file(image_bmp_path(sha256)) {
@@ -49,6 +53,10 @@ impl DisplayResourceReader for SdCardDisplayResourceReader {
 
 impl DisplayResourceReader for MountedSdCardDisplayResourceReader {
     type Error = DisplayReadError;
+
+    fn has_photo(&self, sha256: &str) -> bool {
+        image_bmp_path(sha256).exists()
+    }
 
     fn read_photo_bmp(&mut self, sha256: &str) -> Result<Vec<u8>, Self::Error> {
         match crate::storage::read_binary_file_mounted(image_bmp_path(sha256)) {
@@ -137,7 +145,7 @@ where
     fn refresh(&mut self, request: DisplayRefreshRequest) -> Result<(), Self::Error> {
         let photo = self
             .reader
-            .read_photo_bmp(&request.item.image_sha256)
+            .read_photo_bmp(&request.plan.image)
             .map_err(DeviceDisplayError::Read)?;
         let caption =
             read_caption_sprite(&mut self.reader, &request).map_err(DeviceDisplayError::Read)?;
@@ -173,6 +181,10 @@ where
 
         run_epd_packed_frame(&mut self.bus, &frame).map_err(DeviceDisplayError::Epd)
     }
+
+    fn has_image(&self, sha256: &str) -> bool {
+        self.reader.has_photo(sha256)
+    }
 }
 
 fn read_caption_sprite<R>(
@@ -182,12 +194,14 @@ fn read_caption_sprite<R>(
 where
     R: DisplayResourceReader,
 {
-    if request.item.caption.trim().is_empty() {
+    if request.plan.caption.trim().is_empty() {
         return Ok(None);
     }
 
-    let sha256 = sprite_sha256("caption", &request.item.caption);
-    reader.read_sprite_bmp(&sha256)
+    let Some(sha256) = request.sprites.caption.as_deref() else {
+        return Ok(None);
+    };
+    reader.read_sprite_bmp(sha256)
 }
 
 fn read_date_sprite<R>(
@@ -197,12 +211,10 @@ fn read_date_sprite<R>(
 where
     R: DisplayResourceReader,
 {
-    let Some(date) = request.display_state.date else {
+    let Some(sha256) = request.sprites.date.as_deref() else {
         return Ok(None);
     };
-
-    let sha256 = sprite_sha256("date", &date.to_string());
-    reader.read_sprite_bmp(&sha256)
+    reader.read_sprite_bmp(sha256)
 }
 
 fn read_notice_sprite<R>(
@@ -212,12 +224,14 @@ fn read_notice_sprite<R>(
 where
     R: DisplayResourceReader,
 {
-    let Some(notice) = request.notice else {
+    if request.notice.is_none() {
         return Ok(None);
     };
 
-    let sha256 = sprite_sha256("notice", notice.text());
-    reader.read_sprite_bmp(&sha256)
+    let Some(sha256) = request.sprites.notice.as_deref() else {
+        return Ok(None);
+    };
+    reader.read_sprite_bmp(sha256)
 }
 
 #[cfg(test)]
@@ -226,7 +240,7 @@ mod tests {
     use crate::bmp::bmp_row_stride;
     use crate::display::Color;
     use crate::epd::{EpdError, EPD_FRAME_BYTES, EPD_HEIGHT, EPD_ROW_BYTES, EPD_WIDTH};
-    use crate::model::{DisplayItem, DisplayState, LocalDate};
+    use crate::model::{LocalDate, Plan};
     use crate::render::RenderNotice;
     use crate::state::RefreshReason;
     use std::collections::BTreeMap;
@@ -241,6 +255,10 @@ mod tests {
 
     impl DisplayResourceReader for MockReader {
         type Error = DisplayReadError;
+
+        fn has_photo(&self, sha256: &str) -> bool {
+            self.photos.contains_key(sha256)
+        }
 
         fn read_photo_bmp(&mut self, sha256: &str) -> Result<Vec<u8>, Self::Error> {
             self.photo_reads += 1;
@@ -293,18 +311,15 @@ mod tests {
             "photo".to_string(),
             solid_bmp(EPD_WIDTH, EPD_HEIGHT, Color::White),
         );
-        reader.sprites.insert(
-            sprite_sha256("caption", "caption"),
-            solid_bmp(8, 4, Color::Black),
-        );
-        reader.sprites.insert(
-            sprite_sha256("date", "2026-06-08"),
-            solid_bmp(8, 4, Color::Red),
-        );
-        reader.sprites.insert(
-            sprite_sha256("notice", RenderNotice::LowBattery.text()),
-            solid_bmp(8, 4, Color::Blue),
-        );
+        reader
+            .sprites
+            .insert("caption-sha".to_string(), solid_bmp(8, 4, Color::Black));
+        reader
+            .sprites
+            .insert("date-sha".to_string(), solid_bmp(8, 4, Color::Red));
+        reader
+            .sprites
+            .insert("notice-sha".to_string(), solid_bmp(8, 4, Color::Blue));
         let bus = MockBus::default();
         let mut display = PackedFrameDisplay::new(reader, bus);
 
@@ -358,21 +373,18 @@ mod tests {
 
     fn request(notice: Option<RenderNotice>) -> DisplayRefreshRequest {
         DisplayRefreshRequest {
-            item: DisplayItem {
-                plan_content_hash: Some("hash".to_string()),
+            plan: Plan {
                 date: LocalDate::parse("2026-06-08").unwrap(),
-                image_sha256: "photo".to_string(),
+                image: "photo".to_string(),
                 caption: "caption".to_string(),
-            },
-            display_state: DisplayState {
-                plan_content_hash: Some("hash".to_string()),
-                date: Some(LocalDate::parse("2026-06-08").unwrap()),
-                image_sha256: Some("photo".to_string()),
-                caption: Some("caption".to_string()),
-                refreshed_at_unix_secs: Some(100),
             },
             reason: RefreshReason::FirstBoot,
             notice,
+            sprites: crate::device_runtime::SpriteSet {
+                caption: Some("caption-sha".to_string()),
+                date: Some("date-sha".to_string()),
+                notice: notice.map(|_| "notice-sha".to_string()),
+            },
             now_epoch_seconds: 100,
         }
     }

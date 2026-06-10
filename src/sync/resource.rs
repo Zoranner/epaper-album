@@ -1,13 +1,14 @@
 use crate::cloud::{
-    image_url, parse_plan_response, plans_url, sprite_sha256, sprite_url, CloudSyncError,
-    HttpClient,
+    image_url, parse_plan_response, parse_sprite_metadata_response, plans_url, sprite_download_url,
+    sprite_url, CloudSyncError, HttpClient,
 };
-use crate::model::{CachedResource, PlanSnapshot};
+use crate::model::Plan;
 use crate::storage::{ResourceStore, StorageJsonWrite, StorageWrite};
 use sha2::{Digest, Sha256};
 use std::fmt;
 
 const MAX_PLAN_RESPONSE_BYTES: usize = 32 * 1024;
+const MAX_SPRITE_META_BYTES: usize = 1024;
 const MAX_IMAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SPRITE_BYTES: usize = 256 * 1024;
 
@@ -59,12 +60,12 @@ pub fn download_plan(
     base_url: &str,
     secret_key: &str,
     days: u8,
-) -> Result<PlanSnapshot, ResourceSyncError> {
+) -> Result<Vec<Plan>, ResourceSyncError> {
     let url = plans_url(base_url, days)?;
     let body = client.get_bytes(&url, secret_key, MAX_PLAN_RESPONSE_BYTES)?;
-    let snapshot = parse_plan_response(&body)?;
-    save_json_or_error(store.save_plan_snapshot(&snapshot))?;
-    Ok(snapshot)
+    let plans = parse_plan_response(&body)?;
+    save_json_or_error(store.save_plans(&plans))?;
+    Ok(plans)
 }
 
 pub fn download_image(
@@ -73,31 +74,44 @@ pub fn download_image(
     base_url: &str,
     secret_key: &str,
     sha256: &str,
-) -> Result<CachedResource, ResourceSyncError> {
+) -> Result<(), ResourceSyncError> {
     let url = image_url(base_url, sha256)?;
     let bytes = client.get_bytes(&url, secret_key, MAX_IMAGE_BYTES)?;
-    let byte_size = bytes.len() as u64;
     save_or_error(store.save_image_bytes(sha256, &bytes))?;
-    Ok(CachedResource {
-        sha256: sha256.to_string(),
-        byte_size,
-        last_used_at_unix_secs: 0,
-    })
+    Ok(())
 }
 
-pub fn download_sprite(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpriteSyncResult {
+    pub sha256: String,
+    pub downloaded: bool,
+}
+
+pub fn sync_sprite(
     client: &mut impl HttpClient,
     store: &mut impl ResourceStore,
     base_url: &str,
     secret_key: &str,
     kind: &str,
     text: &str,
-) -> Result<String, ResourceSyncError> {
-    let url = sprite_url(base_url, kind, text)?;
-    let bytes = client.get_bytes(&url, secret_key, MAX_SPRITE_BYTES)?;
-    let sha256 = sprite_sha256(kind, text);
-    save_or_error(store.save_sprite_bytes(&sha256, &bytes))?;
-    Ok(sha256)
+) -> Result<SpriteSyncResult, ResourceSyncError> {
+    let metadata_url = sprite_url(base_url, kind, text)?;
+    let metadata_body = client.get_bytes(&metadata_url, secret_key, MAX_SPRITE_META_BYTES)?;
+    let metadata = parse_sprite_metadata_response(&metadata_body)?;
+    if store.has_sprite(&metadata.sha256) {
+        return Ok(SpriteSyncResult {
+            sha256: metadata.sha256,
+            downloaded: false,
+        });
+    }
+
+    let download_url = sprite_download_url(base_url, &metadata.sha256)?;
+    let bytes = client.get_bytes(&download_url, secret_key, MAX_SPRITE_BYTES)?;
+    save_or_error(store.save_sprite_bytes(&metadata.sha256, &bytes))?;
+    Ok(SpriteSyncResult {
+        sha256: metadata.sha256,
+        downloaded: true,
+    })
 }
 
 fn save_or_error(result: StorageWrite) -> Result<(), ResourceSyncError> {
@@ -165,7 +179,7 @@ mod tests {
 
     #[derive(Default)]
     struct MockResourceStore {
-        plan: Option<Vec<u8>>,
+        plans: Option<Vec<Plan>>,
         images: BTreeMap<String, Vec<u8>>,
         sprites: BTreeMap<String, Vec<u8>>,
         write_result: Option<StorageWrite>,
@@ -178,12 +192,8 @@ mod tests {
     }
 
     impl ResourceStore for MockResourceStore {
-        fn save_plan_snapshot(&mut self, snapshot: &PlanSnapshot) -> StorageJsonWrite {
-            self.plan = Some(
-                crate::storage::to_json_string(snapshot)
-                    .unwrap()
-                    .into_bytes(),
-            );
+        fn save_plans(&mut self, plans: &[Plan]) -> StorageJsonWrite {
+            self.plans = Some(plans.to_vec());
             match self.result() {
                 StorageWrite::Written => StorageJsonWrite::Written,
                 StorageWrite::MountError => StorageJsonWrite::MountError,
@@ -200,25 +210,18 @@ mod tests {
             self.sprites.insert(sha256.to_string(), content.to_vec());
             self.result()
         }
+
+        fn has_image(&self, sha256: &str) -> bool {
+            self.images.contains_key(sha256)
+        }
+
+        fn has_sprite(&self, sha256: &str) -> bool {
+            self.sprites.contains_key(sha256)
+        }
     }
 
     #[test]
-    fn verifies_sha256_digest() {
-        let expected = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
-
-        assert!(verify_sha256(expected, b"hello").is_ok());
-
-        assert_eq!(
-            verify_sha256(expected, b"changed").unwrap_err(),
-            ResourceSyncError::Sha256Mismatch {
-                expected: expected.to_string(),
-                actual: sha256_hex(b"changed")
-            }
-        );
-    }
-
-    #[test]
-    fn downloads_and_saves_plan_snapshot() {
+    fn downloads_and_saves_plans() {
         let body = br#"{
             "code": 0,
             "message": "ok",
@@ -226,7 +229,7 @@ mod tests {
                 {
                     "date": "2026-06-08",
                     "caption": "caption",
-                    "image_sha256": "server-key"
+                    "image": "server-key"
                 }
             ]
         }"#;
@@ -234,60 +237,25 @@ mod tests {
             MockHttpClient::default().with_response("https://example.com/api/plans?days=2", body);
         let mut store = MockResourceStore::default();
 
-        let snapshot =
+        let plans =
             download_plan(&mut client, &mut store, "https://example.com", "secret", 2).unwrap();
 
-        assert_eq!(snapshot.plans[0].date.to_string(), "2026-06-08");
-        assert_eq!(snapshot.plans[0].caption, "caption");
-        assert_eq!(snapshot.plans[0].image_sha256, "server-key");
-        let stored_snapshot: PlanSnapshot = crate::storage::parse_json_str(
-            std::str::from_utf8(store.plan.as_ref().unwrap()).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(stored_snapshot, snapshot);
+        assert_eq!(plans[0].date.to_string(), "2026-06-08");
+        assert_eq!(plans[0].caption, "caption");
+        assert_eq!(plans[0].image, "server-key");
+        assert_eq!(store.plans, Some(plans));
         assert_eq!(client.requests[0].1, "secret");
     }
 
     #[test]
-    fn saved_plan_can_be_read_as_plan_snapshot() {
-        let body = br#"{
-            "code": 0,
-            "message": "ok",
-            "data": [
-                {
-                    "date": "2026-06-08",
-                    "caption": "caption",
-                    "image_sha256": "server-key"
-                }
-            ]
-        }"#;
-        let mut client =
-            MockHttpClient::default().with_response("https://example.com/api/plans?days=2", body);
-        let mut store = MockResourceStore::default();
-        let snapshot =
-            download_plan(&mut client, &mut store, "https://example.com", "secret", 2).unwrap();
-        let temp_dir = tempfile::tempdir().unwrap();
-        let plan_path = temp_dir.path().join("plans").join("current.json");
-
-        crate::storage::write_binary_file_atomic(&plan_path, store.plan.as_ref().unwrap());
-        let read_result: crate::storage::StorageJsonRead<PlanSnapshot> =
-            crate::storage::read_json_file(&plan_path);
-
-        assert_eq!(
-            read_result,
-            crate::storage::StorageJsonRead::Value(snapshot)
-        );
-    }
-
-    #[test]
-    fn downloads_image_as_cacheable_resource_without_body_sha_check() {
+    fn downloads_image_to_sha256_path_key() {
         let bytes = b"image bytes";
         let sha256 = "server-resource-key";
         let mut client = MockHttpClient::default()
             .with_response(&format!("https://example.com/images/{sha256}"), bytes);
         let mut store = MockResourceStore::default();
 
-        let resource = download_image(
+        download_image(
             &mut client,
             &mut store,
             "https://example.com",
@@ -296,26 +264,24 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            resource,
-            CachedResource {
-                sha256: sha256.to_string(),
-                byte_size: bytes.len() as u64,
-                last_used_at_unix_secs: 0
-            }
-        );
         assert_eq!(store.images.get(sha256), Some(&bytes.to_vec()));
     }
 
     #[test]
-    fn downloads_sprite_by_sha256_without_image_sha_check() {
-        let mut client = MockHttpClient::default().with_response(
-            "https://example.com/api/sprite?type=caption&text=%E6%99%9A%E9%A3%8E",
-            b"sprite bytes",
-        );
+    fn syncs_sprite_meta_then_downloads_missing_bmp_by_sha256() {
+        let sha256 = "1111111111111111111111111111111111111111111111111111111111111111";
+        let mut client = MockHttpClient::default()
+            .with_response(
+                "https://example.com/api/sprites?type=caption&text=%E6%99%9A%E9%A3%8E",
+                format!(r#"{{"code":0,"message":"ok","data":{{"sha256":"{sha256}"}}}}"#).as_bytes(),
+            )
+            .with_response(
+                &format!("https://example.com/sprites/{sha256}"),
+                b"sprite bytes",
+            );
         let mut store = MockResourceStore::default();
 
-        let sha256 = download_sprite(
+        let result = sync_sprite(
             &mut client,
             &mut store,
             "https://example.com",
@@ -325,7 +291,13 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(sha256, sprite_sha256("caption", "晚风"));
-        assert_eq!(store.sprites.get(&sha256), Some(&b"sprite bytes".to_vec()));
+        assert_eq!(
+            result,
+            SpriteSyncResult {
+                sha256: sha256.to_string(),
+                downloaded: true
+            }
+        );
+        assert_eq!(store.sprites.get(sha256), Some(&b"sprite bytes".to_vec()));
     }
 }

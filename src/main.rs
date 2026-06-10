@@ -39,6 +39,9 @@ fn run_device() {
         log::info!(target: "epaper_album", "cycle outcome: {:?}", cycle.outcome);
         log::info!(target: "epaper_album", "sync attempted: {}", cycle.sync_attempted);
         log::info!(target: "epaper_album", "sync succeeded: {}", cycle.sync_succeeded);
+        if let Some(error) = &cycle.persistent_state.last_sync_error {
+            log::warn!(target: "epaper_album", "sync error: {error}");
+        }
         log::info!(target: "epaper_album", "refresh attempted: {}", cycle.refresh_attempted);
         log::info!(target: "epaper_album", "refresh succeeded: {}", cycle.refresh_succeeded);
     }
@@ -50,9 +53,16 @@ fn run_device() {
             sleep_plan.next_wakeup_epoch_seconds,
             sleep_plan.deep_sleep_seconds
         );
-    }
 
-    log::info!(target: "epaper_album", "sleep: formal deep sleep disabled");
+        if let Some(seconds) = sleep_plan.deep_sleep_seconds.filter(|seconds| *seconds > 0) {
+            log::info!(target: "epaper_album", "sleep: entering deep sleep for {seconds}s");
+            if let Err(error) =
+                epaper_album::power::espidf::enter_timer_deep_sleep(u64::from(seconds))
+            {
+                log::warn!(target: "epaper_album", "sleep: enter-error: {error:?}");
+            }
+        }
+    }
 }
 
 #[cfg(not(target_os = "espidf"))]

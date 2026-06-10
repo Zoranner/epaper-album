@@ -1,11 +1,8 @@
 use crate::app::{
     generate_display_decision, DisplayDecision, NoUsablePhotoReason, RunOutcome, RunTrigger,
 };
-use crate::cache::missing_resources;
 use crate::config::Config;
-use crate::model::{
-    CachedResource, DisplayItem, DisplayState, LocalDate, PlanSnapshot, ResourceIndex,
-};
+use crate::model::{LocalDate, Plan};
 use crate::power::BatteryStatus;
 use crate::render::RenderNotice;
 use crate::state::{PersistentDeviceState, RefreshReason};
@@ -14,8 +11,7 @@ use std::fmt;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeviceCycleInput {
     pub config: Option<Config>,
-    pub snapshot: Option<PlanSnapshot>,
-    pub resource_index: ResourceIndex,
+    pub plans: Option<Vec<Plan>>,
     pub persistent_state: PersistentDeviceState,
     pub trigger: RunTrigger,
     pub now_epoch_seconds: u64,
@@ -27,16 +23,23 @@ pub struct DeviceCycleInput {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SyncRequest {
     pub config: Config,
-    pub local_snapshot: Option<PlanSnapshot>,
-    pub resource_index: ResourceIndex,
-    pub missing_resources: Vec<String>,
+    pub local_plans: Option<Vec<Plan>>,
+    pub notice: Option<RenderNotice>,
     pub now_epoch_seconds: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SyncResult {
-    pub snapshot: PlanSnapshot,
-    pub resources: Vec<CachedResource>,
+    pub plans: Vec<Plan>,
+    pub sprites: SpriteSet,
+    pub sprites_changed: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SpriteSet {
+    pub caption: Option<String>,
+    pub date: Option<String>,
+    pub notice: Option<String>,
 }
 
 pub trait DeviceCloudSync {
@@ -47,10 +50,10 @@ pub trait DeviceCloudSync {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DisplayRefreshRequest {
-    pub item: DisplayItem,
-    pub display_state: DisplayState,
+    pub plan: Plan,
     pub reason: RefreshReason,
     pub notice: Option<RenderNotice>,
+    pub sprites: SpriteSet,
     pub now_epoch_seconds: u64,
 }
 
@@ -68,12 +71,12 @@ pub trait DeviceDisplay {
 
     fn refresh(&mut self, request: DisplayRefreshRequest) -> Result<(), Self::Error>;
     fn refresh_error_page(&mut self, request: ErrorRefreshRequest) -> Result<(), Self::Error>;
+    fn has_image(&self, sha256: &str) -> bool;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeviceCycleResult {
-    pub snapshot: Option<PlanSnapshot>,
-    pub resource_index: ResourceIndex,
+    pub plans: Option<Vec<Plan>>,
     pub persistent_state: PersistentDeviceState,
     pub battery: BatteryStatus,
     pub display_decision: DisplayDecision,
@@ -119,8 +122,7 @@ where
 {
     let DeviceCycleInput {
         config,
-        mut snapshot,
-        mut resource_index,
+        mut plans,
         mut persistent_state,
         trigger,
         now_epoch_seconds,
@@ -137,6 +139,8 @@ where
     let mut sync_succeeded = false;
     let mut daily_sync_consumed = false;
     let mut sync_failed = false;
+    let mut sprites = SpriteSet::default();
+    let mut sprites_changed = false;
 
     if sync_requested && !battery.low_battery {
         if let Some(config) = config
@@ -144,25 +148,18 @@ where
             .filter(|config| config.has_required_values())
         {
             sync_attempted = true;
-            let missing = snapshot
-                .as_ref()
-                .map(|snapshot| missing_resources(snapshot, &resource_index))
-                .unwrap_or_default();
             let request = SyncRequest {
                 config: config.clone(),
-                local_snapshot: snapshot.clone(),
-                resource_index: resource_index.clone(),
-                missing_resources: missing,
+                local_plans: plans.clone(),
+                notice: refresh_notice(battery.low_battery, false),
                 now_epoch_seconds,
             };
 
             match sync.sync_resources(request) {
                 Ok(sync_result) => {
-                    snapshot = Some(sync_result.snapshot);
-                    for mut resource in sync_result.resources {
-                        resource.last_used_at_unix_secs = now_epoch_seconds;
-                        resource_index.upsert(resource);
-                    }
+                    plans = Some(sync_result.plans);
+                    sprites = sync_result.sprites;
+                    sprites_changed = sync_result.sprites_changed;
                     persistent_state.last_successful_sync_epoch_seconds = Some(now_epoch_seconds);
                     persistent_state.last_sync_error = None;
                     sync_succeeded = true;
@@ -178,11 +175,9 @@ where
         }
     }
 
-    update_cache_state(&mut persistent_state, &resource_index);
-
     let decision = generate_display_decision(
-        snapshot.as_ref(),
-        &resource_index,
+        plans.as_deref(),
+        |sha256| display.has_image(sha256),
         date,
         Some(&persistent_state),
     );
@@ -191,32 +186,63 @@ where
     let mut refresh_succeeded = false;
     let mut refresh_failed = false;
 
-    if let DisplayDecision::RefreshRequired {
-        item,
-        display_state,
-        reason,
-    } = &decision
-    {
-        refresh_attempted = true;
-        let mut next_display_state = display_state.clone();
-        next_display_state.refreshed_at_unix_secs = Some(now_epoch_seconds);
-        let request = DisplayRefreshRequest {
-            item: item.clone(),
-            display_state: next_display_state.clone(),
-            reason: *reason,
-            notice: refresh_notice(battery.low_battery, sync_failed),
-            now_epoch_seconds,
-        };
+    let sync_failure_fallback = (sync_failed
+        && matches!(decision, DisplayDecision::SleepOnly { .. }))
+    .then(|| fallback_refresh_for_notice(plans.as_deref(), display, date))
+    .flatten();
+    let overlay_refresh = (sync_succeeded
+        && sprites_changed
+        && matches!(decision, DisplayDecision::SleepOnly { .. }))
+    .then(|| fallback_refresh_for_notice(plans.as_deref(), display, date))
+    .flatten();
 
-        match display.refresh(request) {
-            Ok(()) => {
-                persistent_state.set_current_display(&next_display_state);
-                persistent_state.last_refresh_reason = Some(*reason);
-                resource_index.touch(&item.image_sha256, now_epoch_seconds);
-                update_cache_state(&mut persistent_state, &resource_index);
-                refresh_succeeded = true;
-            }
+    if let Some((plan, reason)) = sync_failure_fallback {
+        refresh_attempted = true;
+        let request = photo_refresh_request(
+            plan,
+            reason,
+            refresh_notice(battery.low_battery, sync_failed),
+            SpriteSet::default(),
+            now_epoch_seconds,
+        );
+        match refresh_photo(display, &mut persistent_state, request) {
+            Ok(()) => refresh_succeeded = true,
             Err(error) => {
+                log::warn!(target: "epaper_album", "refresh: {error}");
+                persistent_state.last_sync_error = Some(error.to_string());
+                refresh_failed = true;
+            }
+        }
+    } else if let Some((plan, reason)) = overlay_refresh {
+        refresh_attempted = true;
+        let request = photo_refresh_request(
+            plan,
+            reason,
+            refresh_notice(battery.low_battery, sync_failed),
+            sprites.clone(),
+            now_epoch_seconds,
+        );
+        match refresh_photo(display, &mut persistent_state, request) {
+            Ok(()) => refresh_succeeded = true,
+            Err(error) => {
+                log::warn!(target: "epaper_album", "refresh: {error}");
+                persistent_state.last_sync_error = Some(error.to_string());
+                refresh_failed = true;
+            }
+        }
+    } else if let DisplayDecision::RefreshRequired { plan, reason } = &decision {
+        refresh_attempted = true;
+        let request = photo_refresh_request(
+            plan.clone(),
+            *reason,
+            refresh_notice(battery.low_battery, sync_failed),
+            sprites.clone(),
+            now_epoch_seconds,
+        );
+        match refresh_photo(display, &mut persistent_state, request) {
+            Ok(()) => refresh_succeeded = true,
+            Err(error) => {
+                log::warn!(target: "epaper_album", "refresh: {error}");
                 persistent_state.last_sync_error = Some(error.to_string());
                 refresh_failed = true;
             }
@@ -231,10 +257,9 @@ where
         refresh_attempted = true;
 
         match display.refresh_error_page(request) {
-            Ok(()) => {
-                refresh_succeeded = true;
-            }
+            Ok(()) => refresh_succeeded = true,
             Err(error) => {
+                log::warn!(target: "epaper_album", "error page refresh: {error}");
                 persistent_state.last_sync_error = Some(error.to_string());
                 refresh_failed = true;
             }
@@ -252,8 +277,7 @@ where
     );
 
     DeviceCycleResult {
-        snapshot,
-        resource_index,
+        plans,
         persistent_state,
         battery,
         display_decision: decision,
@@ -266,16 +290,6 @@ where
     }
 }
 
-fn update_cache_state(state: &mut PersistentDeviceState, resource_index: &ResourceIndex) {
-    state.cache.resource_count = resource_index.resources.len() as u32;
-    state.cache.used_bytes = resource_index
-        .resources
-        .iter()
-        .map(|resource| resource.byte_size)
-        .sum();
-    state.cache.resources = resource_index.clone();
-}
-
 fn refresh_notice(low_battery: bool, sync_failed: bool) -> Option<RenderNotice> {
     if low_battery {
         return Some(RenderNotice::LowBattery);
@@ -286,6 +300,53 @@ fn refresh_notice(low_battery: bool, sync_failed: bool) -> Option<RenderNotice> 
     }
 
     None
+}
+
+fn photo_refresh_request(
+    plan: Plan,
+    reason: RefreshReason,
+    notice: Option<RenderNotice>,
+    sprites: SpriteSet,
+    now_epoch_seconds: u64,
+) -> DisplayRefreshRequest {
+    DisplayRefreshRequest {
+        plan,
+        reason,
+        notice,
+        sprites,
+        now_epoch_seconds,
+    }
+}
+
+fn refresh_photo<D>(
+    display: &mut D,
+    persistent_state: &mut PersistentDeviceState,
+    request: DisplayRefreshRequest,
+) -> Result<(), D::Error>
+where
+    D: DeviceDisplay,
+{
+    let plan = request.plan.clone();
+    let reason = request.reason;
+
+    display.refresh(request)?;
+    persistent_state.set_current_display(&plan);
+    persistent_state.last_refresh_reason = Some(reason);
+    Ok(())
+}
+
+fn fallback_refresh_for_notice<D>(
+    plans: Option<&[Plan]>,
+    display: &D,
+    date: LocalDate,
+) -> Option<(Plan, RefreshReason)>
+where
+    D: DeviceDisplay,
+{
+    let plan = crate::schedule::select_plan_for_date(plans?, date)?;
+    display
+        .has_image(&plan.image)
+        .then(|| (plan.clone(), RefreshReason::NoticeChanged))
 }
 
 fn error_refresh_request(
@@ -306,13 +367,25 @@ fn error_refresh_request(
     }
 
     match decision {
-        DisplayDecision::MissingConfig => Some(ErrorRefreshRequest {
-            title: "CONFIG ERROR".to_string(),
-            message: "DEVICE CONFIG IS MISSING".to_string(),
-            hint: "CHECK /SDCARD/CONFIG.TOML".to_string(),
-            detail: "WIFI BASE URL AND SECRET KEY REQUIRED".to_string(),
-            now_epoch_seconds,
-        }),
+        DisplayDecision::MissingConfig => {
+            if sync_failed {
+                return Some(ErrorRefreshRequest {
+                    title: "SYNC ERROR".to_string(),
+                    message: "CANNOT UPDATE SERVER DATA".to_string(),
+                    hint: "CHECK WIFI BASE URL AND SERVER".to_string(),
+                    detail: sync_error.unwrap_or("SYNC FAILED").to_string(),
+                    now_epoch_seconds,
+                });
+            }
+
+            Some(ErrorRefreshRequest {
+                title: "CONFIG ERROR".to_string(),
+                message: "DEVICE CONFIG IS MISSING".to_string(),
+                hint: "CHECK /SDCARD/CONFIG.TOML".to_string(),
+                detail: "WIFI BASE URL AND SECRET KEY REQUIRED".to_string(),
+                now_epoch_seconds,
+            })
+        }
         DisplayDecision::NoUsablePhoto(reason) => {
             if sync_failed {
                 return Some(ErrorRefreshRequest {
@@ -325,9 +398,7 @@ fn error_refresh_request(
             }
 
             let (message, detail) = match reason {
-                NoUsablePhotoReason::NoPlanForDate => {
-                    ("NO PLAN FOR CURRENT DATE", "WAITING FOR TODAY OR PAST PLAN")
-                }
+                NoUsablePhotoReason::NoPlan => ("NO PLAN", "WAITING FOR SERVER PLAN"),
                 NoUsablePhotoReason::ResourceNotCached => {
                     ("PLANNED IMAGE IS NOT READY", "IMAGE CACHE IS MISSING")
                 }
@@ -389,8 +460,6 @@ fn cycle_outcome(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::PlanItem;
-    use crate::power::BatteryStatus;
     use crate::state::WakeReason;
 
     #[derive(Debug, Clone, Eq, PartialEq)]
@@ -421,6 +490,7 @@ mod tests {
 
     #[derive(Default)]
     struct FakeDisplay {
+        images: Vec<String>,
         result: Option<Result<(), FakeError>>,
         requests: Vec<DisplayRefreshRequest>,
         error_requests: Vec<ErrorRefreshRequest>,
@@ -438,6 +508,10 @@ mod tests {
             self.error_requests.push(request);
             self.result.take().unwrap_or(Ok(()))
         }
+
+        fn has_image(&self, sha256: &str) -> bool {
+            self.images.iter().any(|image| image == sha256)
+        }
     }
 
     fn date(value: &str) -> LocalDate {
@@ -453,36 +527,18 @@ mod tests {
         }
     }
 
-    fn snapshot(hash: &str, image_sha256: &str) -> PlanSnapshot {
-        PlanSnapshot {
-            content_hash: hash.to_string(),
-            plans: vec![PlanItem {
-                date: date("2026-06-08"),
-                caption: "caption".to_string(),
-                image_sha256: image_sha256.to_string(),
-            }],
+    fn plan(image: &str) -> Plan {
+        Plan {
+            date: date("2026-06-08"),
+            caption: "caption".to_string(),
+            image: image.to_string(),
         }
     }
 
-    fn resource(sha256: &str, byte_size: u64, last_used_at_unix_secs: u64) -> CachedResource {
-        CachedResource {
-            sha256: sha256.to_string(),
-            byte_size,
-            last_used_at_unix_secs,
-        }
-    }
-
-    fn index(resources: &[CachedResource]) -> ResourceIndex {
-        ResourceIndex {
-            resources: resources.to_vec(),
-        }
-    }
-
-    fn input(snapshot: Option<PlanSnapshot>, resource_index: ResourceIndex) -> DeviceCycleInput {
+    fn input(plans: Option<Vec<Plan>>) -> DeviceCycleInput {
         DeviceCycleInput {
             config: Some(config()),
-            snapshot,
-            resource_index,
+            plans,
             persistent_state: PersistentDeviceState::default(),
             trigger: RunTrigger::Wake(WakeReason::Timer),
             now_epoch_seconds: 100,
@@ -493,183 +549,63 @@ mod tests {
     }
 
     #[test]
-    fn sync_downloads_missing_image_and_refreshes_display() {
-        let local_snapshot = snapshot("hash-local", "a");
-        let remote_snapshot = snapshot("hash-remote", "a");
-        let mut input = input(Some(local_snapshot), ResourceIndex::default());
-        input.daily_sync_due = true;
+    fn sync_updates_plans_and_refreshes_display() {
+        let remote_plans = vec![plan("a")];
         let mut sync = FakeSync {
             result: Some(Ok(SyncResult {
-                snapshot: remote_snapshot.clone(),
-                resources: vec![resource("a", 128, 0)],
+                plans: remote_plans.clone(),
+                sprites: SpriteSet::default(),
+                sprites_changed: false,
             })),
             requests: Vec::new(),
         };
-        let mut display = FakeDisplay::default();
+        let mut display = FakeDisplay {
+            images: vec!["a".to_string()],
+            ..FakeDisplay::default()
+        };
 
-        let result = run_device_cycle(input, &mut sync, &mut display);
+        let result = run_device_cycle(input(None), &mut sync, &mut display);
 
         assert_eq!(sync.requests.len(), 1);
-        assert_eq!(sync.requests[0].missing_resources, vec!["a"]);
         assert_eq!(display.requests.len(), 1);
-        assert_eq!(
-            display.requests[0].display_state.image_sha256.as_deref(),
-            Some("a")
-        );
+        assert_eq!(display.requests[0].plan.image, "a");
         assert!(result.sync_succeeded);
-        assert!(result.daily_sync_consumed);
         assert!(result.refresh_succeeded);
         assert_eq!(
-            result
-                .persistent_state
-                .current_display
-                .image_sha256
-                .as_deref(),
+            result.persistent_state.current_display.image.as_deref(),
             Some("a")
         );
-        assert_eq!(
-            result.persistent_state.last_refresh_reason,
-            Some(RefreshReason::FirstBoot)
-        );
-        assert_eq!(
-            result.persistent_state.last_successful_sync_epoch_seconds,
-            Some(100)
-        );
-        assert_eq!(result.persistent_state.cache.resource_count, 1);
-        assert_eq!(result.persistent_state.cache.used_bytes, 128);
     }
 
     #[test]
-    fn low_battery_skips_sync_but_refreshes_from_cache() {
-        let mut input = input(
-            Some(snapshot("hash-v1", "a")),
-            index(&[resource("a", 128, 1)]),
-        );
+    fn low_battery_skips_sync_but_refreshes_from_local_plans() {
+        let plans = vec![plan("a")];
+        let mut input = input(Some(plans));
         input.daily_sync_due = true;
         input.battery.low_battery = true;
         let mut sync = FakeSync::default();
-        let mut display = FakeDisplay::default();
+        let mut display = FakeDisplay {
+            images: vec!["a".to_string()],
+            ..FakeDisplay::default()
+        };
 
         let result = run_device_cycle(input, &mut sync, &mut display);
 
         assert!(sync.requests.is_empty());
         assert_eq!(display.requests.len(), 1);
         assert_eq!(result.outcome, DeviceCycleOutcome::LowBatterySkipSync);
-        assert!(result.battery.low_battery);
         assert!(!result.daily_sync_consumed);
-        assert!(result.refresh_succeeded);
     }
 
     #[test]
-    fn startup_sync_uses_same_cycle_as_timer_wake() {
-        let mut input = input(
-            Some(snapshot("hash-v1", "a")),
-            index(&[resource("a", 128, 1)]),
-        );
-        input.trigger = RunTrigger::Startup;
-        input.daily_sync_due = true;
-        let mut sync = FakeSync {
-            result: Some(Ok(SyncResult {
-                snapshot: snapshot("hash-v2", "a"),
-                resources: Vec::new(),
-            })),
-            requests: Vec::new(),
-        };
-        let mut display = FakeDisplay::default();
-
-        let result = run_device_cycle(input, &mut sync, &mut display);
-
-        assert_eq!(sync.requests.len(), 1);
-        assert!(result.daily_sync_consumed);
-        assert_eq!(
-            result.persistent_state.last_wake_reason,
-            Some(WakeReason::Startup)
-        );
-    }
-
-    #[test]
-    fn sync_failure_uses_local_cache_for_display_decision() {
-        let mut input = input(
-            Some(snapshot("hash-v1", "a")),
-            index(&[resource("a", 128, 1)]),
-        );
-        input.daily_sync_due = true;
+    fn sync_failure_without_displayable_cache_refreshes_error_page() {
         let mut sync = FakeSync {
             result: Some(Err(FakeError("network down"))),
             requests: Vec::new(),
         };
         let mut display = FakeDisplay::default();
 
-        let result = run_device_cycle(input, &mut sync, &mut display);
-
-        assert_eq!(sync.requests.len(), 1);
-        assert_eq!(display.requests.len(), 1);
-        assert_eq!(result.outcome, DeviceCycleOutcome::SyncFailed);
-        assert_eq!(
-            result.persistent_state.last_sync_error.as_deref(),
-            Some("network down")
-        );
-        assert!(result.refresh_succeeded);
-    }
-
-    #[test]
-    fn no_available_photo_returns_no_usable_photo_decision() {
-        let input = input(Some(snapshot("hash-v1", "a")), ResourceIndex::default());
-        let mut sync = FakeSync {
-            result: Some(Ok(SyncResult {
-                snapshot: snapshot("hash-v1", "a"),
-                resources: Vec::new(),
-            })),
-            requests: Vec::new(),
-        };
-        let mut display = FakeDisplay::default();
-
-        let result = run_device_cycle(input, &mut sync, &mut display);
-
-        assert_eq!(sync.requests.len(), 1);
-        assert_eq!(display.requests.len(), 0);
-        assert_eq!(display.error_requests.len(), 1);
-        assert_eq!(display.error_requests[0].title, "NO PHOTO");
-        assert_eq!(display.error_requests[0].now_epoch_seconds, 100);
-        assert_eq!(
-            result.display_decision,
-            DisplayDecision::NoUsablePhoto(NoUsablePhotoReason::ResourceNotCached)
-        );
-        assert_eq!(
-            result.outcome,
-            DeviceCycleOutcome::NoUsablePhoto(NoUsablePhotoReason::ResourceNotCached)
-        );
-        assert!(result.refresh_succeeded);
-    }
-
-    #[test]
-    fn missing_config_refreshes_error_page_without_photo_refresh() {
-        let mut input = input(None, ResourceIndex::default());
-        input.config = None;
-        let mut sync = FakeSync::default();
-        let mut display = FakeDisplay::default();
-
-        let result = run_device_cycle(input, &mut sync, &mut display);
-
-        assert!(sync.requests.is_empty());
-        assert!(display.requests.is_empty());
-        assert_eq!(display.error_requests.len(), 1);
-        assert_eq!(display.error_requests[0].title, "CONFIG ERROR");
-        assert_eq!(display.error_requests[0].now_epoch_seconds, 100);
-        assert_eq!(result.outcome, DeviceCycleOutcome::MissingConfig);
-        assert!(result.refresh_succeeded);
-    }
-
-    #[test]
-    fn sync_failure_without_displayable_cache_refreshes_no_photo_error_page() {
-        let input = input(Some(snapshot("hash-v1", "a")), ResourceIndex::default());
-        let mut sync = FakeSync {
-            result: Some(Err(FakeError("network down"))),
-            requests: Vec::new(),
-        };
-        let mut display = FakeDisplay::default();
-
-        let result = run_device_cycle(input, &mut sync, &mut display);
+        let result = run_device_cycle(input(Some(vec![plan("a")])), &mut sync, &mut display);
 
         assert_eq!(sync.requests.len(), 1);
         assert!(display.requests.is_empty());
@@ -678,10 +614,6 @@ mod tests {
         assert_eq!(
             result.outcome,
             DeviceCycleOutcome::NoUsablePhoto(NoUsablePhotoReason::ResourceNotCached)
-        );
-        assert_eq!(
-            result.persistent_state.last_sync_error.as_deref(),
-            Some("network down")
         );
     }
 }

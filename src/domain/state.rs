@@ -1,4 +1,4 @@
-use crate::model::{DisplayItem, DisplayState, ResourceIndex};
+use crate::model::{LocalDate, Plan};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -13,73 +13,36 @@ pub enum WakeReason {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum RefreshReason {
     FirstBoot,
-    DisplayItemChanged,
+    PlanChanged,
+    OverlayChanged,
+    NoticeChanged,
     ErrorPage,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PersistedDisplayRecord {
+pub struct PersistedDisplay {
     #[serde(default)]
-    pub date: Option<String>,
+    pub date: Option<LocalDate>,
     #[serde(default)]
-    pub image_sha256: Option<String>,
+    pub image: Option<String>,
     #[serde(default)]
     pub caption: Option<String>,
 }
 
-impl PersistedDisplayRecord {
-    pub fn from_display_item(item: &DisplayItem) -> Self {
+impl PersistedDisplay {
+    pub fn from_plan(plan: &Plan) -> Self {
         Self {
-            date: Some(item.date.to_string()),
-            image_sha256: Some(item.image_sha256.clone()),
-            caption: Some(item.caption.clone()),
+            date: Some(plan.date),
+            image: Some(plan.image.clone()),
+            caption: Some(plan.caption.clone()),
         }
     }
 
-    pub fn from_display_state(state: &DisplayState) -> Self {
-        Self {
-            date: state.date.map(|date| date.to_string()),
-            image_sha256: state.image_sha256.clone(),
-            caption: state.caption.clone(),
-        }
+    pub fn matches_plan(&self, plan: &Plan) -> bool {
+        self.date == Some(plan.date)
+            && self.image.as_deref() == Some(plan.image.as_str())
+            && self.caption.as_deref() == Some(plan.caption.as_str())
     }
-
-    pub fn to_display_state(&self, plan_content_hash: Option<String>) -> DisplayState {
-        DisplayState {
-            plan_content_hash,
-            date: self
-                .date
-                .as_deref()
-                .and_then(|date| crate::model::LocalDate::parse(date).ok()),
-            image_sha256: self.image_sha256.clone(),
-            caption: self.caption.clone(),
-            refreshed_at_unix_secs: None,
-        }
-    }
-}
-
-impl From<&DisplayItem> for PersistedDisplayRecord {
-    fn from(item: &DisplayItem) -> Self {
-        Self::from_display_item(item)
-    }
-}
-
-impl From<&DisplayState> for PersistedDisplayRecord {
-    fn from(state: &DisplayState) -> Self {
-        Self::from_display_state(state)
-    }
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct CacheState {
-    #[serde(default)]
-    pub resource_count: u32,
-    #[serde(default)]
-    pub used_bytes: u64,
-    #[serde(default)]
-    pub free_bytes: u64,
-    #[serde(default)]
-    pub resources: ResourceIndex,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -89,13 +52,9 @@ pub struct PersistentDeviceState {
     #[serde(default)]
     pub last_sync_error: Option<String>,
     #[serde(default)]
-    pub current_plan_content_hash: Option<String>,
-    #[serde(default)]
-    pub current_display: PersistedDisplayRecord,
+    pub current_display: PersistedDisplay,
     #[serde(default)]
     pub next_wakeup_epoch_seconds: Option<u64>,
-    #[serde(default)]
-    pub cache: CacheState,
     #[serde(default)]
     pub last_refresh_reason: Option<RefreshReason>,
     #[serde(default)]
@@ -107,32 +66,15 @@ impl PersistentDeviceState {
         Self {
             last_successful_sync_epoch_seconds: None,
             last_sync_error: None,
-            current_plan_content_hash: None,
-            current_display: PersistedDisplayRecord {
-                date: None,
-                image_sha256: None,
-                caption: None,
-            },
+            current_display: PersistedDisplay::default(),
             next_wakeup_epoch_seconds: None,
-            cache: CacheState {
-                resource_count: 0,
-                used_bytes: 0,
-                free_bytes: 0,
-                resources: ResourceIndex::default(),
-            },
             last_refresh_reason: None,
             last_wake_reason: None,
         }
     }
 
-    pub fn display_state(&self) -> DisplayState {
-        self.current_display
-            .to_display_state(self.current_plan_content_hash.clone())
-    }
-
-    pub fn set_current_display(&mut self, display_state: &DisplayState) {
-        self.current_plan_content_hash = display_state.plan_content_hash.clone();
-        self.current_display = PersistedDisplayRecord::from_display_state(display_state);
+    pub fn set_current_display(&mut self, plan: &Plan) {
+        self.current_display = PersistedDisplay::from_plan(plan);
     }
 }
 
@@ -146,14 +88,18 @@ impl Default for PersistentDeviceState {
 mod tests {
     use super::*;
 
+    fn plan() -> Plan {
+        Plan {
+            date: LocalDate::parse("2026-06-08").unwrap(),
+            image: "abc".to_string(),
+            caption: "caption".to_string(),
+        }
+    }
+
     #[test]
-    fn serializes_persistent_state_without_model_display_state_name() {
+    fn serializes_persistent_state_with_current_display() {
         let state = PersistentDeviceState {
-            current_display: PersistedDisplayRecord {
-                date: Some("2026-06-08".to_string()),
-                image_sha256: Some("abc".to_string()),
-                caption: Some("caption".to_string()),
-            },
+            current_display: PersistedDisplay::from_plan(&plan()),
             last_wake_reason: Some(WakeReason::Button),
             ..PersistentDeviceState::default()
         };
@@ -161,44 +107,15 @@ mod tests {
         let json = serde_json::to_string(&state).unwrap();
 
         assert!(json.contains("current_display"));
-        assert!(json.contains("date"));
+        assert!(json.contains("2026-06-08"));
         assert!(json.contains("last_wake_reason"));
-        assert!(!json.contains("DisplayState"));
     }
 
     #[test]
-    fn builds_persisted_display_record_from_selected_item() {
-        let item = DisplayItem {
-            plan_content_hash: Some("hash".to_string()),
-            date: crate::model::LocalDate::parse("2026-06-08").unwrap(),
-            image_sha256: "abc".to_string(),
-            caption: "caption".to_string(),
-        };
+    fn compares_persisted_display_with_plan() {
+        let plan = plan();
+        let display = PersistedDisplay::from_plan(&plan);
 
-        let record = PersistedDisplayRecord::from_display_item(&item);
-
-        assert_eq!(record.date.as_deref(), Some("2026-06-08"));
-        assert_eq!(record.image_sha256.as_deref(), Some("abc"));
-        assert_eq!(record.caption.as_deref(), Some("caption"));
-    }
-
-    #[test]
-    fn converts_between_model_display_state_and_persistent_record() {
-        let display_state = DisplayState {
-            plan_content_hash: Some("hash-v1".to_string()),
-            date: Some(crate::model::LocalDate::parse("2026-06-08").unwrap()),
-            image_sha256: Some("abc".to_string()),
-            caption: Some("caption".to_string()),
-            refreshed_at_unix_secs: Some(10),
-        };
-
-        let record = PersistedDisplayRecord::from_display_state(&display_state);
-        let restored = record.to_display_state(display_state.plan_content_hash.clone());
-
-        assert_eq!(record.date.as_deref(), Some("2026-06-08"));
-        assert_eq!(restored.plan_content_hash, display_state.plan_content_hash);
-        assert_eq!(restored.date, display_state.date);
-        assert_eq!(restored.image_sha256, display_state.image_sha256);
-        assert_eq!(restored.caption, display_state.caption);
+        assert!(display.matches_plan(&plan));
     }
 }

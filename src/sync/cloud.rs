@@ -1,8 +1,7 @@
 use crate::config::Config;
-use crate::model::{PlanSnapshot, ServerPlanResponse};
+use crate::model::{ApiResponse, Plan, SpriteMeta};
 use serde::Deserialize;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +14,7 @@ pub enum CloudSyncError {
     HttpStatus(u16),
     ApiStatus(u16, String),
     InvalidJson,
+    InvalidSha256,
 }
 
 impl fmt::Display for CloudSyncError {
@@ -28,6 +28,7 @@ impl fmt::Display for CloudSyncError {
             Self::HttpStatus(status) => write!(formatter, "http-status-{status}"),
             Self::ApiStatus(code, message) => write!(formatter, "api-status-{code}: {message}"),
             Self::InvalidJson => formatter.write_str("invalid-json"),
+            Self::InvalidSha256 => formatter.write_str("invalid-sha256"),
         }
     }
 }
@@ -44,7 +45,7 @@ pub trait HttpClient {
 }
 
 #[derive(Debug, Deserialize)]
-struct RawServerPlanResponse {
+struct RawApiResponse {
     code: u16,
     message: String,
     data: Value,
@@ -62,52 +63,66 @@ pub fn sprite_url(base_url: &str, kind: &str, text: &str) -> Result<String, Clou
     endpoint_url(
         base_url,
         &format!(
-            "api/sprite?type={}&text={}",
+            "api/sprites?type={}&text={}",
             percent_encode_query(kind),
             percent_encode_query(text)
         ),
     )
 }
 
-pub fn sprite_sha256(kind: &str, text: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(kind.as_bytes());
-    hasher.update(b"\n");
-    hasher.update(text.as_bytes());
-    hex_lower(&hasher.finalize())
+pub fn sprite_download_url(base_url: &str, sha256: &str) -> Result<String, CloudSyncError> {
+    if !is_sha256_hex(sha256) {
+        return Err(CloudSyncError::InvalidSha256);
+    }
+    endpoint_url(base_url, &format!("sprites/{sha256}"))
 }
 
-pub fn parse_plan_response(body: &[u8]) -> Result<PlanSnapshot, CloudSyncError> {
-    let response = serde_json::from_slice::<RawServerPlanResponse>(body)
-        .map_err(|_| CloudSyncError::InvalidJson)?;
+pub fn parse_plan_response(body: &[u8]) -> Result<Vec<Plan>, CloudSyncError> {
+    let response =
+        serde_json::from_slice::<RawApiResponse>(body).map_err(|_| CloudSyncError::InvalidJson)?;
     if response.code != 0 {
         return Err(CloudSyncError::ApiStatus(response.code, response.message));
     }
 
-    let response = ServerPlanResponse {
+    let response: ApiResponse<Vec<Plan>> = ApiResponse {
         code: response.code,
         message: response.message,
         data: serde_json::from_value(response.data).map_err(|_| CloudSyncError::InvalidJson)?,
     };
-    let content_hash = body_content_hash(body);
-    Ok(PlanSnapshot {
-        content_hash,
-        plans: response.data,
-    })
+
+    Ok(response.data)
 }
 
-pub fn parse_server_plan_response(body: &[u8]) -> Result<ServerPlanResponse, CloudSyncError> {
-    let response = serde_json::from_slice::<RawServerPlanResponse>(body)
-        .map_err(|_| CloudSyncError::InvalidJson)?;
+pub fn parse_sprite_metadata_response(body: &[u8]) -> Result<SpriteMeta, CloudSyncError> {
+    let response =
+        serde_json::from_slice::<RawApiResponse>(body).map_err(|_| CloudSyncError::InvalidJson)?;
     if response.code != 0 {
         return Err(CloudSyncError::ApiStatus(response.code, response.message));
     }
 
-    Ok(ServerPlanResponse {
+    let response: ApiResponse<SpriteMeta> = ApiResponse {
         code: response.code,
         message: response.message,
         data: serde_json::from_value(response.data).map_err(|_| CloudSyncError::InvalidJson)?,
-    })
+    };
+
+    if !is_sha256_hex(&response.data.sha256) {
+        return Err(CloudSyncError::InvalidSha256);
+    }
+    Ok(response.data)
+}
+
+pub fn parse_typed_api_response<T>(body: &[u8]) -> Result<ApiResponse<T>, CloudSyncError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let response =
+        serde_json::from_slice::<ApiResponse<T>>(body).map_err(|_| CloudSyncError::InvalidJson)?;
+    if response.code != 0 {
+        return Err(CloudSyncError::ApiStatus(response.code, response.message));
+    }
+
+    Ok(response)
 }
 
 pub fn trim_secret_key(config: &Config) -> &str {
@@ -123,19 +138,8 @@ fn endpoint_url(base_url: &str, path: &str) -> Result<String, CloudSyncError> {
     Ok(format!("{base_url}/{path}"))
 }
 
-fn body_content_hash(body: &[u8]) -> String {
-    let digest = Sha256::digest(body);
-    hex_lower(&digest)
-}
-
-fn hex_lower(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(HEX[(byte >> 4) as usize] as char);
-        output.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    output
+pub fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn percent_encode_query(value: &str) -> String {
@@ -168,14 +172,14 @@ pub mod espidf {
 
     use super::{parse_plan_response, plans_url, trim_secret_key, CloudSyncError, HttpClient};
     use crate::config::Config;
-    use crate::model::PlanSnapshot;
+    use crate::model::Plan;
 
     const HTTP_TIMEOUT_SECONDS: u64 = 15;
     const MAX_PLAN_RESPONSE_BYTES: usize = 32 * 1024;
 
     pub struct EspIdfHttpClient;
 
-    pub fn fetch_plan_response(config: &Config, days: u8) -> Result<PlanSnapshot, CloudSyncError> {
+    pub fn fetch_plan_response(config: &Config, days: u8) -> Result<Vec<Plan>, CloudSyncError> {
         let url = plans_url(&config.base_url, days)?;
         let mut client = EspIdfHttpClient;
         let body = client.get_bytes(&url, trim_secret_key(config), MAX_PLAN_RESPONSE_BYTES)?;
@@ -252,7 +256,15 @@ mod tests {
         );
         assert_eq!(
             sprite_url("http://example.com", "caption", "晚风 2026").unwrap(),
-            "http://example.com/api/sprite?type=caption&text=%E6%99%9A%E9%A3%8E%202026"
+            "http://example.com/api/sprites?type=caption&text=%E6%99%9A%E9%A3%8E%202026"
+        );
+        assert_eq!(
+            sprite_download_url(
+                "http://example.com",
+                "1111111111111111111111111111111111111111111111111111111111111111"
+            )
+            .unwrap(),
+            "http://example.com/sprites/1111111111111111111111111111111111111111111111111111111111111111"
         );
         assert_eq!(
             plans_url("example.com", 3),
@@ -269,19 +281,18 @@ mod tests {
                 {
                     "date": "2026-06-08",
                     "caption": "晚风",
-                    "image_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+                    "image": "1111111111111111111111111111111111111111111111111111111111111111"
                 }
             ]
         }"#;
 
-        let response = parse_plan_response(body.as_bytes()).unwrap();
+        let plans = parse_plan_response(body.as_bytes()).unwrap();
 
-        assert_eq!(response.content_hash.len(), 64);
-        assert_eq!(response.plans.len(), 1);
-        assert_eq!(response.plans[0].caption, "晚风");
-        assert_eq!(response.plans[0].date.to_string(), "2026-06-08");
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].caption, "晚风");
+        assert_eq!(plans[0].date.to_string(), "2026-06-08");
         assert_eq!(
-            response.plans[0].image_sha256,
+            plans[0].image,
             "1111111111111111111111111111111111111111111111111111111111111111"
         );
     }
@@ -298,13 +309,29 @@ mod tests {
     }
 
     #[test]
-    fn builds_stable_sprite_sha256() {
-        let first = sprite_sha256("caption", "晚风");
-        let second = sprite_sha256("caption", "晚风");
-        let changed = sprite_sha256("date", "晚风");
+    fn parses_sprite_metadata_response() {
+        let body = br#"{
+            "code": 0,
+            "message": "ok",
+            "data": {
+                "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+            }
+        }"#;
 
-        assert_eq!(first, second);
-        assert_eq!(first.len(), 64);
-        assert_ne!(first, changed);
+        let metadata = parse_sprite_metadata_response(body).unwrap();
+
+        assert_eq!(
+            metadata.sha256,
+            "1111111111111111111111111111111111111111111111111111111111111111"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_sprite_metadata_response() {
+        let error =
+            parse_sprite_metadata_response(br#"{"code":0,"message":"ok","data":{"sha256":"bad"}}"#)
+                .unwrap_err();
+
+        assert_eq!(error, CloudSyncError::InvalidSha256);
     }
 }

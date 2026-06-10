@@ -37,6 +37,8 @@ use crate::storage::{
 };
 #[cfg(target_os = "espidf")]
 use crate::wifi::espidf::{connect_wifi, ConnectedWifi, WifiConnectError};
+#[cfg(target_os = "espidf")]
+use core::time::Duration;
 
 #[cfg(target_os = "espidf")]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,13 +85,27 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
     };
 
     let pins = peripherals.pins;
-    let pmic_result = init_axp2101_for_photo_painter(peripherals.i2c0, pins.gpio47, pins.gpio48);
-    if let Err(error) = pmic_result {
-        log::warn!(target: "epaper_album", "pmic: init-error: {error:?}");
-    }
+    let pmic_probe =
+        match init_axp2101_for_photo_painter(peripherals.i2c0, pins.gpio47, pins.gpio48) {
+            Ok(probe) => {
+                log::info!(
+                    target: "epaper_album",
+                    "pmic: chip=0x{:02x} battery={:?} percent={:?} low={}",
+                    probe.chip_id,
+                    probe.battery.charge_state,
+                    probe.battery.percent,
+                    probe.battery.low_battery
+                );
+                Some(probe)
+            }
+            Err(error) => {
+                log::warn!(target: "epaper_album", "pmic: init-error: {error:?}");
+                None
+            }
+        };
 
-    let now_epoch_seconds = now_epoch_seconds();
-    let date = today();
+    let mut now_epoch_seconds = current_epoch_seconds();
+    let mut date = today();
     let epd_bus = match EspEpdBus::new(
         peripherals.spi3,
         pins.gpio10,
@@ -120,23 +136,48 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
         pins.gpio38,
         || {
             let config = read_config_mounted();
-            let snapshot = read_optional_json_mounted(PLAN_PATH);
+            let plans = read_optional_json_mounted(PLAN_PATH);
             let persistent_state = read_optional_json_mounted(STATE_PATH)
                 .unwrap_or_else(PersistentDeviceState::default);
-            let resource_index = persistent_state.cache.resources.clone();
-            let battery = BatteryStatus::unknown();
+            let battery = pmic_probe
+                .map(|probe| probe.battery)
+                .unwrap_or_else(BatteryStatus::unknown);
+            let mut sync = EspDeviceCloudSync::new(peripherals.modem);
+
+            if let Some(config) = config
+                .as_ref()
+                .filter(|config| config.has_required_values())
+            {
+                sync.prepare_network(config);
+                now_epoch_seconds = current_epoch_seconds();
+                date = today();
+                log::info!(
+                    target: "epaper_album",
+                    "time: unix={} date={}",
+                    now_epoch_seconds,
+                    date
+                );
+            }
+
             let power_profile = PowerProfile::from(&battery);
             let due = profile_sync_due(
                 power_profile,
                 persistent_state.last_successful_sync_epoch_seconds,
                 now_epoch_seconds,
             );
-            let mut sync = EspDeviceCloudSync::new(peripherals.modem);
+            log::info!(
+                target: "epaper_album",
+                "power: profile={:?} sync-due={} battery={:?} percent={:?} low={}",
+                power_profile,
+                due,
+                battery.charge_state,
+                battery.percent,
+                battery.low_battery
+            );
             let cycle = run_device_cycle(
                 DeviceCycleInput {
                     config,
-                    snapshot,
-                    resource_index,
+                    plans,
                     persistent_state,
                     trigger,
                     now_epoch_seconds,
@@ -200,6 +241,8 @@ where
 struct EspDeviceCloudSync {
     modem: Option<esp_idf_svc::hal::modem::Modem<'static>>,
     wifi: Option<ConnectedWifi>,
+    sntp: Option<esp_idf_svc::sntp::EspSntp<'static>>,
+    time_synced: bool,
     inner: CloudResourceSync<EspIdfHttpClient, MountedSdCardResourceStore>,
 }
 
@@ -209,8 +252,69 @@ impl EspDeviceCloudSync {
         Self {
             modem: Some(modem),
             wifi: None,
+            sntp: None,
+            time_synced: false,
             inner: CloudResourceSync::new(EspIdfHttpClient, MountedSdCardResourceStore),
         }
+    }
+
+    fn prepare_network(&mut self, config: &Config) {
+        if self.wifi.is_none() {
+            let Some(modem) = self.modem.take() else {
+                log::warn!(target: "epaper_album", "wifi: modem-unavailable");
+                return;
+            };
+
+            match connect_wifi(modem, config) {
+                Ok(wifi) => {
+                    self.wifi = Some(wifi);
+                }
+                Err(error) => {
+                    log::warn!(target: "epaper_album", "wifi: {error:?}");
+                    return;
+                }
+            }
+        }
+
+        self.sync_time();
+    }
+
+    fn sync_time(&mut self) {
+        if self.time_synced {
+            return;
+        }
+
+        if self.sntp.is_none() {
+            match esp_idf_svc::sntp::EspSntp::new_default() {
+                Ok(sntp) => {
+                    self.sntp = Some(sntp);
+                    log::info!(target: "epaper_album", "sntp: started");
+                }
+                Err(error) => {
+                    log::warn!(target: "epaper_album", "sntp: init-error: {error:?}");
+                    return;
+                }
+            }
+        }
+
+        let Some(sntp) = self.sntp.as_ref() else {
+            return;
+        };
+
+        for _ in 0..20 {
+            if sntp.get_sync_status() == esp_idf_svc::sntp::SyncStatus::Completed {
+                log::info!(target: "epaper_album", "sntp: completed");
+                self.time_synced = true;
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+
+        log::warn!(
+            target: "epaper_album",
+            "sntp: timeout status={:?}",
+            sntp.get_sync_status()
+        );
     }
 }
 
@@ -236,13 +340,9 @@ impl DeviceCloudSync for EspDeviceCloudSync {
     type Error = EspDeviceSyncError;
 
     fn sync_resources(&mut self, request: SyncRequest) -> Result<SyncResult, Self::Error> {
+        self.prepare_network(&request.config);
         if self.wifi.is_none() {
-            let modem = self
-                .modem
-                .take()
-                .ok_or(EspDeviceSyncError::Wifi(WifiConnectError::InitError))?;
-            let wifi = connect_wifi(modem, &request.config).map_err(EspDeviceSyncError::Wifi)?;
-            self.wifi = Some(wifi);
+            return Err(EspDeviceSyncError::Wifi(WifiConnectError::InitError));
         }
 
         self.inner
@@ -278,8 +378,8 @@ where
 
 #[cfg(target_os = "espidf")]
 fn write_cycle_files(cycle: &DeviceCycleResult) -> Result<(), EspDeviceRunOutcome> {
-    if let Some(snapshot) = &cycle.snapshot {
-        write_json_checked(PLAN_PATH, snapshot)?;
+    if let Some(plans) = &cycle.plans {
+        write_json_checked(PLAN_PATH, plans)?;
     }
     write_json_checked(STATE_PATH, &cycle.persistent_state)?;
     Ok(())
@@ -312,24 +412,31 @@ fn build_sleep_plan(
     )
     .unwrap_or(now_epoch_seconds.saturating_add(DAILY_SYNC_INTERVAL_SECONDS));
     let next_plan_change = cycle
-        .snapshot
+        .plans
         .as_ref()
-        .and_then(|snapshot| next_plan_change_date(&snapshot.plans, date))
+        .and_then(|plans| next_plan_change_date(plans, date))
         .map(local_date_start_epoch_seconds);
 
     next_wakeup_sleep_plan(now_epoch_seconds, next_sync, next_plan_change, None)
 }
 
 #[cfg(target_os = "espidf")]
-fn now_epoch_seconds() -> u64 {
+fn current_epoch_seconds() -> u64 {
     chrono::Utc::now().timestamp().max(0) as u64
 }
 
 #[cfg(target_os = "espidf")]
 fn today() -> LocalDate {
-    use chrono::{Datelike, Local};
+    use chrono::{Datelike, TimeZone, Utc};
 
-    let now = Local::now();
+    let timestamp = chrono::Utc::now()
+        .timestamp()
+        .saturating_add(8 * 60 * 60)
+        .max(0);
+    let now = Utc
+        .timestamp_opt(timestamp, 0)
+        .single()
+        .unwrap_or_else(Utc::now);
     LocalDate::new(now.year() as u16, now.month() as u8, now.day() as u8)
         .unwrap_or_else(|| LocalDate::parse("2026-01-01").unwrap())
 }

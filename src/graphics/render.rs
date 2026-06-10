@@ -612,7 +612,7 @@ fn draw_sprite_bmp(
 ) -> Result<(), RenderError> {
     let sprite = BmpImage::parse(sprite_bmp)?;
     let (x, y) = packed_overlay_origin(slot, sprite.width(), sprite.height(), placement);
-    draw_bmp_at(frame, &sprite, x, y)
+    draw_sprite_bmp_at(frame, &sprite, x, y)
 }
 
 fn draw_bmp_at(
@@ -634,6 +634,42 @@ fn draw_bmp_at(
             }
 
             let color = image.color_at(source_x, source_y)?;
+            if !set_logical_packed_frame_pixel(frame, target_x, target_y, color) {
+                return Err(RenderError::InvalidFrameLength);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn draw_sprite_bmp_at(
+    frame: &mut [u8],
+    image: &BmpImage<'_>,
+    x: usize,
+    y: usize,
+) -> Result<(), RenderError> {
+    let background_rgb = image.rgb_at(0, 0)?;
+
+    for source_y in 0..image.height() {
+        let target_y = y.saturating_add(source_y);
+        if target_y >= SCREEN_HEIGHT {
+            break;
+        }
+
+        for source_x in 0..image.width() {
+            let target_x = x.saturating_add(source_x);
+            if target_x >= SCREEN_WIDTH {
+                break;
+            }
+
+            let (red, green, blue) = image.rgb_at(source_x, source_y)?;
+            if (red, green, blue) == background_rgb {
+                continue;
+            }
+            let Some(color) = crate::bmp::exact_panel_color(red, green, blue) else {
+                return Err(RenderError::Bmp(crate::bmp::BmpError::UnsupportedColor));
+            };
             if !set_logical_packed_frame_pixel(frame, target_x, target_y, color) {
                 return Err(RenderError::InvalidFrameLength);
             }
@@ -725,9 +761,9 @@ mod tests {
     #[test]
     fn overlays_sprites_at_formal_slots() {
         let photo = solid_bmp(EPD_WIDTH, EPD_HEIGHT, Color::White);
-        let caption = solid_bmp(3, 2, Color::Black);
-        let date = solid_bmp(4, 2, Color::Red);
-        let notice = solid_bmp(2, 3, Color::Blue);
+        let caption = sprite_bmp(3, 2, Color::Black);
+        let date = sprite_bmp(4, 2, Color::Red);
+        let notice = sprite_bmp(2, 3, Color::Blue);
 
         let frame = render_epd_packed_frame_from_bmps(
             &PackedFrameRenderInput::new(&photo).with_sprites(SpriteBmps {
@@ -739,27 +775,33 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(logical_frame_color(&frame, 0, EPD_HEIGHT - 2), Color::Black);
+        assert_eq!(logical_frame_color(&frame, 0, EPD_HEIGHT - 2), Color::White);
+        assert_eq!(logical_frame_color(&frame, 1, EPD_HEIGHT - 2), Color::Black);
         assert_eq!(logical_frame_color(&frame, 2, EPD_HEIGHT - 1), Color::Black);
         assert_eq!(
             logical_frame_color(&frame, EPD_WIDTH - 4, EPD_HEIGHT - 2),
+            Color::White
+        );
+        assert_eq!(
+            logical_frame_color(&frame, EPD_WIDTH - 3, EPD_HEIGHT - 2),
             Color::Red
         );
         assert_eq!(
             logical_frame_color(&frame, EPD_WIDTH - 1, EPD_HEIGHT - 1),
             Color::Red
         );
-        assert_eq!(logical_frame_color(&frame, 0, 0), Color::Blue);
+        assert_eq!(logical_frame_color(&frame, 0, 0), Color::White);
+        assert_eq!(logical_frame_color(&frame, 1, 0), Color::Blue);
         assert_eq!(logical_frame_color(&frame, 1, 2), Color::Blue);
     }
 
     #[test]
-    fn white_sprite_background_overlays_photo_before_black_text() {
-        let photo = solid_bmp(EPD_WIDTH, EPD_HEIGHT, Color::Green);
+    fn sprite_background_color_is_transparent_before_white_text_and_black_stroke() {
+        let photo = solid_bmp(EPD_WIDTH, EPD_HEIGHT, Color::Blue);
         let caption = bmp_from_pixels(
             2,
             2,
-            &[Color::White, Color::Black, Color::White, Color::White],
+            &[Color::Green, Color::Black, Color::White, Color::Green],
         );
 
         let frame = render_epd_packed_frame_from_bmps(
@@ -772,9 +814,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(logical_frame_color(&frame, 0, EPD_HEIGHT - 2), Color::White);
+        assert_eq!(logical_frame_color(&frame, 0, EPD_HEIGHT - 2), Color::Blue);
         assert_eq!(logical_frame_color(&frame, 1, EPD_HEIGHT - 2), Color::Black);
-        assert_eq!(logical_frame_color(&frame, 2, EPD_HEIGHT - 2), Color::Green);
+        assert_eq!(logical_frame_color(&frame, 0, EPD_HEIGHT - 1), Color::White);
+        assert_eq!(logical_frame_color(&frame, 1, EPD_HEIGHT - 1), Color::Blue);
     }
 
     #[test]
@@ -860,7 +903,18 @@ mod tests {
         bmp_from_pixels(width, height, &vec![color; width * height])
     }
 
+    fn sprite_bmp(width: usize, height: usize, color: Color) -> Vec<u8> {
+        let mut pixels = vec![color; width * height];
+        pixels[0] = Color::Green;
+        bmp_from_pixels(width, height, &pixels)
+    }
+
     fn bmp_from_pixels(width: usize, height: usize, pixels: &[Color]) -> Vec<u8> {
+        let rgb_pixels = pixels.iter().copied().map(rgb).collect::<Vec<_>>();
+        bmp_from_rgb_pixels(width, height, &rgb_pixels)
+    }
+
+    fn bmp_from_rgb_pixels(width: usize, height: usize, pixels: &[(u8, u8, u8)]) -> Vec<u8> {
         assert_eq!(pixels.len(), width * height);
 
         let pixel_offset = 54usize;
@@ -880,7 +934,7 @@ mod tests {
             let row_offset = pixel_offset + y * row_stride;
             for x in 0..width {
                 let pixel_offset = row_offset + x * 3;
-                let (red, green, blue) = rgb(pixels[y * width + x]);
+                let (red, green, blue) = pixels[y * width + x];
                 bmp[pixel_offset..pixel_offset + 3].copy_from_slice(&[blue, green, red]);
             }
         }

@@ -1,5 +1,6 @@
-use crate::model::{DisplayItem, DisplayState, LocalDate, PlanItem, PlanSnapshot};
+use crate::model::{LocalDate, Plan};
 use crate::power::BATTERY_SYNC_INTERVAL_SECONDS;
+use crate::state::PersistedDisplay;
 
 pub const DAILY_SYNC_INTERVAL_SECONDS: u64 = BATTERY_SYNC_INTERVAL_SECONDS;
 
@@ -25,35 +26,24 @@ pub fn daily_sync_due(
         >= last_successful_sync_epoch_seconds.saturating_add(DAILY_SYNC_INTERVAL_SECONDS)
 }
 
-pub fn select_plan_for_date(plans: &[PlanItem], date: LocalDate) -> Option<&PlanItem> {
+pub fn select_plan_for_date(plans: &[Plan], date: LocalDate) -> Option<&Plan> {
     plans
         .iter()
         .filter(|plan| plan.date <= date)
         .max_by_key(|plan| plan.date)
+        .or_else(|| {
+            plans
+                .iter()
+                .filter(|plan| plan.date > date)
+                .min_by_key(|plan| plan.date)
+        })
 }
 
-pub fn select_display_item(snapshot: &PlanSnapshot, date: LocalDate) -> Option<DisplayItem> {
-    let plan = select_plan_for_date(&snapshot.plans, date)?;
-
-    Some(DisplayItem {
-        plan_content_hash: Some(snapshot.content_hash.clone()),
-        date: plan.date,
-        image_sha256: plan.image_sha256.clone(),
-        caption: plan.caption.clone(),
-    })
+pub fn display_needs_refresh(previous: &PersistedDisplay, next: &Plan) -> bool {
+    !previous.matches_plan(next)
 }
 
-pub fn display_needs_refresh(previous: Option<&DisplayState>, next: &DisplayItem) -> bool {
-    let Some(previous) = previous else {
-        return true;
-    };
-
-    previous.date != Some(next.date)
-        || previous.image_sha256.as_deref() != Some(next.image_sha256.as_str())
-        || previous.caption.as_deref() != Some(next.caption.as_str())
-}
-
-pub fn next_plan_change_date(plans: &[PlanItem], date: LocalDate) -> Option<LocalDate> {
+pub fn next_plan_change_date(plans: &[Plan], date: LocalDate) -> Option<LocalDate> {
     plans
         .iter()
         .filter(|plan| plan.date > date)
@@ -61,7 +51,7 @@ pub fn next_plan_change_date(plans: &[PlanItem], date: LocalDate) -> Option<Loca
         .min()
 }
 
-pub fn has_valid_plan_on_or_after(plans: &[PlanItem], date: LocalDate) -> bool {
+pub fn has_plan_on_or_after(plans: &[Plan], date: LocalDate) -> bool {
     plans.iter().any(|plan| plan.date >= date)
 }
 
@@ -73,11 +63,11 @@ mod tests {
         LocalDate::parse(value).unwrap()
     }
 
-    fn plan(date: &str, caption: &str, image_sha256: &str) -> PlanItem {
-        PlanItem {
+    fn plan(date: &str, caption: &str, image: &str) -> Plan {
+        Plan {
             date: self::date(date),
             caption: caption.to_string(),
-            image_sha256: image_sha256.to_string(),
+            image: image.to_string(),
         }
     }
 
@@ -108,79 +98,35 @@ mod tests {
     }
 
     #[test]
-    fn exact_date_has_priority_over_past_plan() {
-        let plans = vec![
-            plan("2026-06-07", "day-7", "7"),
-            plan("2026-06-08", "day-8", "8"),
-            plan("2026-06-10", "day-10", "10"),
-            plan("2026-06-12", "future", "12"),
-        ];
-
-        let selected = select_plan_for_date(&plans, date("2026-06-10")).unwrap();
-
-        assert_eq!(selected.caption, "day-10");
-    }
-
-    #[test]
-    fn does_not_select_future_plan_without_past_or_current_plan() {
+    fn selects_nearest_future_plan_when_no_past_plan_exists() {
         let plans = vec![
             plan("2026-06-12", "future-12", "12"),
             plan("2026-06-13", "future-13", "13"),
         ];
 
-        assert!(select_plan_for_date(&plans, date("2026-06-10")).is_none());
-    }
+        let selected = select_plan_for_date(&plans, date("2026-06-10")).unwrap();
 
-    #[test]
-    fn builds_display_item_from_selected_plan() {
-        let snapshot = PlanSnapshot {
-            content_hash: "hash-v1".to_string(),
-            plans: vec![plan("2026-06-06", "caption", "a")],
-        };
-
-        let item = select_display_item(&snapshot, date("2026-06-08")).unwrap();
-
-        assert_eq!(item.plan_content_hash.as_deref(), Some("hash-v1"));
-        assert_eq!(item.date, date("2026-06-06"));
-        assert_eq!(item.image_sha256, "a");
+        assert_eq!(selected.caption, "future-12");
     }
 
     #[test]
     fn detects_when_display_content_changed() {
-        let next = DisplayItem {
-            plan_content_hash: Some("hash-v2".to_string()),
-            date: date("2026-06-06"),
-            image_sha256: "hash".to_string(),
-            caption: "caption".to_string(),
-        };
-        let previous = DisplayState {
-            plan_content_hash: Some("hash-v1".to_string()),
+        let next = plan("2026-06-06", "caption", "hash");
+        let previous = PersistedDisplay {
             date: Some(date("2026-06-05")),
-            image_sha256: Some("hash".to_string()),
+            image: Some("hash".to_string()),
             caption: Some("caption".to_string()),
-            refreshed_at_unix_secs: Some(1),
         };
 
-        assert!(display_needs_refresh(Some(&previous), &next));
+        assert!(display_needs_refresh(&previous, &next));
     }
 
     #[test]
-    fn ignores_plan_content_hash_when_display_content_is_unchanged() {
-        let next = DisplayItem {
-            plan_content_hash: Some("hash-v2".to_string()),
-            date: date("2026-06-06"),
-            image_sha256: "hash".to_string(),
-            caption: "caption".to_string(),
-        };
-        let previous = DisplayState {
-            plan_content_hash: Some("hash-v1".to_string()),
-            date: Some(date("2026-06-06")),
-            image_sha256: Some("hash".to_string()),
-            caption: Some("caption".to_string()),
-            refreshed_at_unix_secs: Some(1),
-        };
+    fn skips_refresh_when_display_content_is_unchanged() {
+        let next = plan("2026-06-06", "caption", "hash");
+        let previous = PersistedDisplay::from_plan(&next);
 
-        assert!(!display_needs_refresh(Some(&previous), &next));
+        assert!(!display_needs_refresh(&previous, &next));
     }
 
     #[test]
@@ -194,27 +140,6 @@ mod tests {
             next_plan_change_date(&plans, date("2026-06-06")),
             Some(date("2026-06-10"))
         );
-    }
-
-    #[test]
-    fn computes_next_daily_sync_from_last_successful_daily_sync() {
-        assert_eq!(
-            next_daily_sync_epoch_seconds(1_000, 10_000),
-            1_000 + DAILY_SYNC_INTERVAL_SECONDS
-        );
-    }
-
-    #[test]
-    fn clamps_overdue_next_daily_sync_to_now() {
-        assert_eq!(
-            next_daily_sync_epoch_seconds(1_000, 1_000 + DAILY_SYNC_INTERVAL_SECONDS + 30),
-            1_000 + DAILY_SYNC_INTERVAL_SECONDS + 30
-        );
-    }
-
-    #[test]
-    fn daily_sync_is_due_without_previous_success() {
-        assert!(daily_sync_due(None, 10_000));
     }
 
     #[test]

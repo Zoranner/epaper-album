@@ -86,6 +86,11 @@ impl<'a> BmpImage<'a> {
     }
 
     pub fn color_at(&self, x: usize, y: usize) -> Result<Color, BmpError> {
+        let (red, green, blue) = self.rgb_at(x, y)?;
+        exact_panel_color(red, green, blue).ok_or(BmpError::UnsupportedColor)
+    }
+
+    pub fn rgb_at(&self, x: usize, y: usize) -> Result<(u8, u8, u8), BmpError> {
         if x >= self.width || y >= self.height {
             return Err(BmpError::UnexpectedEof);
         }
@@ -101,7 +106,7 @@ impl<'a> BmpImage<'a> {
         let green = self.data[pixel_offset + 1];
         let red = self.data[pixel_offset + 2];
 
-        exact_panel_color(red, green, blue).ok_or(BmpError::UnsupportedColor)
+        Ok((red, green, blue))
     }
 }
 
