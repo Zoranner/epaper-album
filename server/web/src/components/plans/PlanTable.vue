@@ -1,13 +1,6 @@
 <template>
   <EmptyState v-if="plans.length === 0" small>暂无计划</EmptyState>
   <div v-else class="plan-table">
-    <div class="plan-table__head">
-      <span>日期</span>
-      <span>标题</span>
-      <span>图片</span>
-      <span>图片 SHA256</span>
-      <span>操作</span>
-    </div>
     <PlanRow
       v-for="plan in plans"
       :key="plan.date"

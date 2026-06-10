@@ -36,7 +36,7 @@
 
 <script setup lang="ts">
 import { reactive, ref, watch } from 'vue';
-import { createPlan, updatePlan, type AdminImage, type PlanPayload } from '../../api';
+import { createPlan, updatePlan, type AdminImage, type Plan } from '../../api';
 import Button from '../base/Button.vue';
 import DatePicker from '../input/DatePicker.vue';
 import Input from '../input/Input.vue';
@@ -61,10 +61,10 @@ const emit = defineEmits<{
 const auth = useAuthStore();
 const saving = ref(false);
 const error = ref('');
-const draft = reactive<PlanPayload>({
+const draft = reactive<Plan>({
   date: '',
   caption: '',
-  image_sha256: '',
+  image: '',
 });
 
 async function submit() {
@@ -78,7 +78,7 @@ async function submit() {
     if (!draft.date) {
       throw new Error('请选择日期');
     }
-    if (!draft.image_sha256) {
+    if (!draft.image) {
       throw new Error('请选择一张图片');
     }
     if (props.plan) {
@@ -98,14 +98,14 @@ const selectedImage = ref('');
 
 function selectImage(sha256: string) {
   selectedImage.value = selectedImage.value === sha256 ? '' : sha256;
-  draft.image_sha256 = selectedImage.value;
+  draft.image = selectedImage.value;
 }
 
 function loadDraft(plan: PlanView | null) {
   draft.date = plan?.date ?? todayDate();
   draft.caption = plan?.caption ?? '';
-  selectedImage.value = plan?.image_sha256 ?? '';
-  draft.image_sha256 = selectedImage.value;
+  selectedImage.value = plan?.image ?? '';
+  draft.image = selectedImage.value;
   error.value = '';
 }
 

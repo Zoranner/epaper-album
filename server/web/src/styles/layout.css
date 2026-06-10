@@ -1,5 +1,5 @@
 .login-page {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-items: center;
   padding: var(--space-5);
@@ -34,12 +34,15 @@
 .console-frame {
   min-height: 100vh;
   display: grid;
-  grid-template-rows: 48px 1fr;
+  grid-template-rows: 48px 1fr auto;
 }
 
 .console-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-4);
   border-bottom: 1px solid var(--color-line);
@@ -53,31 +56,45 @@
   font-weight: 650;
 }
 
-.console-tabs {
-  display: flex;
-  align-self: stretch;
+.console-nav {
+  position: sticky;
+  bottom: 0;
+  z-index: 9;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 180px));
+  justify-content: center;
+  gap: var(--space-1);
+  border-top: 1px solid var(--color-line);
+  padding: var(--space-3) var(--space-5);
+  background: var(--color-surface);
 }
 
-.console-tab {
-  min-width: 88px;
-  border: 0;
-  border-bottom: 2px solid transparent;
+.console-nav__item {
+  min-width: 96px;
+  min-height: var(--button-height);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
   padding: 0 var(--space-3);
-  background: transparent;
+  background: var(--color-surface);
   color: var(--color-text-muted);
   font-size: var(--text-sm);
   cursor: pointer;
 }
 
-.console-tab.active {
-  border-bottom-color: var(--color-primary);
-  color: var(--color-primary);
+.console-nav__item.active {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
   font-weight: 650;
 }
 
-.console-tab:focus-visible {
+.console-nav__item:focus-visible {
   outline: 1px solid var(--color-primary);
-  outline-offset: -3px;
+  outline-offset: 1px;
 }
 
 .console-account {
@@ -90,7 +107,7 @@
 
 .console-body {
   min-width: 0;
-  padding: var(--space-5);
+  padding: var(--space-5) var(--space-5) calc(var(--space-5) + var(--button-height));
 }
 
 .module-view {
@@ -129,12 +146,27 @@
   width: 220px;
 }
 
+.module-actions .module-search {
+  width: 260px;
+}
+
 @media (max-width: 760px) {
-  .console-frame {
-    grid-template-rows: auto 1fr;
+  .login-page {
+    align-items: stretch;
+    padding: var(--space-3);
   }
 
-  .console-header,
+  .login-panel {
+    width: 100%;
+    align-self: center;
+    padding: var(--space-4);
+  }
+
+  .console-frame {
+    min-height: 100dvh;
+    display: block;
+  }
+
   .module-toolbar,
   .module-actions {
     grid-template-columns: 1fr;
@@ -143,19 +175,81 @@
   }
 
   .console-header {
-    display: grid;
-    padding: var(--space-3);
+    grid-template-columns: minmax(0, 1fr) auto;
+    min-height: 48px;
+    padding: 0 var(--space-3);
   }
 
-  .console-tabs {
-    min-height: 40px;
+  .console-account span {
+    display: none;
+  }
+
+  .console-nav {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 15;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0;
+    padding: var(--space-1) var(--space-3);
+    padding-bottom: calc(var(--space-1) + env(safe-area-inset-bottom));
+  }
+
+  .console-nav__item {
+    flex: 1;
+    min-width: 0;
+    min-height: 52px;
+    display: grid;
+    gap: 2px;
+    border: 0;
+    background: transparent;
+    font-size: var(--text-xs);
+  }
+
+  .console-nav__item.active {
+    background: transparent;
+    color: var(--color-primary);
   }
 
   .console-body {
-    padding: var(--space-3);
+    padding: var(--space-3) var(--space-3) calc(92px + env(safe-area-inset-bottom));
   }
 
-  .module-actions .field {
+  .module-view {
+    gap: var(--space-3);
+  }
+
+  .module-toolbar {
+    gap: var(--space-3);
+    padding-bottom: var(--space-3);
+  }
+
+  .module-toolbar h2 {
+    font-size: var(--text-lg);
+  }
+
+  .module-toolbar p {
+    display: none;
+  }
+
+  .module-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(112px, auto);
+    gap: var(--space-2);
+  }
+
+  .module-actions .field,
+  .module-actions .module-search {
     width: auto;
+  }
+
+  .module-actions .module-search {
+    grid-column: 1 / -1;
+  }
+
+  .module-actions .button {
+    width: 100%;
   }
 }

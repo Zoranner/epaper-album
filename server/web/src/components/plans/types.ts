@@ -1,5 +1,5 @@
-import type { AdminImage, AdminPlan } from '../../api';
+import type { AdminImage, Plan } from '../../api';
 
-export interface PlanView extends AdminPlan {
-  image: AdminImage | null;
+export interface PlanView extends Plan {
+  imageRecord: AdminImage | null;
 }

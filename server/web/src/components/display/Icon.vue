@@ -6,6 +6,7 @@
 import { computed } from 'vue';
 import {
   CalendarDays,
+  Images,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -24,6 +25,7 @@ export type IconName =
   | 'chevron-down'
   | 'chevron-left'
   | 'chevron-right'
+  | 'images'
   | 'more'
   | 'plus'
   | 'search'
@@ -43,6 +45,7 @@ const iconComponent = computed(() => {
     'chevron-down': ChevronDown,
     'chevron-left': ChevronLeft,
     'chevron-right': ChevronRight,
+    images: Images,
     more: MoreHorizontal,
     plus: Plus,
     search: Search,

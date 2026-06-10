@@ -1,10 +1,25 @@
 import { computed, reactive, ref } from 'vue';
 import { login as loginRequest } from '../api';
+import { onUnauthorized } from '../api/client';
 
 const tokenStorageKey = 'epaper-album-admin-token';
 const tokenExpiresAtStorageKey = 'epaper-album-admin-token-expires-at';
 
-const token = ref(localStorage.getItem(tokenStorageKey) || '');
+function loadStoredToken() {
+  const storedToken = localStorage.getItem(tokenStorageKey) || '';
+  const expiresAt = localStorage.getItem(tokenExpiresAtStorageKey) || '';
+  if (!storedToken || !expiresAt) {
+    return '';
+  }
+  if (Number.isNaN(Date.parse(expiresAt)) || Date.now() >= Date.parse(expiresAt)) {
+    localStorage.removeItem(tokenStorageKey);
+    localStorage.removeItem(tokenExpiresAtStorageKey);
+    return '';
+  }
+  return storedToken;
+}
+
+const token = ref(loadStoredToken());
 const loggingIn = ref(false);
 const loginForm = reactive({
   username: '',
@@ -32,6 +47,8 @@ function logout() {
   localStorage.removeItem(tokenStorageKey);
   localStorage.removeItem(tokenExpiresAtStorageKey);
 }
+
+onUnauthorized(logout);
 
 export function useAuthStore() {
   return {

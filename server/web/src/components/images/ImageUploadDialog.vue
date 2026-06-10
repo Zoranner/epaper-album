@@ -1,7 +1,13 @@
 <template>
   <Dialog :open="open" title="上传图片" @close="$emit('close')">
     <form class="dialog-form" @submit.prevent="submit">
-      <FileInput label="原始图片" required accept="image/*" @select="selectedFile = $event" />
+      <FileInput
+        label="原始图片"
+        required
+        accept="image/*"
+        :file-name="selectedFile?.name"
+        @select="selectFile"
+      />
       <Input
         label="备注"
         :maxlength="120"
@@ -44,6 +50,11 @@ const selectedFile = ref<File | null>(null);
 const remark = ref('');
 const error = ref('');
 const uploading = ref(false);
+
+function selectFile(file: File | null) {
+  selectedFile.value = file;
+  error.value = '';
+}
 
 async function submit() {
   if (!selectedFile.value || !auth.token.value) {

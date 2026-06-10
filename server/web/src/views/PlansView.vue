@@ -10,7 +10,7 @@
         <Button icon="search" small type="button" variant="secondary" @click="loadPlans">
           查询
         </Button>
-        <Button icon="plus" small type="button" variant="primary" @click="openCreate">
+        <Button class="desktop-action" icon="plus" small type="button" variant="primary" @click="openCreate">
           新增计划
         </Button>
       </div>
@@ -45,6 +45,9 @@
         </DialogActions>
       </div>
     </Dialog>
+    <Button class="floating-action" icon="plus" type="button" variant="primary" @click="openCreate">
+      新增计划
+    </Button>
   </section>
 </template>
 
@@ -56,7 +59,7 @@ import {
   listImages,
   listPlans as listPlansRequest,
   type AdminImage,
-  type AdminPlan,
+  type Plan,
 } from '../api';
 import { Button, Dialog, DialogActions, Select, type SelectOption } from '../components';
 import PlanEditorDialog from '../components/plans/PlanEditorDialog.vue';
@@ -154,8 +157,8 @@ async function deleteSelectedPlan() {
 async function loadPreviews(nextPlans: PlanView[], nextImages: AdminImage[]) {
   const readySha = new Set<string>();
   for (const plan of nextPlans) {
-    if (plan.image?.status === 'ready') {
-      readySha.add(plan.image.sha256);
+    if (plan.imageRecord?.status === 'ready') {
+      readySha.add(plan.imageRecord.sha256);
     }
   }
   for (const image of nextImages) {
@@ -177,11 +180,11 @@ async function loadPreviews(nextPlans: PlanView[], nextImages: AdminImage[]) {
   }
 }
 
-function withPlanImages(nextPlans: AdminPlan[], nextImages: AdminImage[]): PlanView[] {
+function withPlanImages(nextPlans: Plan[], nextImages: AdminImage[]): PlanView[] {
   const imageBySha = new Map(nextImages.map((image) => [image.sha256, image]));
   return nextPlans.map((plan) => ({
     ...plan,
-    image: imageBySha.get(plan.image_sha256) ?? null,
+    imageRecord: imageBySha.get(plan.image) ?? null,
   }));
 }
 

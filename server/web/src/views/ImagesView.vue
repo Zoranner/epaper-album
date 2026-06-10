@@ -2,11 +2,12 @@
   <section class="module-view">
     <header class="module-toolbar">
       <div>
-        <h2>图片库</h2>
+        <h2>相册管理</h2>
         <p>素材按电子相册显示比例管理</p>
       </div>
       <div class="module-actions">
         <Input
+          class="module-search"
           label=""
           placeholder="搜索备注或 sha256"
           small
@@ -18,7 +19,7 @@
         <Button icon="search" small type="button" variant="secondary" @click="loadImages">
           查询
         </Button>
-        <Button icon="upload" small type="button" variant="primary" @click="openUpload">
+        <Button class="desktop-action" icon="upload" small type="button" variant="primary" @click="openUpload">
           上传图片
         </Button>
       </div>
@@ -44,6 +45,9 @@
       @close="remarkImage = null"
       @saved="handleRemarkSaved"
     />
+    <Button class="floating-action" icon="upload" type="button" variant="primary" @click="openUpload">
+      上传图片
+    </Button>
   </section>
 </template>
 

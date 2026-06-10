@@ -1,13 +1,13 @@
 import { clampPlanDays, request, tokenInit } from './client';
-import type { AdminPlan, PlanPayload } from './types';
+import type { Plan } from './types';
 
-export function listPlans(token: string, days: number): Promise<AdminPlan[]> {
+export function listPlans(token: string, days: number): Promise<Plan[]> {
   const params = new URLSearchParams({ days: String(clampPlanDays(days)) });
-  return request<AdminPlan[]>(`/plans?${params.toString()}`, tokenInit(token));
+  return request<Plan[]>(`/plans?${params.toString()}`, tokenInit(token));
 }
 
-export function createPlan(token: string, payload: PlanPayload): Promise<AdminPlan> {
-  return request<AdminPlan>(
+export function createPlan(token: string, payload: Plan): Promise<Plan> {
+  return request<Plan>(
     '/plans',
     tokenInit(token, {
       method: 'POST',
@@ -16,8 +16,8 @@ export function createPlan(token: string, payload: PlanPayload): Promise<AdminPl
   );
 }
 
-export function updatePlan(token: string, originalDate: string, payload: PlanPayload): Promise<AdminPlan> {
-  return request<AdminPlan>(
+export function updatePlan(token: string, originalDate: string, payload: Plan): Promise<Plan> {
+  return request<Plan>(
     `/plans/${originalDate}`,
     tokenInit(token, {
       method: 'PUT',

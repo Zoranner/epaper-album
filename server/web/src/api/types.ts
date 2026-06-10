@@ -6,16 +6,10 @@ export interface AdminImage {
   remark: string;
 }
 
-export interface AdminPlan {
+export interface Plan {
   date: string;
   caption: string;
-  image_sha256: string;
-}
-
-export interface PlanPayload {
-  date: string;
-  caption: string;
-  image_sha256: string;
+  image: string;
 }
 
 export interface LoginResponse {
