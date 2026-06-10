@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use anyhow::{anyhow, Result};
-use schema::{LocalDate, PlanItem, PlanPayload};
+use protocol::{LocalDate, Plan};
 use sqlx::SqlitePool;
 
 use crate::models::ImageRecord;
@@ -15,7 +15,7 @@ pub struct Store {
 struct PlanRow {
     date: String,
     caption: String,
-    image_sha256: String,
+    image: String,
 }
 
 impl Store {
@@ -27,23 +27,19 @@ impl Store {
         &self.pool
     }
 
-    pub async fn list_admin_plans(
-        &self,
-        start: LocalDate,
-        end: LocalDate,
-    ) -> Result<Vec<PlanItem>> {
+    pub async fn list_admin_plans(&self, start: LocalDate, end: LocalDate) -> Result<Vec<Plan>> {
         let rows = self.load_plan_rows(start, end).await?;
         Ok(rows.into_iter().map(plan_from_row).collect())
     }
 
-    pub async fn list_user_plans(&self, start: LocalDate, end: LocalDate) -> Result<Vec<PlanItem>> {
+    pub async fn list_user_plans(&self, start: LocalDate, end: LocalDate) -> Result<Vec<Plan>> {
         let rows = self.load_plan_rows(start, end).await?;
         let mut plans = Vec::with_capacity(rows.len());
 
         for row in rows {
             let status: Option<String> =
                 sqlx::query_scalar("SELECT status FROM images WHERE sha256 = ?")
-                    .bind(&row.image_sha256)
+                    .bind(&row.image)
                     .fetch_optional(&self.pool)
                     .await?;
             if status.as_deref() == Some("ready") {
@@ -54,15 +50,14 @@ impl Store {
         Ok(plans)
     }
 
-    pub async fn create_plan(&self, payload: PlanPayload) -> Result<PlanItem> {
-        self.validate_image(&payload.image_sha256).await?;
-        let result =
-            sqlx::query("INSERT INTO plans (date, caption, image_sha256) VALUES (?, ?, ?)")
-                .bind(payload.date.to_string())
-                .bind(payload.caption.trim())
-                .bind(&payload.image_sha256)
-                .execute(&self.pool)
-                .await?;
+    pub async fn create_plan(&self, payload: Plan) -> Result<Plan> {
+        self.validate_image(&payload.image).await?;
+        let result = sqlx::query("INSERT INTO plans (date, caption, image) VALUES (?, ?, ?)")
+            .bind(payload.date.to_string())
+            .bind(payload.caption.trim())
+            .bind(&payload.image)
+            .execute(&self.pool)
+            .await?;
 
         if result.rows_affected() == 0 {
             return Err(anyhow!("Plan date already exists: {}", payload.date));
@@ -73,17 +68,13 @@ impl Store {
             .ok_or_else(|| anyhow!("created plan not found"))
     }
 
-    pub async fn update_plan(
-        &self,
-        date: LocalDate,
-        payload: PlanPayload,
-    ) -> Result<Option<PlanItem>> {
-        self.validate_image(&payload.image_sha256).await?;
+    pub async fn update_plan(&self, date: LocalDate, payload: Plan) -> Result<Option<Plan>> {
+        self.validate_image(&payload.image).await?;
         let result =
-            sqlx::query("UPDATE plans SET date = ?, caption = ?, image_sha256 = ? WHERE date = ?")
+            sqlx::query("UPDATE plans SET date = ?, caption = ?, image = ? WHERE date = ?")
                 .bind(payload.date.to_string())
                 .bind(payload.caption.trim())
-                .bind(&payload.image_sha256)
+                .bind(&payload.image)
                 .bind(date.to_string())
                 .execute(&self.pool)
                 .await?;
@@ -272,7 +263,7 @@ impl Store {
 
     async fn load_plan_rows(&self, start: LocalDate, end: LocalDate) -> Result<Vec<PlanRow>> {
         let rows = sqlx::query_as::<_, PlanRow>(
-            "SELECT date, caption, image_sha256
+            "SELECT date, caption, image
              FROM plans
              WHERE (date >= ? AND date <= ?)
                 OR date = (SELECT MAX(date) FROM plans WHERE date < ?)
@@ -287,13 +278,12 @@ impl Store {
         Ok(rows)
     }
 
-    async fn get_admin_plan(&self, date: LocalDate) -> Result<Option<PlanItem>> {
-        let row = sqlx::query_as::<_, PlanRow>(
-            "SELECT date, caption, image_sha256 FROM plans WHERE date = ?",
-        )
-        .bind(date.to_string())
-        .fetch_optional(&self.pool)
-        .await?;
+    async fn get_admin_plan(&self, date: LocalDate) -> Result<Option<Plan>> {
+        let row =
+            sqlx::query_as::<_, PlanRow>("SELECT date, caption, image FROM plans WHERE date = ?")
+                .bind(date.to_string())
+                .fetch_optional(&self.pool)
+                .await?;
 
         Ok(row.map(plan_from_row))
     }
@@ -312,7 +302,7 @@ impl Store {
 }
 
 pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
-    drop_incompatible_table(pool, "plans", &["date", "caption", "image_sha256"]).await?;
+    drop_incompatible_table(pool, "plans", &["date", "caption", "image"]).await?;
     drop_incompatible_table(pool, "images", &["sha256", "status", "remark"]).await?;
 
     sqlx::query(
@@ -320,8 +310,8 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
         CREATE TABLE IF NOT EXISTS plans (
             date          TEXT PRIMARY KEY,
             caption       TEXT NOT NULL,
-            image_sha256 TEXT NOT NULL,
-            FOREIGN KEY (image_sha256) REFERENCES images(sha256)
+            image TEXT NOT NULL,
+            FOREIGN KEY (image) REFERENCES images(sha256)
         )
         "#,
     )
@@ -343,11 +333,11 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-fn plan_from_row(row: PlanRow) -> PlanItem {
-    PlanItem {
+fn plan_from_row(row: PlanRow) -> Plan {
+    Plan {
         date: LocalDate::parse(&row.date).expect("stored plan date must be valid"),
         caption: row.caption,
-        image_sha256: row.image_sha256,
+        image: row.image,
     }
 }
 

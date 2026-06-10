@@ -10,7 +10,7 @@ use crate::models::ApiResponse;
 
 #[derive(Debug, Error)]
 pub enum AppError {
-    #[error("Unauthorized")]
+    #[error("登录信息已失效，请重新登录")]
     Unauthorized,
     #[error("{0}")]
     BadRequest(String),
@@ -37,7 +37,7 @@ impl IntoResponse for AppError {
         let message = match self {
             AppError::Internal(error) => {
                 tracing::error!("internal error: {error:?}");
-                "Internal server error".to_string()
+                "服务暂时不可用，请稍后再试".to_string()
             }
             other => other.to_string(),
         };

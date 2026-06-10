@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-pub use schema::{PlanItem, PlanPayload};
+pub use protocol::{ApiResponse, Plan, SpriteMeta};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
 pub struct ImageRecord {
@@ -36,23 +35,6 @@ pub struct SpritePayload {
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ApiResponse<T: Serialize> {
-    pub code: u16,
-    pub message: String,
-    pub data: T,
-}
-
-impl<T: Serialize> ApiResponse<T> {
-    pub fn ok(data: T) -> Self {
-        Self {
-            code: 0,
-            message: "ok".to_string(),
-            data,
-        }
-    }
-}
-
-pub fn null_data() -> Value {
-    Value::Null
+pub fn null_data() -> serde_json::Value {
+    serde_json::Value::Null
 }

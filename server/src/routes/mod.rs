@@ -9,7 +9,7 @@ use axum::{
     body::Bytes,
     extract::{rejection::JsonRejection, Multipart, Path, Query, State},
     http::{header, HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    response::IntoResponse,
     routing::{get, post, put},
     Json, Router,
 };
@@ -19,8 +19,8 @@ use fontdue::{
     Font, FontSettings,
 };
 use image::{
-    imageops::FilterType, DynamicImage, GenericImage, GenericImageView, ImageFormat, Rgba,
-    RgbaImage,
+    codecs::bmp::BmpEncoder, imageops::FilterType, DynamicImage, ExtendedColorType, GenericImage,
+    GenericImageView, ImageEncoder, Rgba, RgbaImage,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -31,11 +31,11 @@ use crate::{
     db::Store,
     error::AppError,
     models::{
-        null_data, ApiResponse, ImageRemarkPayload, LoginRequest, LoginResponse, PlanPayload,
+        null_data, ApiResponse, ImageRemarkPayload, LoginRequest, LoginResponse, Plan, SpriteMeta,
         SpritePayload,
     },
 };
-use schema::LocalDate;
+use protocol::LocalDate;
 
 const DISPLAY_WIDTH: u32 = 800;
 const DISPLAY_HEIGHT: u32 = 480;
@@ -67,6 +67,10 @@ struct SpriteStyle {
     font_size: f32,
     padding_x: u32,
     padding_y: u32,
+    background: SpriteColor,
+    color: SpriteColor,
+    border_color: SpriteColor,
+    border_width: u32,
 }
 
 #[derive(Debug)]
@@ -84,6 +88,54 @@ struct SpriteFontConfig {
 struct LoadedSpriteFontConfig {
     raw: String,
     parsed: SpriteFontConfig,
+}
+
+struct SpriteCanvas<'a> {
+    image: &'a mut RgbaImage,
+    width: u32,
+    height: u32,
+    style: SpriteStyle,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SpriteColor {
+    Black,
+    White,
+    Red,
+    Yellow,
+    Blue,
+    Green,
+}
+
+impl SpriteColor {
+    const fn rgba(self) -> Rgba<u8> {
+        match self {
+            Self::Black => Rgba([0, 0, 0, 255]),
+            Self::White => Rgba([255, 255, 255, 255]),
+            Self::Red => Rgba([255, 0, 0, 255]),
+            Self::Yellow => Rgba([255, 255, 0, 255]),
+            Self::Blue => Rgba([0, 0, 255, 255]),
+            Self::Green => Rgba([0, 255, 0, 255]),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum UploadedImageFormat {
+    Bmp,
+    Jpeg,
+    Png,
+}
+
+impl UploadedImageFormat {
+    const fn extension(self) -> &'static str {
+        match self {
+            Self::Bmp => "bmp",
+            Self::Jpeg => "jpg",
+            Self::Png => "png",
+        }
+    }
 }
 
 impl SpriteKind {
@@ -131,8 +183,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/plans/:date", put(update_plan).delete(delete_plan))
         .route("/api/images", get(list_images).post(upload_image))
         .route("/api/images/:sha256", put(update_image))
-        .route("/api/sprite", get(create_sprite))
+        .route("/api/sprites", get(sprite_metadata))
         .route("/images/:sha256", get(download_image))
+        .route("/sprites/:sha256", get(download_sprite))
         .fallback_service(ServeDir::new("web/dist").append_index_html_on_directories(true))
         .with_state(runtime)
 }
@@ -219,7 +272,7 @@ async fn list_plans(
 async fn create_plan(
     State(state): State<RuntimeState>,
     headers: HeaderMap,
-    payload: Result<Json<PlanPayload>, JsonRejection>,
+    payload: Result<Json<Plan>, JsonRejection>,
 ) -> Result<impl IntoResponse, AppError> {
     require_admin(&headers, &state.app)?;
     let Json(payload) = payload.map_err(map_json_rejection)?;
@@ -237,7 +290,7 @@ async fn update_plan(
     State(state): State<RuntimeState>,
     headers: HeaderMap,
     Path(date): Path<String>,
-    payload: Result<Json<PlanPayload>, JsonRejection>,
+    payload: Result<Json<Plan>, JsonRejection>,
 ) -> Result<impl IntoResponse, AppError> {
     require_admin(&headers, &state.app)?;
     let date = parse_plan_date(&date)?;
@@ -249,7 +302,7 @@ async fn update_plan(
         .update_plan(date, payload)
         .await
         .map_err(map_store_error)?
-        .ok_or_else(|| AppError::NotFound(format!("Plan {date} not found")))?;
+        .ok_or_else(|| AppError::NotFound("计划不存在".to_string()))?;
     Ok(Json(ApiResponse::ok(plan)))
 }
 
@@ -263,7 +316,7 @@ async fn delete_plan(
     if state.app.store.delete_plan(date).await? {
         Ok(Json(ApiResponse::ok(null_data())))
     } else {
-        Err(AppError::NotFound(format!("Plan {date} not found")))
+        Err(AppError::NotFound("计划不存在".to_string()))
     }
 }
 
@@ -294,33 +347,35 @@ async fn upload_image(
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|error| AppError::BadRequest(format!("Invalid multipart body: {error}")))?
+        .map_err(|_| AppError::BadRequest("上传内容格式不正确".to_string()))?
     {
         match field.name() {
             Some("image") => {
-                let bytes = field.bytes().await.map_err(|error| {
-                    AppError::BadRequest(format!("Invalid image field: {error}"))
-                })?;
+                let bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|_| AppError::BadRequest("图片字段读取失败".to_string()))?;
                 image = Some(bytes);
             }
             Some("remark") => {
-                let value = field.text().await.map_err(|error| {
-                    AppError::BadRequest(format!("Invalid remark field: {error}"))
-                })?;
+                let value = field
+                    .text()
+                    .await
+                    .map_err(|_| AppError::BadRequest("备注字段读取失败".to_string()))?;
                 remark = Some(value);
             }
             _ => {}
         }
     }
 
-    let bytes =
-        image.ok_or_else(|| AppError::BadRequest("Missing multipart field: image".to_string()))?;
+    let bytes = image.ok_or_else(|| AppError::BadRequest("请选择要上传的图片".to_string()))?;
     if bytes.is_empty() {
-        return Err(AppError::BadRequest("Image file is empty".to_string()));
+        return Err(AppError::BadRequest("图片文件不能为空".to_string()));
     }
 
+    let format = detect_uploaded_image_format(&bytes)?;
     let sha256 = hex::encode(Sha256::digest(&bytes));
-    let original_path = original_image_path(&state.app.data_dir, &sha256);
+    let original_path = original_image_path(&state.app.data_dir, &sha256, format);
     if !original_path.exists() {
         tokio::fs::write(&original_path, &bytes)
             .await
@@ -352,7 +407,7 @@ async fn update_image(
         .store
         .update_image_remark(&sha256, &payload.remark)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("Image {sha256} not found")))?;
+        .ok_or_else(|| AppError::NotFound("图片不存在".to_string()))?;
     Ok(Json(ApiResponse::ok(image)))
 }
 
@@ -369,14 +424,14 @@ async fn download_image(
         .store
         .get_image(&sha256)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("Image {sha256} not found")))?;
+        .ok_or_else(|| AppError::NotFound("图片不存在".to_string()))?;
     if image.status != "ready" {
-        return Err(AppError::NotFound(format!("Image {sha256} not found")));
+        return Err(AppError::NotFound("图片不存在".to_string()));
     }
 
     let display_path = display_image_path(&state.app.data_dir, &sha256);
     if !display_path.exists() {
-        return Err(AppError::NotFound(format!("Image {sha256} not found")));
+        return Err(AppError::NotFound("图片不存在".to_string()));
     }
 
     let bytes = tokio::fs::read(display_path)
@@ -385,24 +440,50 @@ async fn download_image(
     Ok(([(header::CONTENT_TYPE, "image/bmp")], bytes))
 }
 
-async fn create_sprite(
+async fn sprite_metadata(
     State(state): State<RuntimeState>,
     headers: HeaderMap,
     Query(payload): Query<SpritePayload>,
-) -> Result<Response, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     require_any_permission(&headers, &state.app)?;
     let kind = validate_sprite_payload(&payload)?;
     let font_config = load_sprite_font_config().await?;
     validate_sprite_font_config(&font_config.parsed)?;
     let text = payload.text.trim().to_string();
     let sha256 = sprite_sha256(kind, &text, &font_config.raw);
-    let cache_path = sprite_cache_path(&state.app.data_dir, &sha256);
+    ensure_sprite_cached(&state, &sha256, text, font_config).await?;
 
+    Ok(Json(ApiResponse::ok(SpriteMeta { sha256 })))
+}
+
+async fn download_sprite(
+    State(state): State<RuntimeState>,
+    headers: HeaderMap,
+    Path(sha256): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    require_any_permission(&headers, &state.app)?;
+    validate_sha256(&sha256)?;
+    let cache_path = sprite_cache_path(&state.app.data_dir, &sha256);
     if cache_path.exists() {
         let bytes = tokio::fs::read(cache_path)
             .await
             .map_err(|error| AppError::Internal(error.into()))?;
-        return Ok(([(header::CONTENT_TYPE, "image/bmp")], bytes).into_response());
+        return Ok(([(header::CONTENT_TYPE, "image/bmp")], bytes));
+    }
+
+    Err(AppError::NotFound("精灵图不存在".to_string()))
+}
+
+async fn ensure_sprite_cached(
+    state: &RuntimeState,
+    sha256: &str,
+    text: String,
+    font_config: LoadedSpriteFontConfig,
+) -> Result<(), AppError> {
+    let cache_path = sprite_cache_path(&state.app.data_dir, sha256);
+
+    if cache_path.exists() {
+        return Ok(());
     }
 
     let font_assets = load_sprite_font_assets(&font_config.parsed).await?;
@@ -420,7 +501,7 @@ async fn create_sprite(
         .map_err(|error| AppError::Internal(error.into()))??;
 
     write_sprite_cache(&cache_path, &bmp).await?;
-    Ok(([(header::CONTENT_TYPE, "image/bmp")], bmp).into_response())
+    Ok(())
 }
 
 async fn enqueue_image(state: &RuntimeState, sha256: String) {
@@ -464,9 +545,9 @@ async fn process_one_image(state: &AppState, sha256: &str) -> anyhow::Result<()>
     }
 
     let result = async {
-        let original_path = original_image_path(&state.data_dir, sha256);
+        let original_path = find_original_image_path(&state.data_dir, sha256)?;
         let display_path = display_image_path(&state.data_dir, sha256);
-        let temp_path = display_image_path(&state.data_dir, &format!("{sha256}.tmp"));
+        let temp_path = display_image_temp_path(&state.data_dir, sha256);
         let bytes = tokio::fs::read(original_path).await?;
         let bmp = tokio::task::spawn_blocking(move || render_display_bmp(&bytes)).await??;
         tokio::fs::write(&temp_path, bmp).await?;
@@ -493,9 +574,7 @@ fn render_display_bmp(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     let image = image::load_from_memory(bytes)?;
     let fitted = fit_to_display(image);
     let paletted = quantize_six_color(fitted);
-    let mut output = Cursor::new(Vec::new());
-    paletted.write_to(&mut output, ImageFormat::Bmp)?;
-    Ok(output.into_inner())
+    encode_rgb_bmp(&paletted.to_rgb8())
 }
 
 fn render_sprite_bmp(
@@ -537,42 +616,115 @@ fn render_sprite_bmp(
         .unwrap_or(style.padding_y as i32);
     let width = (text_width.max(style.padding_x as i32) as u32 + style.padding_x).max(1);
     let height = (text_height.max(style.padding_y as i32) as u32 + style.padding_y).max(1);
-    let mut image = RgbaImage::from_pixel(width, height, Rgba([255, 255, 255, 255]));
+    let mut image = RgbaImage::from_pixel(width, height, style.background.rgba());
 
     for glyph in glyphs {
         let (metrics, bitmap) = fonts[glyph.font_index].rasterize_config(glyph.key);
         let left = glyph.x.round() as i32;
         let top = glyph.y.round() as i32;
 
-        for y in 0..metrics.height {
-            for x in 0..metrics.width {
-                let coverage = bitmap[y * metrics.width + x];
-                if coverage == 0 {
-                    continue;
-                }
+        let mut canvas = SpriteCanvas {
+            image: &mut image,
+            width,
+            height,
+            style,
+        };
+        draw_glyph_stroke(&mut canvas, left, top, &metrics, &bitmap);
+        draw_glyph_fill(&mut canvas, left, top, &metrics, &bitmap);
+    }
 
-                let target_x = left + x as i32;
-                let target_y = top + y as i32;
-                if target_x < 0
-                    || target_y < 0
-                    || target_x >= width as i32
-                    || target_y >= height as i32
-                {
-                    continue;
-                }
+    encode_rgb_bmp(&DynamicImage::ImageRgba8(image).to_rgb8())
+}
 
-                let value = if coverage >= 128 { 0 } else { 255 };
-                image.put_pixel(
-                    target_x as u32,
-                    target_y as u32,
-                    Rgba([value, value, value, 255]),
-                );
+fn draw_glyph_stroke(
+    canvas: &mut SpriteCanvas<'_>,
+    left: i32,
+    top: i32,
+    metrics: &fontdue::Metrics,
+    bitmap: &[u8],
+) {
+    let stroke_width = canvas.style.border_width.min(4) as i32;
+    if stroke_width == 0 {
+        return;
+    }
+
+    for y in 0..metrics.height {
+        for x in 0..metrics.width {
+            let coverage = bitmap[y * metrics.width + x];
+            if coverage < 32 {
+                continue;
+            }
+
+            for offset_y in -stroke_width..=stroke_width {
+                for offset_x in -stroke_width..=stroke_width {
+                    let target_x = left + x as i32 + offset_x;
+                    let target_y = top + y as i32 + offset_y;
+                    put_sprite_pixel(
+                        canvas.image,
+                        canvas.width,
+                        canvas.height,
+                        target_x,
+                        target_y,
+                        canvas.style.border_color.rgba(),
+                    );
+                }
             }
         }
     }
+}
 
+fn draw_glyph_fill(
+    canvas: &mut SpriteCanvas<'_>,
+    left: i32,
+    top: i32,
+    metrics: &fontdue::Metrics,
+    bitmap: &[u8],
+) {
+    for y in 0..metrics.height {
+        for x in 0..metrics.width {
+            let coverage = bitmap[y * metrics.width + x];
+            if coverage < 96 {
+                continue;
+            }
+
+            let target_x = left + x as i32;
+            let target_y = top + y as i32;
+            put_sprite_pixel(
+                canvas.image,
+                canvas.width,
+                canvas.height,
+                target_x,
+                target_y,
+                canvas.style.color.rgba(),
+            );
+        }
+    }
+}
+
+fn put_sprite_pixel(
+    image: &mut RgbaImage,
+    width: u32,
+    height: u32,
+    target_x: i32,
+    target_y: i32,
+    color: Rgba<u8>,
+) {
+    if target_x < 0 || target_y < 0 || target_x >= width as i32 || target_y >= height as i32 {
+        return;
+    }
+
+    image.put_pixel(target_x as u32, target_y as u32, color);
+}
+
+fn encode_rgb_bmp(image: &image::RgbImage) -> anyhow::Result<Vec<u8>> {
     let mut output = Cursor::new(Vec::new());
-    DynamicImage::ImageRgba8(image).write_to(&mut output, ImageFormat::Bmp)?;
+    let encoder = BmpEncoder::new(&mut output);
+    encoder.write_image(
+        image.as_raw(),
+        image.width(),
+        image.height(),
+        ExtendedColorType::Rgb8,
+    )?;
     Ok(output.into_inner())
 }
 
@@ -665,12 +817,62 @@ fn sprite_sha256(kind: SpriteKind, text: &str, font_config: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-fn original_image_path(data_dir: &std::path::Path, sha256: &str) -> PathBuf {
-    data_dir.join("images").join("original").join(sha256)
+fn detect_uploaded_image_format(bytes: &[u8]) -> Result<UploadedImageFormat, AppError> {
+    if bytes.starts_with(b"BM") {
+        return Ok(UploadedImageFormat::Bmp);
+    }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Ok(UploadedImageFormat::Jpeg);
+    }
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Ok(UploadedImageFormat::Png);
+    }
+    Err(AppError::BadRequest(
+        "图片格式支持 JPG、PNG 和 BMP".to_string(),
+    ))
+}
+
+fn original_image_path(
+    data_dir: &std::path::Path,
+    sha256: &str,
+    format: UploadedImageFormat,
+) -> PathBuf {
+    original_image_dir(data_dir).join(format!("{sha256}.{}", format.extension()))
+}
+
+fn find_original_image_path(data_dir: &std::path::Path, sha256: &str) -> anyhow::Result<PathBuf> {
+    let directory = original_image_dir(data_dir);
+    for extension in ["jpg", "png", "bmp", "jpeg"] {
+        let path = directory.join(format!("{sha256}.{extension}"));
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    let legacy_path = directory.join(sha256);
+    if legacy_path.exists() {
+        return Ok(legacy_path);
+    }
+
+    Err(anyhow::anyhow!("original image file missing: {sha256}"))
+}
+
+fn original_image_dir(data_dir: &std::path::Path) -> PathBuf {
+    data_dir.join("images").join("original")
 }
 
 fn display_image_path(data_dir: &std::path::Path, sha256: &str) -> PathBuf {
-    data_dir.join("images").join("display").join(sha256)
+    data_dir
+        .join("images")
+        .join("display")
+        .join(format!("{sha256}.bmp"))
+}
+
+fn display_image_temp_path(data_dir: &std::path::Path, sha256: &str) -> PathBuf {
+    data_dir
+        .join("images")
+        .join("display")
+        .join(format!("{sha256}.tmp"))
 }
 
 fn sprite_cache_path(data_dir: &std::path::Path, sha256: &str) -> PathBuf {
@@ -798,24 +1000,20 @@ fn parse_days(value: Option<&String>) -> u32 {
         .clamp(1, 7)
 }
 
-fn validate_plan_payload(payload: &PlanPayload) -> Result<(), AppError> {
+fn validate_plan_payload(payload: &Plan) -> Result<(), AppError> {
     if payload.caption.trim().is_empty() {
-        return Err(AppError::BadRequest(
-            "plan caption cannot be empty".to_string(),
-        ));
+        return Err(AppError::BadRequest("计划标题不能为空".to_string()));
     }
-    validate_sha256(&payload.image_sha256)?;
+    validate_sha256(&payload.image)?;
     Ok(())
 }
 
 fn parse_plan_date(value: &str) -> Result<LocalDate, AppError> {
     if value.trim().is_empty() {
-        return Err(AppError::BadRequest(
-            "plan date cannot be empty".to_string(),
-        ));
+        return Err(AppError::BadRequest("计划日期不能为空".to_string()));
     }
     LocalDate::parse(value)
-        .map_err(|_| AppError::BadRequest("plan date must use YYYY-MM-DD format".to_string()))
+        .map_err(|_| AppError::BadRequest("计划日期格式应为 YYYY-MM-DD".to_string()))
 }
 
 fn local_date_from_chrono(date: chrono::NaiveDate) -> Result<LocalDate, AppError> {
@@ -831,7 +1029,7 @@ fn validate_sha256(value: &str) -> Result<(), AppError> {
     if valid {
         Ok(())
     } else {
-        Err(AppError::BadRequest(format!("Invalid sha256: {value}")))
+        Err(AppError::BadRequest("图片标识格式不正确".to_string()))
     }
 }
 
@@ -841,21 +1039,15 @@ fn validate_sprite_payload(payload: &SpritePayload) -> Result<SpriteKind, AppErr
         "date" => SpriteKind::Date,
         "notice" => SpriteKind::Notice,
         "status" => SpriteKind::Status,
-        value => {
-            return Err(AppError::BadRequest(format!(
-                "Invalid sprite type: {value}"
-            )))
-        }
+        _ => return Err(AppError::BadRequest("精灵图类型不正确".to_string())),
     };
     let text = payload.text.trim();
     if text.is_empty() {
-        return Err(AppError::BadRequest(
-            "sprite text cannot be empty".to_string(),
-        ));
+        return Err(AppError::BadRequest("精灵图文字不能为空".to_string()));
     }
     if text.chars().count() > 64 {
         return Err(AppError::BadRequest(
-            "sprite text cannot exceed 64 characters".to_string(),
+            "精灵图文字不能超过 64 个字符".to_string(),
         ));
     }
     Ok(kind)
@@ -864,16 +1056,96 @@ fn validate_sprite_payload(payload: &SpritePayload) -> Result<SpriteKind, AppErr
 fn map_store_error(error: anyhow::Error) -> AppError {
     let message = error.to_string();
     if message.starts_with("Unknown image sha256:") {
-        AppError::BadRequest(message)
+        AppError::BadRequest("请选择已有图片".to_string())
     } else if message.starts_with("Plan date already exists:")
         || message.contains("UNIQUE constraint failed: plans.date")
     {
-        AppError::BadRequest(message)
+        AppError::BadRequest("该日期已有计划".to_string())
     } else {
         AppError::Internal(error)
     }
 }
 
-fn map_json_rejection(error: JsonRejection) -> AppError {
-    AppError::BadRequest(format!("Invalid JSON body: {error}"))
+fn map_json_rejection(_error: JsonRejection) -> AppError {
+    AppError::BadRequest("请求内容格式不正确".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_display_bmp_outputs_device_compatible_bmp() {
+        let mut input = image::RgbImage::new(32, 32);
+        for (x, y, pixel) in input.enumerate_pixels_mut() {
+            *pixel = image::Rgb([(x * 8) as u8, (y * 8) as u8, 128]);
+        }
+
+        let mut encoded_input = Cursor::new(Vec::new());
+        DynamicImage::ImageRgb8(input)
+            .write_to(&mut encoded_input, image::ImageFormat::Png)
+            .expect("encode input png");
+
+        let bmp = render_display_bmp(&encoded_input.into_inner()).expect("render display bmp");
+
+        assert_eq!(&bmp[0..2], b"BM");
+        assert_eq!(u32::from_le_bytes(bmp[14..18].try_into().unwrap()), 40);
+        assert_eq!(i32::from_le_bytes(bmp[18..22].try_into().unwrap()), 800);
+        assert_eq!(i32::from_le_bytes(bmp[22..26].try_into().unwrap()), 480);
+        assert_eq!(u16::from_le_bytes(bmp[26..28].try_into().unwrap()), 1);
+        assert_eq!(u16::from_le_bytes(bmp[28..30].try_into().unwrap()), 24);
+        assert_eq!(u32::from_le_bytes(bmp[30..34].try_into().unwrap()), 0);
+    }
+
+    #[test]
+    fn display_image_path_uses_bmp_extension() {
+        let path = display_image_path(std::path::Path::new("data"), "abc");
+        assert_eq!(
+            path,
+            std::path::Path::new("data")
+                .join("images")
+                .join("display")
+                .join("abc.bmp")
+        );
+    }
+
+    #[test]
+    fn sprite_style_accepts_panel_color_names_only() {
+        let config = toml::from_str::<SpriteFontConfig>(
+            r#"
+files = ["TerminessTTF NF.ttf"]
+
+[style]
+font_size = 32.0
+padding_x = 12
+padding_y = 8
+background = "green"
+color = "white"
+border_color = "black"
+border_width = 1
+"#,
+        )
+        .expect("parse panel color style");
+
+        assert_eq!(config.style.background.rgba(), Rgba([0, 255, 0, 255]));
+        assert_eq!(config.style.color.rgba(), Rgba([255, 255, 255, 255]));
+        assert_eq!(config.style.border_color.rgba(), Rgba([0, 0, 0, 255]));
+
+        let invalid = toml::from_str::<SpriteFontConfig>(
+            r##"
+files = ["TerminessTTF NF.ttf"]
+
+[style]
+font_size = 32.0
+padding_x = 12
+padding_y = 8
+background = "#155e75"
+color = "white"
+border_color = "black"
+border_width = 1
+"##,
+        );
+
+        assert!(invalid.is_err());
+    }
 }

@@ -15,6 +15,7 @@ use epaper_album_server::{
 };
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
+use sha2::Digest;
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use tower::ServiceExt;
 
@@ -134,11 +135,11 @@ async fn image_remark(pool: &SqlitePool, sha256: &str) -> String {
         .expect("image remark")
 }
 
-async fn insert_plan(pool: &SqlitePool, date: &str, caption: &str, image_sha256: &str) {
-    sqlx::query("INSERT INTO plans (date, caption, image_sha256) VALUES (?, ?, ?)")
+async fn insert_plan(pool: &SqlitePool, date: &str, caption: &str, image: &str) {
+    sqlx::query("INSERT INTO plans (date, caption, image) VALUES (?, ?, ?)")
         .bind(date)
         .bind(caption)
-        .bind(image_sha256)
+        .bind(image)
         .execute(pool)
         .await
         .expect("insert plan");
@@ -146,6 +147,17 @@ async fn insert_plan(pool: &SqlitePool, date: &str, caption: &str, image_sha256:
 
 fn valid_sha(byte: u8) -> String {
     format!("{byte:064x}")
+}
+
+fn tiny_png() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(1, 1, image::Rgb([0, 0, 0])))
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .expect("encode tiny png");
+    bytes
 }
 
 fn multipart_body(boundary: &str, image: &[u8], remark: Option<&str>) -> Vec<u8> {
@@ -170,8 +182,14 @@ fn multipart_body(boundary: &str, image: &[u8], remark: Option<&str>) -> Vec<u8>
 }
 
 fn write_display_file(data_dir: &Path, sha256: &str, bytes: &[u8]) {
-    std::fs::write(data_dir.join("images").join("display").join(sha256), bytes)
-        .expect("write display file");
+    std::fs::write(
+        data_dir
+            .join("images")
+            .join("display")
+            .join(format!("{sha256}.bmp")),
+        bytes,
+    )
+    .expect("write display file");
 }
 
 fn sprite_font_assets_available() -> bool {
@@ -211,7 +229,7 @@ async fn app_error_serializes_unified_error_body() {
         value,
         json!({
             "code": 401,
-            "message": "Unauthorized",
+            "message": "登录信息已失效，请重新登录",
             "data": null
         })
     );
@@ -335,7 +353,7 @@ async fn plan_create_uses_date_key_and_rejects_unknown_sha256() {
     let body = json!({
         "date": "2026-06-06",
         "caption": "创建计划",
-        "image_sha256": sha_a
+        "image": sha_a
     });
     let (status, value) = request_json(
         app.app.clone(),
@@ -349,12 +367,12 @@ async fn plan_create_uses_date_key_and_rejects_unknown_sha256() {
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(value["data"]["date"], "2026-06-06");
     assert_eq!(value["data"]["caption"], "创建计划");
-    assert_eq!(value["data"]["image_sha256"], valid_sha(10));
+    assert_eq!(value["data"]["image"], valid_sha(10));
 
     let bad_body = json!({
         "date": "2026-06-07",
         "caption": "未知图片",
-        "image_sha256": sha_unknown
+        "image": sha_unknown
     });
     let (status, value) = request_json(
         app.app.clone(),
@@ -378,7 +396,7 @@ async fn plan_create_rejects_invalid_date() {
     let body = json!({
         "date": "2026-06-99",
         "caption": "无效日期",
-        "image_sha256": sha
+        "image": sha
     });
     let (status, value) = request_json(
         app.app.clone(),
@@ -418,7 +436,7 @@ async fn init_schema_replaces_incompatible_legacy_tables() {
         .execute(&pool)
         .await
         .expect("insert current image");
-    sqlx::query("INSERT INTO plans (date, caption, image_sha256) VALUES (?, ?, ?)")
+    sqlx::query("INSERT INTO plans (date, caption, image) VALUES (?, ?, ?)")
         .bind("2026-06-06")
         .bind("current")
         .bind(valid_sha(14))
@@ -439,7 +457,7 @@ async fn plan_update_by_date_and_returns_404_for_missing_plan() {
     let body = json!({
         "date": "2026-06-07",
         "caption": "更新计划",
-        "image_sha256": sha_b
+        "image": sha_b
     });
     let (status, value) = request_json(
         app.app.clone(),
@@ -453,12 +471,12 @@ async fn plan_update_by_date_and_returns_404_for_missing_plan() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(value["data"]["date"], "2026-06-07");
     assert_eq!(value["data"]["caption"], "更新计划");
-    assert_eq!(value["data"]["image_sha256"], valid_sha(16));
+    assert_eq!(value["data"]["image"], valid_sha(16));
 
     let missing_body = json!({
         "date": "2026-06-08",
         "caption": "缺失计划",
-        "image_sha256": sha_a
+        "image": sha_a
     });
     let (status, value) = request_json(
         app.app.clone(),
@@ -497,7 +515,7 @@ async fn plans_return_ready_dates_for_users_and_all_dates_for_admins() {
     .await;
     assert_eq!(
         user_value["data"],
-        json!([{ "date": day0, "caption": "可用计划", "image_sha256": ready_sha }])
+        json!([{ "date": day0, "caption": "可用计划", "image": ready_sha }])
     );
 
     let (_, admin_value) = request_json(
@@ -508,9 +526,9 @@ async fn plans_return_ready_dates_for_users_and_all_dates_for_admins() {
     )
     .await;
     assert_eq!(admin_value["data"][0]["caption"], "可用计划");
-    assert_eq!(admin_value["data"][0]["image_sha256"], valid_sha(1));
+    assert_eq!(admin_value["data"][0]["image"], valid_sha(1));
     assert_eq!(admin_value["data"][1]["caption"], "失败计划");
-    assert_eq!(admin_value["data"][1]["image_sha256"], valid_sha(2));
+    assert_eq!(admin_value["data"][1]["image"], valid_sha(2));
 }
 
 #[tokio::test]
@@ -547,8 +565,8 @@ async fn image_list_requires_admin_and_remark_update_returns_updated_image() {
 #[tokio::test]
 async fn upload_deduplicates_same_image_and_requeues_failed_image() {
     let app = test_app().await;
-    let image_bytes = b"same-image-content";
-    let expected_sha = "4d61acb7dcd2fe36cf64353d5422105675e6e7eeac7ed960f45d3ca79e358f45";
+    let image_bytes = tiny_png();
+    let expected_sha = hex::encode(sha2::Sha256::digest(&image_bytes));
     let boundary = "X-BOUNDARY";
 
     let (status, value) = request_json(
@@ -561,7 +579,7 @@ async fn upload_deduplicates_same_image_and_requeues_failed_image() {
             )
             .body(Body::from(multipart_body(
                 boundary,
-                image_bytes,
+                &image_bytes,
                 Some("第一次"),
             )))
             .expect("request"),
@@ -570,16 +588,16 @@ async fn upload_deduplicates_same_image_and_requeues_failed_image() {
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(value["data"]["sha256"], expected_sha);
     assert_eq!(value["data"]["status"], "pending");
-    assert_eq!(image_remark(&app.pool, expected_sha).await, "第一次");
+    assert_eq!(image_remark(&app.pool, &expected_sha).await, "第一次");
     assert!(app
         .data_dir
         .join("images")
         .join("original")
-        .join(expected_sha)
+        .join(format!("{expected_sha}.png"))
         .exists());
 
     sqlx::query("UPDATE images SET status = 'failed' WHERE sha256 = ?")
-        .bind(expected_sha)
+        .bind(&expected_sha)
         .execute(&app.pool)
         .await
         .expect("mark failed");
@@ -594,7 +612,7 @@ async fn upload_deduplicates_same_image_and_requeues_failed_image() {
             )
             .body(Body::from(multipart_body(
                 boundary,
-                image_bytes,
+                &image_bytes,
                 Some("重试"),
             )))
             .expect("request"),
@@ -603,8 +621,65 @@ async fn upload_deduplicates_same_image_and_requeues_failed_image() {
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(value["data"]["sha256"], expected_sha);
     assert_eq!(value["data"]["status"], "pending");
-    assert_eq!(image_status(&app.pool, expected_sha).await, "pending");
-    assert_eq!(image_remark(&app.pool, expected_sha).await, "重试");
+    assert_eq!(image_status(&app.pool, &expected_sha).await, "pending");
+    assert_eq!(image_remark(&app.pool, &expected_sha).await, "重试");
+}
+
+#[tokio::test]
+async fn upload_original_file_uses_detected_extension() {
+    let app = test_app().await;
+    let boundary = "X-BOUNDARY";
+    let png = tiny_png();
+    let expected_sha = hex::encode(sha2::Sha256::digest(&png));
+
+    let (status, value) = request_json(
+        app.app.clone(),
+        admin_request(&app, "/api/images")
+            .method("POST")
+            .header(
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(multipart_body(boundary, &png, None)))
+            .expect("request"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(value["data"]["sha256"], expected_sha);
+    assert!(app
+        .data_dir
+        .join("images")
+        .join("original")
+        .join(format!("{expected_sha}.png"))
+        .exists());
+}
+
+#[tokio::test]
+async fn recover_ready_image_requires_display_bmp_file() {
+    let app = test_app().await;
+    let sha = valid_sha(21);
+    seed_image(&app.pool, &sha, "ready", "legacy display").await;
+    std::fs::write(
+        app.data_dir.join("images").join("display").join(&sha),
+        b"BMlegacy",
+    )
+    .expect("write legacy display file");
+
+    routes::recover_and_enqueue_pending(&AppState {
+        store: Store::new(app.pool.clone()),
+        secret_key: "test-secret".to_string(),
+        admin_username: "admin".to_string(),
+        admin_password: "password".to_string(),
+        admin_token: app.admin_token.clone(),
+        admin_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        data_dir: app.data_dir.clone(),
+        enqueue_processing: false,
+    })
+    .await
+    .expect("recover pending");
+
+    assert_eq!(image_status(&app.pool, &sha).await, "pending");
 }
 
 #[tokio::test]
@@ -657,7 +732,7 @@ async fn sprite_rejects_invalid_kind() {
 
     let (status, value) = request_json(
         app.app.clone(),
-        admin_request(&app, "/api/sprite?type=badge&text=caption")
+        admin_request(&app, "/api/sprites?type=badge&text=caption")
             .body(Body::empty())
             .expect("request"),
     )
@@ -667,20 +742,33 @@ async fn sprite_rejects_invalid_kind() {
 }
 
 #[tokio::test]
-async fn sprite_returns_bmp_and_uses_data_cache() {
+async fn sprite_meta_returns_sha256_and_sprite_download_uses_data_cache() {
     if !sprite_font_assets_available() {
         eprintln!("skip sprite success test: fixed font files are not installed");
         return;
     }
 
     let app = test_app().await;
-    let sprite_uri = "/api/sprite?type=caption&text=Album%E6%99%9A%E9%A3%8E2026";
+    let sprite_uri = "/api/sprites?type=caption&text=Album%E6%99%9A%E9%A3%8E2026";
 
+    let (status, value) = request_json(
+        app.app.clone(),
+        user_request(sprite_uri)
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let sha256 = value["data"]["sha256"].as_str().expect("sprite sha256");
+    assert_eq!(sha256.len(), 64);
+
+    let download_uri = format!("/sprites/{sha256}");
     let response = app
         .app
         .clone()
         .oneshot(
-            user_request(sprite_uri)
+            user_request(&download_uri)
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -703,29 +791,25 @@ async fn sprite_returns_bmp_and_uses_data_cache() {
     let image = image::load_from_memory(&bytes)
         .expect("decode text image bmp")
         .to_rgba8();
-    assert!(image
-        .pixels()
-        .all(|pixel| { matches!(pixel.0, [0, 0, 0, 255] | [255, 255, 255, 255]) }));
+    assert!(image.pixels().any(|pixel| pixel.0 == [0, 255, 0, 255]));
+    assert!(image.pixels().any(|pixel| pixel.0 == [0, 0, 0, 255]));
+    assert!(image.pixels().any(|pixel| pixel.0 == [255, 255, 255, 255]));
+    assert!(image.pixels().all(|pixel| {
+        matches!(
+            pixel.0,
+            [0, 255, 0, 255] | [0, 0, 0, 255] | [255, 255, 255, 255]
+        )
+    }));
 
-    let cache_files = std::fs::read_dir(app.data_dir.join("sprites"))
-        .expect("read sprite cache dir")
-        .collect::<Result<Vec<_>, _>>()
-        .expect("sprite cache entries");
-    assert_eq!(cache_files.len(), 1);
-    assert_eq!(
-        cache_files[0]
-            .path()
-            .extension()
-            .and_then(|value| value.to_str()),
-        Some("bmp")
-    );
-    std::fs::write(cache_files[0].path(), b"BMcached").expect("overwrite sprite cache");
+    let cache_path = app.data_dir.join("sprites").join(format!("{sha256}.bmp"));
+    assert!(cache_path.exists());
+    std::fs::write(cache_path, b"BMcached").expect("overwrite sprite cache");
 
     let response = app
         .app
         .clone()
         .oneshot(
-            user_request(sprite_uri)
+            user_request(&download_uri)
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -755,16 +839,54 @@ async fn sprite_accepts_notice_and_status_types() {
             .app
             .clone()
             .oneshot(
-                user_request(&format!("/api/sprite?type={kind}&text=OFFLINE"))
+                user_request(&format!("/api/sprites?type={kind}&text=OFFLINE"))
                     .body(Body::empty())
                     .expect("request"),
             )
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.headers().get(header::CONTENT_TYPE),
-            Some(&"image/bmp".parse().expect("content type"))
-        );
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let value: Value = serde_json::from_slice(&bytes).expect("json sprite metadata");
+        let sha256 = value["data"]["sha256"].as_str().expect("sprite sha256");
+        assert_eq!(sha256.len(), 64);
     }
+}
+
+#[tokio::test]
+async fn sprite_download_rejects_invalid_sha256() {
+    let app = test_app().await;
+
+    let (status, value) = request_json(
+        app.app.clone(),
+        user_request("/sprites/not-a-sha")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(value["code"], 400);
+}
+
+#[tokio::test]
+async fn sprite_download_returns_404_for_missing_cache() {
+    let app = test_app().await;
+    let sha256 = valid_sha(31);
+
+    let (status, value) = request_json(
+        app.app.clone(),
+        user_request(&format!("/sprites/{sha256}"))
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(value["code"], 404);
 }
