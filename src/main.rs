@@ -55,11 +55,18 @@ fn run_device() {
         );
 
         if let Some(seconds) = sleep_plan.deep_sleep_seconds.filter(|seconds| *seconds > 0) {
-            log::info!(target: "epaper_album", "sleep: entering deep sleep for {seconds}s");
-            if let Err(error) =
-                epaper_album::power::espidf::enter_timer_deep_sleep(u64::from(seconds))
-            {
-                log::warn!(target: "epaper_album", "sleep: enter-error: {error:?}");
+            if option_env!("EPAPER_ALBUM_ENTER_DEEP_SLEEP") == Some("1") {
+                log::info!(target: "epaper_album", "sleep: entering deep sleep for {seconds}s");
+                if let Err(error) =
+                    epaper_album::power::espidf::enter_timer_deep_sleep(u64::from(seconds))
+                {
+                    log::warn!(target: "epaper_album", "sleep: enter-error: {error:?}");
+                }
+            } else {
+                log::info!(
+                    target: "epaper_album",
+                    "sleep: planned {seconds}s, deep sleep disabled in this build"
+                );
             }
         }
     }

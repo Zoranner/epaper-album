@@ -1,6 +1,6 @@
 #[cfg(target_os = "espidf")]
 pub mod espidf {
-    use crate::power::{BatteryStatus, ChargeState, LowBatteryPolicy};
+    use crate::power::{BatteryStatus, ChargeState};
     use esp_idf_hal::i2c::{I2cConfig, I2cDriver};
     use esp_idf_hal::units::FromValueType;
     use esp_idf_sys::TickType_t;
@@ -70,14 +70,8 @@ pub mod espidf {
         let status2 = read_register(i2c, REG_STATUS2)?;
         let percent = read_battery_percent(i2c)?;
         let charge_state = charge_state_from_status(status1, status2);
-        let low_battery = LowBatteryPolicy::default().is_low_battery(&BatteryStatus::new(
-            0,
-            percent,
-            charge_state,
-            false,
-        ));
 
-        Ok(BatteryStatus::new(0, percent, charge_state, low_battery))
+        Ok(BatteryStatus::new(0, percent, charge_state, false))
     }
 
     fn read_battery_percent(i2c: &mut I2cDriver<'_>) -> Result<Option<u8>, esp_idf_sys::EspError> {
