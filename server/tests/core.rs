@@ -706,6 +706,34 @@ async fn image_delete_clears_plan_references_and_removes_image() {
 }
 
 #[tokio::test]
+async fn image_redither_marks_image_pending_and_removes_display_cache() {
+    let app = test_app().await;
+    let sha = valid_sha(33);
+    seed_image(&app.pool, &sha, "ready", "重新抖动").await;
+    write_display_file(&app.data_dir, &sha, b"BMold");
+
+    let (status, value) = request_json(
+        app.app.clone(),
+        admin_request(&app, &format!("/api/images/{sha}/redither"))
+            .method("POST")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["data"]["sha256"], sha);
+    assert_eq!(value["data"]["status"], "pending");
+    assert_eq!(image_status(&app.pool, &sha).await, "pending");
+    assert!(!app
+        .data_dir
+        .join("images")
+        .join("display")
+        .join(format!("{sha}.bmp"))
+        .exists());
+}
+
+#[tokio::test]
 async fn upload_deduplicates_same_image_and_requeues_failed_image() {
     let app = test_app().await;
     let image_bytes = tiny_png();

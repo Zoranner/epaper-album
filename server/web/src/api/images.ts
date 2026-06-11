@@ -50,6 +50,15 @@ export function deleteImage(token: string, sha256: string): Promise<null> {
   );
 }
 
+export function reditherImage(token: string, sha256: string): Promise<AdminImage> {
+  return request<AdminImage>(
+    `/images/${encodeURIComponent(sha256)}/redither`,
+    tokenInit(token, {
+      method: 'POST',
+    }),
+  );
+}
+
 export async function getImageBlob(token: string, sha256: string): Promise<Blob> {
   const response = await fetch(`/images/${encodeURIComponent(sha256)}`, {
     headers: authHeaders(token),

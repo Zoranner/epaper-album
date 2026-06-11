@@ -186,6 +186,7 @@ pub fn router(state: AppState) -> Router {
             "/api/images/:sha256",
             put(update_image).delete(delete_image),
         )
+        .route("/api/images/:sha256/redither", post(redither_image))
         .route("/api/sprites", get(sprite_metadata))
         .route("/images/:sha256", get(download_image))
         .route("/sprites/:sha256", get(download_sprite))
@@ -427,6 +428,24 @@ async fn delete_image(
 
     remove_image_files(&state.app.data_dir, &sha256).await?;
     Ok(Json(ApiResponse::ok(null_data())))
+}
+
+async fn redither_image(
+    State(state): State<RuntimeState>,
+    headers: HeaderMap,
+    Path(sha256): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    require_admin(&headers, &state.app)?;
+    validate_sha256(&sha256)?;
+    remove_file_if_exists(display_image_path(&state.app.data_dir, &sha256)).await?;
+    let image = state
+        .app
+        .store
+        .requeue_image(&sha256)
+        .await?
+        .ok_or_else(|| AppError::NotFound("图片不存在".to_string()))?;
+    enqueue_image(&state, sha256).await;
+    Ok(Json(ApiResponse::ok(image)))
 }
 
 async fn download_image(

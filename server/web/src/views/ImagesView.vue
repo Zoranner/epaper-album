@@ -32,6 +32,7 @@
       :preview-urls="previewUrls"
       @edit-remark="openRemark"
       @refresh-preview="refreshPreview"
+      @redither-image="handleRedither"
       @delete-image="openDelete"
     />
 
@@ -74,6 +75,7 @@ import {
   deleteImage,
   getImageBlob,
   listImages as listImagesRequest,
+  reditherImage,
   type AdminImage,
   type ImageStatus,
 } from '../api';
@@ -154,6 +156,21 @@ async function handleUploaded(image: AdminImage) {
 async function handleRemarkSaved(image: AdminImage) {
   remarkImage.value = null;
   upsertImage(image);
+}
+
+async function handleRedither(image: AdminImage) {
+  if (!auth.token.value) {
+    return;
+  }
+
+  error.value = '';
+  try {
+    const updated = await reditherImage(auth.token.value, image.sha256);
+    revokePreview(image.sha256);
+    upsertImage(updated);
+  } catch (reditherError) {
+    error.value = reditherError instanceof Error ? reditherError.message : '图片重新抖动失败';
+  }
 }
 
 function upsertImage(image: AdminImage) {

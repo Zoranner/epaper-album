@@ -210,6 +210,18 @@ impl Store {
         Ok(result.rows_affected() > 0)
     }
 
+    pub async fn requeue_image(&self, sha256: &str) -> Result<Option<ImageRecord>> {
+        let result = sqlx::query("UPDATE images SET status = 'pending' WHERE sha256 = ?")
+            .bind(sha256)
+            .execute(&self.pool)
+            .await?;
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+
+        self.get_image(sha256).await
+    }
+
     pub async fn recover_processing_images(&self) -> Result<()> {
         sqlx::query("UPDATE images SET status = 'pending' WHERE status = 'processing'")
             .execute(&self.pool)
