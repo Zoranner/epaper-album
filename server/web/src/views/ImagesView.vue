@@ -32,6 +32,7 @@
       :preview-urls="previewUrls"
       @edit-remark="openRemark"
       @refresh-preview="refreshPreview"
+      @delete-image="openDelete"
     />
 
     <ImageUploadDialog
@@ -45,6 +46,22 @@
       @close="remarkImage = null"
       @saved="handleRemarkSaved"
     />
+    <Dialog
+      :open="Boolean(deleteTarget)"
+      title="删除图片"
+      description="删除后引用该图片的计划会保留，并显示为未选图片。"
+      @close="closeDelete"
+    >
+      <div v-if="deleteTarget" class="dialog-form">
+        <code class="dialog-sha">{{ deleteTarget.sha256 }}</code>
+        <DialogActions>
+          <Button type="button" variant="secondary" @click="closeDelete">取消</Button>
+          <Button :loading="deleting" type="button" variant="danger" @click="confirmDelete">
+            删除
+          </Button>
+        </DialogActions>
+      </div>
+    </Dialog>
     <Button class="floating-action" icon="upload" type="button" variant="primary" @click="openUpload">
       上传图片
     </Button>
@@ -54,12 +71,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
+  deleteImage,
   getImageBlob,
   listImages as listImagesRequest,
   type AdminImage,
   type ImageStatus,
 } from '../api';
-import { Button, Input, Select, type SelectOption } from '../components';
+import { Button, Dialog, DialogActions, Input, Select, type SelectOption } from '../components';
 import ImageGrid from '../components/images/ImageGrid.vue';
 import ImageRemarkDialog from '../components/images/ImageRemarkDialog.vue';
 import ImageUploadDialog from '../components/images/ImageUploadDialog.vue';
@@ -72,6 +90,8 @@ const statusFilter = ref<ImageStatus | 'all'>('all');
 const previewUrls = ref<Record<string, string>>({});
 const uploadOpen = ref(false);
 const remarkImage = ref<AdminImage | null>(null);
+const deleteTarget = ref<AdminImage | null>(null);
+const deleting = ref(false);
 const error = ref('');
 const statusOptions: SelectOption[] = [
   { label: '全部状态', value: 'all' },
@@ -115,6 +135,16 @@ function openRemark(image: AdminImage) {
   remarkImage.value = image;
 }
 
+function openDelete(image: AdminImage) {
+  deleteTarget.value = image;
+}
+
+function closeDelete() {
+  if (!deleting.value) {
+    deleteTarget.value = null;
+  }
+}
+
 async function handleUploaded(image: AdminImage) {
   uploadOpen.value = false;
   upsertImage(image);
@@ -133,6 +163,26 @@ function upsertImage(image: AdminImage) {
     return;
   }
   images.value.splice(index, 1, image);
+}
+
+async function confirmDelete() {
+  if (!auth.token.value || !deleteTarget.value) {
+    return;
+  }
+
+  deleting.value = true;
+  error.value = '';
+  const sha256 = deleteTarget.value.sha256;
+  try {
+    await deleteImage(auth.token.value, sha256);
+    images.value = images.value.filter((image) => image.sha256 !== sha256);
+    revokePreview(sha256);
+    deleteTarget.value = null;
+  } catch (deleteError) {
+    error.value = deleteError instanceof Error ? deleteError.message : '图片删除失败';
+  } finally {
+    deleting.value = false;
+  }
 }
 
 async function loadReadyPreviews() {

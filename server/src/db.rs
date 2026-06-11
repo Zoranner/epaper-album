@@ -195,6 +195,21 @@ impl Store {
         self.get_image(sha256).await
     }
 
+    pub async fn delete_image(&self, sha256: &str) -> Result<bool> {
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("UPDATE plans SET image = '' WHERE image = ?")
+            .bind(sha256)
+            .execute(&mut *transaction)
+            .await?;
+        let result = sqlx::query("DELETE FROM images WHERE sha256 = ?")
+            .bind(sha256)
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn recover_processing_images(&self) -> Result<()> {
         sqlx::query("UPDATE images SET status = 'pending' WHERE status = 'processing'")
             .execute(&self.pool)
@@ -289,6 +304,10 @@ impl Store {
     }
 
     async fn validate_image(&self, sha256: &str) -> Result<()> {
+        if sha256.is_empty() {
+            return Ok(());
+        }
+
         let exists: Option<i64> =
             sqlx::query_scalar("SELECT 1 FROM images WHERE sha256 = ? LIMIT 1")
                 .bind(sha256)
@@ -303,6 +322,7 @@ impl Store {
 
 pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     drop_incompatible_table(pool, "plans", &["date", "caption", "image"]).await?;
+    drop_table_with_foreign_keys(pool, "plans").await?;
     drop_incompatible_table(pool, "images", &["sha256", "status", "remark"]).await?;
 
     sqlx::query(
@@ -310,8 +330,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
         CREATE TABLE IF NOT EXISTS plans (
             date          TEXT PRIMARY KEY,
             caption       TEXT NOT NULL,
-            image TEXT NOT NULL,
-            FOREIGN KEY (image) REFERENCES images(sha256)
+            image         TEXT NOT NULL DEFAULT ''
         )
         "#,
     )
@@ -330,6 +349,20 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await?;
 
+    Ok(())
+}
+
+async fn drop_table_with_foreign_keys(pool: &SqlitePool, table: &str) -> Result<()> {
+    let rows = sqlx::query(&format!("PRAGMA foreign_key_list({table})"))
+        .fetch_all(pool)
+        .await?;
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    sqlx::query(&format!("DROP TABLE {table}"))
+        .execute(pool)
+        .await?;
     Ok(())
 }
 

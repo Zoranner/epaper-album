@@ -78,9 +78,6 @@ async function submit() {
     if (!draft.date) {
       throw new Error('请选择日期');
     }
-    if (!draft.image) {
-      throw new Error('请选择一张图片');
-    }
     if (props.plan) {
       await updatePlan(auth.token.value, props.plan.date, draft);
     } else {

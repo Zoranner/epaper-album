@@ -28,6 +28,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   editRemark: [];
   refreshPreview: [];
+  deleteImage: [];
 }>();
 
 const statusText = computed(() => {
@@ -47,6 +48,7 @@ const menuItems = computed<ActionMenuItem[]>(() => {
   if (props.image.status === 'ready') {
     items.push({ key: 'refresh', label: '刷新预览', icon: 'refresh' });
   }
+  items.push({ key: 'delete', label: '删除图片', icon: 'trash', danger: true });
   return items;
 });
 
@@ -56,6 +58,9 @@ function selectAction(key: string) {
   }
   if (key === 'refresh') {
     emit('refreshPreview');
+  }
+  if (key === 'delete') {
+    emit('deleteImage');
   }
 }
 

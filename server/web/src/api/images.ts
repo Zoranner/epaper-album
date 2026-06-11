@@ -41,6 +41,15 @@ export function updateImageRemark(
   );
 }
 
+export function deleteImage(token: string, sha256: string): Promise<null> {
+  return request<null>(
+    `/images/${encodeURIComponent(sha256)}`,
+    tokenInit(token, {
+      method: 'DELETE',
+    }),
+  );
+}
+
 export async function getImageBlob(token: string, sha256: string): Promise<Blob> {
   const response = await fetch(`/images/${encodeURIComponent(sha256)}`, {
     headers: authHeaders(token),

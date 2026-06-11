@@ -135,6 +135,15 @@ async fn image_remark(pool: &SqlitePool, sha256: &str) -> String {
         .expect("image remark")
 }
 
+async fn image_exists(pool: &SqlitePool, sha256: &str) -> bool {
+    sqlx::query_scalar::<_, i64>("SELECT 1 FROM images WHERE sha256 = ?")
+        .bind(sha256)
+        .fetch_optional(pool)
+        .await
+        .expect("image exists")
+        .is_some()
+}
+
 async fn insert_plan(pool: &SqlitePool, date: &str, caption: &str, image: &str) {
     sqlx::query("INSERT INTO plans (date, caption, image) VALUES (?, ?, ?)")
         .bind(date)
@@ -446,6 +455,50 @@ async fn init_schema_replaces_incompatible_legacy_tables() {
 }
 
 #[tokio::test]
+async fn init_schema_replaces_legacy_plan_foreign_key_table() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("connect in-memory sqlite");
+
+    sqlx::query(
+        r#"
+        CREATE TABLE images (
+            sha256 TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            remark TEXT NOT NULL DEFAULT ''
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("create current images");
+    sqlx::query(
+        r#"
+        CREATE TABLE plans (
+            date TEXT PRIMARY KEY,
+            caption TEXT NOT NULL,
+            image TEXT NOT NULL,
+            FOREIGN KEY (image) REFERENCES images(sha256)
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("create legacy plans");
+
+    db::init_schema(&pool).await.expect("init schema");
+
+    sqlx::query("INSERT INTO plans (date, caption, image) VALUES (?, ?, '')")
+        .bind("2026-06-06")
+        .bind("empty image")
+        .execute(&pool)
+        .await
+        .expect("insert empty image plan");
+}
+
+#[tokio::test]
 async fn plan_update_by_date_and_returns_404_for_missing_plan() {
     let app = test_app().await;
     let sha_a = valid_sha(15);
@@ -489,6 +542,49 @@ async fn plan_update_by_date_and_returns_404_for_missing_plan() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(value["code"], 404);
+}
+
+#[tokio::test]
+async fn plan_update_accepts_empty_image_and_can_select_image_again() {
+    let app = test_app().await;
+    let sha = valid_sha(32);
+    seed_image(&app.pool, &sha, "ready", "A").await;
+    insert_plan(&app.pool, "2026-06-06", "旧计划", &sha).await;
+
+    let empty_body = json!({
+        "date": "2026-06-06",
+        "caption": "暂不显示",
+        "image": ""
+    });
+    let (status, value) = request_json(
+        app.app.clone(),
+        admin_request(&app, "/api/plans/2026-06-06")
+            .method("PUT")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(empty_body.to_string()))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["data"]["image"], "");
+
+    let selected_body = json!({
+        "date": "2026-06-06",
+        "caption": "恢复显示",
+        "image": sha
+    });
+    let (status, value) = request_json(
+        app.app.clone(),
+        admin_request(&app, "/api/plans/2026-06-06")
+            .method("PUT")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(selected_body.to_string()))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["data"]["caption"], "恢复显示");
+    assert_eq!(value["data"]["image"], sha);
 }
 
 #[tokio::test]
@@ -560,6 +656,53 @@ async fn image_list_requires_admin_and_remark_update_returns_updated_image() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(value["data"]["remark"], "新备注");
     assert_eq!(image_remark(&app.pool, &sha).await, "新备注");
+}
+
+#[tokio::test]
+async fn image_delete_clears_plan_references_and_removes_image() {
+    let app = test_app().await;
+    let sha = valid_sha(18);
+    seed_image(&app.pool, &sha, "ready", "待删").await;
+    insert_plan(&app.pool, "2026-06-06", "待重新编辑", &sha).await;
+    write_display_file(&app.data_dir, &sha, b"BMready");
+
+    let (status, value) = request_json(
+        app.app.clone(),
+        admin_request(&app, &format!("/api/images/{sha}"))
+            .method("DELETE")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["data"], Value::Null);
+    assert!(!image_exists(&app.pool, &sha).await);
+    assert!(!app
+        .data_dir
+        .join("images")
+        .join("display")
+        .join(format!("{sha}.bmp"))
+        .exists());
+
+    let (_, admin_value) = request_json(
+        app.app.clone(),
+        admin_request(&app, "/api/plans")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(admin_value["data"][0]["caption"], "待重新编辑");
+    assert_eq!(admin_value["data"][0]["image"], "");
+
+    let (_, user_value) = request_json(
+        app.app.clone(),
+        user_request("/api/plans")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(user_value["data"], json!([]));
 }
 
 #[tokio::test]

@@ -8,6 +8,7 @@
       :preview-url="previewUrls[image.sha256]"
       @edit-remark="$emit('editRemark', image)"
       @refresh-preview="$emit('refreshPreview', image.sha256)"
+      @delete-image="$emit('deleteImage', image)"
     />
   </div>
 </template>
@@ -25,5 +26,6 @@ defineProps<{
 defineEmits<{
   editRemark: [image: AdminImage];
   refreshPreview: [sha256: string];
+  deleteImage: [image: AdminImage];
 }>();
 </script>

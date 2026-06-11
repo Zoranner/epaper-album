@@ -182,7 +182,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/plans", get(list_plans).post(create_plan))
         .route("/api/plans/:date", put(update_plan).delete(delete_plan))
         .route("/api/images", get(list_images).post(upload_image))
-        .route("/api/images/:sha256", put(update_image))
+        .route(
+            "/api/images/:sha256",
+            put(update_image).delete(delete_image),
+        )
         .route("/api/sprites", get(sprite_metadata))
         .route("/images/:sha256", get(download_image))
         .route("/sprites/:sha256", get(download_sprite))
@@ -409,6 +412,21 @@ async fn update_image(
         .await?
         .ok_or_else(|| AppError::NotFound("图片不存在".to_string()))?;
     Ok(Json(ApiResponse::ok(image)))
+}
+
+async fn delete_image(
+    State(state): State<RuntimeState>,
+    headers: HeaderMap,
+    Path(sha256): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    require_admin(&headers, &state.app)?;
+    validate_sha256(&sha256)?;
+    if !state.app.store.delete_image(&sha256).await? {
+        return Err(AppError::NotFound("图片不存在".to_string()));
+    }
+
+    remove_image_files(&state.app.data_dir, &sha256).await?;
+    Ok(Json(ApiResponse::ok(null_data())))
 }
 
 async fn download_image(
@@ -832,6 +850,24 @@ fn detect_uploaded_image_format(bytes: &[u8]) -> Result<UploadedImageFormat, App
     ))
 }
 
+async fn remove_image_files(data_dir: &std::path::Path, sha256: &str) -> Result<(), AppError> {
+    remove_file_if_exists(display_image_path(data_dir, sha256)).await?;
+    for extension in ["jpg", "png", "bmp", "jpeg"] {
+        remove_file_if_exists(original_image_dir(data_dir).join(format!("{sha256}.{extension}")))
+            .await?;
+    }
+    remove_file_if_exists(original_image_dir(data_dir).join(sha256)).await?;
+    Ok(())
+}
+
+async fn remove_file_if_exists(path: PathBuf) -> Result<(), AppError> {
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(AppError::Internal(error.into())),
+    }
+}
+
 fn original_image_path(
     data_dir: &std::path::Path,
     sha256: &str,
@@ -1004,7 +1040,9 @@ fn validate_plan_payload(payload: &Plan) -> Result<(), AppError> {
     if payload.caption.trim().is_empty() {
         return Err(AppError::BadRequest("计划标题不能为空".to_string()));
     }
-    validate_sha256(&payload.image)?;
+    if !payload.image.is_empty() {
+        validate_sha256(&payload.image)?;
+    }
     Ok(())
 }
 
