@@ -1,6 +1,7 @@
 use crate::bmp::{BmpError, BmpImage};
 use crate::display::{Color, ScreenBuffer, SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::epd::{pack_epd_pixels, set_logical_packed_frame_pixel, EPD_FRAME_BYTES};
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 const PLACEHOLDER_GLYPH_WIDTH: usize = 5;
@@ -69,7 +70,7 @@ impl From<BmpError> for RenderError {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum RenderNotice {
     LowBattery,
     Offline,
@@ -137,6 +138,7 @@ pub struct SpritePlacement {
 pub struct PackedFrameRenderInput<'a> {
     pub photo_bmp: &'a [u8],
     pub sprites: SpriteBmps<'a>,
+    pub notice: Option<RenderNotice>,
     pub placement: SpritePlacement,
 }
 
@@ -150,6 +152,7 @@ impl<'a> PackedFrameRenderInput<'a> {
                 notice: None,
                 status: None,
             },
+            notice: None,
             placement: SpritePlacement {
                 margin_x: 0,
                 margin_y: 0,
@@ -159,6 +162,11 @@ impl<'a> PackedFrameRenderInput<'a> {
 
     pub const fn with_sprites(mut self, sprites: SpriteBmps<'a>) -> Self {
         self.sprites = sprites;
+        self
+    }
+
+    pub const fn with_notice(mut self, notice: Option<RenderNotice>) -> Self {
+        self.notice = notice;
         self
     }
 
@@ -276,6 +284,21 @@ pub fn render_epd_packed_frame_from_bmps_into(
 
     if let Some(notice) = input.sprites.notice {
         draw_sprite_bmp(frame, notice, OverlaySlot::TopLeft, input.placement)?;
+    } else if let Some(notice) = input.notice {
+        let style = TextStyle {
+            foreground: Color::White,
+            background: Color::Black,
+            padding_x: 8,
+            padding_y: 6,
+            margin_x: input.placement.margin_x,
+            margin_y: input.placement.margin_y,
+            glyph_width: PLACEHOLDER_GLYPH_WIDTH,
+            glyph_height: PLACEHOLDER_GLYPH_HEIGHT,
+            glyph_gap: GLYPH_GAP,
+        };
+        let size = text_size(notice.text(), &style).unwrap_or((0, 0));
+        let (x, y) = overlay_origin(OverlaySlot::TopLeft, size.0, size.1, &style);
+        draw_text_on_packed_frame(frame, x, y, notice.text(), &style);
     }
 
     Ok(())

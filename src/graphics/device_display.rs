@@ -162,6 +162,7 @@ where
                     notice: notice.as_deref(),
                     status: None,
                 })
+                .with_notice(request.notice)
                 .with_placement(SpritePlacement {
                     margin_x: OVERLAY_MARGIN,
                     margin_y: OVERLAY_MARGIN,
@@ -343,6 +344,24 @@ mod tests {
         let mut display = PackedFrameDisplay::new(reader, bus);
 
         display.refresh(request(None)).unwrap();
+        let (_reader, bus) = display.into_parts();
+
+        assert_eq!(bus.row_count, EPD_HEIGHT);
+    }
+
+    #[test]
+    fn display_allows_missing_notice_sprite() {
+        let mut reader = MockReader::default();
+        reader.photos.insert(
+            "photo".to_string(),
+            solid_bmp(EPD_WIDTH, EPD_HEIGHT, Color::White),
+        );
+        let bus = MockBus::default();
+        let mut display = PackedFrameDisplay::new(reader, bus);
+        let mut request = request(Some(RenderNotice::LowBattery));
+        request.sprites.notice = None;
+
+        display.refresh(request).unwrap();
         let (_reader, bus) = display.into_parts();
 
         assert_eq!(bus.row_count, EPD_HEIGHT);

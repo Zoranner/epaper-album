@@ -856,7 +856,6 @@ async fn remove_image_files(data_dir: &std::path::Path, sha256: &str) -> Result<
         remove_file_if_exists(original_image_dir(data_dir).join(format!("{sha256}.{extension}")))
             .await?;
     }
-    remove_file_if_exists(original_image_dir(data_dir).join(sha256)).await?;
     Ok(())
 }
 

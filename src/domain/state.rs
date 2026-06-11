@@ -1,4 +1,5 @@
 use crate::model::{LocalDate, Plan};
+use crate::render::RenderNotice;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -19,23 +20,39 @@ pub enum RefreshReason {
     ErrorPage,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PersistedDisplay {
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PersistentDeviceState {
     #[serde(default)]
     pub date: Option<LocalDate>,
     #[serde(default)]
     pub image: Option<String>,
     #[serde(default)]
     pub caption: Option<String>,
+    #[serde(default)]
+    pub notice: Option<RenderNotice>,
 }
 
-impl PersistedDisplay {
-    pub fn from_plan(plan: &Plan) -> Self {
+impl PersistentDeviceState {
+    pub fn new() -> Self {
+        Self {
+            date: None,
+            image: None,
+            caption: None,
+            notice: None,
+        }
+    }
+
+    pub fn from_plan(plan: &Plan, notice: Option<RenderNotice>) -> Self {
         Self {
             date: Some(plan.date),
             image: Some(plan.image.clone()),
             caption: Some(plan.caption.clone()),
+            notice,
         }
+    }
+
+    pub fn set(&mut self, plan: &Plan, notice: Option<RenderNotice>) {
+        *self = Self::from_plan(plan, notice);
     }
 
     pub fn matches_plan(&self, plan: &Plan) -> bool {
@@ -43,44 +60,72 @@ impl PersistedDisplay {
             && self.image.as_deref() == Some(plan.image.as_str())
             && self.caption.as_deref() == Some(plan.caption.as_str())
     }
-}
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PersistentDeviceState {
-    #[serde(default)]
-    pub last_successful_sync_epoch_seconds: Option<u64>,
-    #[serde(default)]
-    pub last_sync_error: Option<String>,
-    #[serde(default)]
-    pub current_display: PersistedDisplay,
-    #[serde(default)]
-    pub next_wakeup_epoch_seconds: Option<u64>,
-    #[serde(default)]
-    pub last_refresh_reason: Option<RefreshReason>,
-    #[serde(default)]
-    pub last_wake_reason: Option<WakeReason>,
-}
-
-impl PersistentDeviceState {
-    pub fn new() -> Self {
-        Self {
-            last_successful_sync_epoch_seconds: None,
-            last_sync_error: None,
-            current_display: PersistedDisplay::default(),
-            next_wakeup_epoch_seconds: None,
-            last_refresh_reason: None,
-            last_wake_reason: None,
-        }
-    }
-
-    pub fn set_current_display(&mut self, plan: &Plan) {
-        self.current_display = PersistedDisplay::from_plan(plan);
+    pub fn to_plan(&self) -> Option<Plan> {
+        Some(Plan {
+            date: self.date?,
+            image: self.image.clone()?,
+            caption: self.caption.clone().unwrap_or_default(),
+        })
     }
 }
 
 impl Default for PersistentDeviceState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<'de> Deserialize<'de> for PersistentDeviceState {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct WireState {
+            #[serde(default)]
+            date: Option<LocalDate>,
+            #[serde(default)]
+            image: Option<String>,
+            #[serde(default)]
+            caption: Option<String>,
+            #[serde(default)]
+            notice: Option<RenderNotice>,
+            #[serde(default)]
+            current_display: Option<WireDisplay>,
+            #[serde(default)]
+            current_notice: Option<RenderNotice>,
+        }
+
+        #[derive(Deserialize)]
+        struct WireDisplay {
+            #[serde(default)]
+            date: Option<LocalDate>,
+            #[serde(default)]
+            image: Option<String>,
+            #[serde(default)]
+            caption: Option<String>,
+        }
+
+        let wire = WireState::deserialize(deserializer)?;
+        let old_display = wire.current_display;
+
+        Ok(Self {
+            date: wire
+                .date
+                .or_else(|| old_display.as_ref().and_then(|display| display.date)),
+            image: wire.image.or_else(|| {
+                old_display
+                    .as_ref()
+                    .and_then(|display| display.image.clone())
+            }),
+            caption: wire.caption.or_else(|| {
+                old_display
+                    .as_ref()
+                    .and_then(|display| display.caption.clone())
+            }),
+            notice: wire.notice.or(wire.current_notice),
+        })
     }
 }
 
@@ -97,25 +142,46 @@ mod tests {
     }
 
     #[test]
-    fn serializes_persistent_state_with_current_display() {
-        let state = PersistentDeviceState {
-            current_display: PersistedDisplay::from_plan(&plan()),
-            last_wake_reason: Some(WakeReason::Button),
-            ..PersistentDeviceState::default()
-        };
+    fn serializes_flat_persistent_state() {
+        let state = PersistentDeviceState::from_plan(&plan(), Some(RenderNotice::LowBattery));
 
         let json = serde_json::to_string(&state).unwrap();
 
-        assert!(json.contains("current_display"));
+        assert!(json.contains("date"));
+        assert!(json.contains("image"));
+        assert!(json.contains("caption"));
+        assert!(json.contains("notice"));
         assert!(json.contains("2026-06-08"));
-        assert!(json.contains("last_wake_reason"));
+        assert!(!json.contains("current_display"));
+        assert!(!json.contains("last_wake_reason"));
     }
 
     #[test]
-    fn compares_persisted_display_with_plan() {
+    fn compares_state_with_plan() {
         let plan = plan();
-        let display = PersistedDisplay::from_plan(&plan);
+        let state = PersistentDeviceState::from_plan(&plan, None);
 
-        assert!(display.matches_plan(&plan));
+        assert!(state.matches_plan(&plan));
+    }
+
+    #[test]
+    fn reads_legacy_current_display_state() {
+        let state: PersistentDeviceState = serde_json::from_str(
+            r#"{
+                "current_display": {
+                    "date": "2026-06-08",
+                    "image": "abc",
+                    "caption": "caption"
+                },
+                "current_notice": "LowBattery",
+                "last_successful_sync_epoch_seconds": 100
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(state.date, Some(LocalDate::parse("2026-06-08").unwrap()));
+        assert_eq!(state.image.as_deref(), Some("abc"));
+        assert_eq!(state.caption.as_deref(), Some("caption"));
+        assert_eq!(state.notice, Some(RenderNotice::LowBattery));
     }
 }

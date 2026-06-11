@@ -25,6 +25,8 @@ pub mod espidf {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct PmicProbe {
         pub chip_id: u8,
+        pub status1: u8,
+        pub status2: u8,
         pub dc_onoff: u8,
         pub ldo_onoff0: u8,
         pub battery: BatteryStatus,
@@ -51,11 +53,15 @@ pub mod espidf {
         let ldo_onoff0 = read_register(&mut i2c, REG_LDO_ONOFF0)? | 0x0F;
         write_register(&mut i2c, REG_LDO_ONOFF0, ldo_onoff0)?;
 
+        let (battery, status1, status2) = read_battery_status(&mut i2c)?;
+
         Ok(PmicProbe {
             chip_id,
+            status1,
+            status2,
             dc_onoff: read_register(&mut i2c, REG_DC_ONOFF)?,
             ldo_onoff0: read_register(&mut i2c, REG_LDO_ONOFF0)?,
-            battery: read_battery_status(&mut i2c)?,
+            battery,
         })
     }
 
@@ -65,13 +71,34 @@ pub mod espidf {
 
     fn read_battery_status(
         i2c: &mut I2cDriver<'_>,
-    ) -> Result<BatteryStatus, esp_idf_sys::EspError> {
+    ) -> Result<(BatteryStatus, u8, u8), esp_idf_sys::EspError> {
         let status1 = read_register(i2c, REG_STATUS1)?;
         let status2 = read_register(i2c, REG_STATUS2)?;
         let percent = read_battery_percent(i2c)?;
         let charge_state = charge_state_from_status(status1, status2);
 
-        Ok(BatteryStatus::new(0, percent, charge_state, false))
+        Ok((
+            BatteryStatus::new(0, percent, charge_state, false),
+            status1,
+            status2,
+        ))
+    }
+
+    pub fn status_summary(status1: u8, status2: u8) -> PmicStatusSummary {
+        PmicStatusSummary {
+            battery_connected: status1 & (1 << 3) != 0,
+            vbus_good: status1 & (1 << 5) != 0,
+            battery_current_direction: (status2 >> 5) & 0x03,
+            charge_step: status2 & 0x07,
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct PmicStatusSummary {
+        pub battery_connected: bool,
+        pub vbus_good: bool,
+        pub battery_current_direction: u8,
+        pub charge_step: u8,
     }
 
     fn read_battery_percent(i2c: &mut I2cDriver<'_>) -> Result<Option<u8>, esp_idf_sys::EspError> {
@@ -80,12 +107,14 @@ pub mod espidf {
     }
 
     fn charge_state_from_status(status1: u8, status2: u8) -> ChargeState {
-        let battery_connected = status1 & (1 << 3) != 0;
-        let vbus_good = status1 & (1 << 5) != 0;
-        let power_state = status2 >> 5;
-        let charge_step = status2 & 0x07;
+        let summary = status_summary(status1, status2);
 
-        match (power_state, charge_step, vbus_good, battery_connected) {
+        match (
+            summary.battery_current_direction,
+            summary.charge_step,
+            summary.vbus_good,
+            summary.battery_connected,
+        ) {
             (0x01, _, _, true) => ChargeState::Charging,
             (_, 0x04, true, true) => ChargeState::Full,
             (0x02, _, _, true) => ChargeState::Discharging,

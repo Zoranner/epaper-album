@@ -1,30 +1,5 @@
 use crate::model::{LocalDate, Plan};
-use crate::power::BATTERY_SYNC_INTERVAL_SECONDS;
-use crate::state::PersistedDisplay;
-
-pub const DAILY_SYNC_INTERVAL_SECONDS: u64 = BATTERY_SYNC_INTERVAL_SECONDS;
-
-pub fn next_daily_sync_epoch_seconds(
-    last_successful_sync_epoch_seconds: u64,
-    now_epoch_seconds: u64,
-) -> u64 {
-    let scheduled_epoch_seconds =
-        last_successful_sync_epoch_seconds.saturating_add(DAILY_SYNC_INTERVAL_SECONDS);
-
-    scheduled_epoch_seconds.max(now_epoch_seconds)
-}
-
-pub fn daily_sync_due(
-    last_successful_sync_epoch_seconds: Option<u64>,
-    now_epoch_seconds: u64,
-) -> bool {
-    let Some(last_successful_sync_epoch_seconds) = last_successful_sync_epoch_seconds else {
-        return true;
-    };
-
-    now_epoch_seconds
-        >= last_successful_sync_epoch_seconds.saturating_add(DAILY_SYNC_INTERVAL_SECONDS)
-}
+use crate::state::PersistentDeviceState;
 
 pub fn select_plan_for_date(plans: &[Plan], date: LocalDate) -> Option<&Plan> {
     plans
@@ -39,7 +14,7 @@ pub fn select_plan_for_date(plans: &[Plan], date: LocalDate) -> Option<&Plan> {
         })
 }
 
-pub fn display_needs_refresh(previous: &PersistedDisplay, next: &Plan) -> bool {
+pub fn display_needs_refresh(previous: &PersistentDeviceState, next: &Plan) -> bool {
     !previous.matches_plan(next)
 }
 
@@ -112,10 +87,11 @@ mod tests {
     #[test]
     fn detects_when_display_content_changed() {
         let next = plan("2026-06-06", "caption", "hash");
-        let previous = PersistedDisplay {
+        let previous = PersistentDeviceState {
             date: Some(date("2026-06-05")),
             image: Some("hash".to_string()),
             caption: Some("caption".to_string()),
+            notice: None,
         };
 
         assert!(display_needs_refresh(&previous, &next));
@@ -124,7 +100,7 @@ mod tests {
     #[test]
     fn skips_refresh_when_display_content_is_unchanged() {
         let next = plan("2026-06-06", "caption", "hash");
-        let previous = PersistedDisplay::from_plan(&next);
+        let previous = PersistentDeviceState::from_plan(&next, None);
 
         assert!(!display_needs_refresh(&previous, &next));
     }
@@ -140,19 +116,5 @@ mod tests {
             next_plan_change_date(&plans, date("2026-06-06")),
             Some(date("2026-06-10"))
         );
-    }
-
-    #[test]
-    fn daily_sync_becomes_due_at_twenty_four_hours() {
-        let last_successful_sync = 1_000;
-
-        assert!(!daily_sync_due(
-            Some(last_successful_sync),
-            last_successful_sync + DAILY_SYNC_INTERVAL_SECONDS - 1
-        ));
-        assert!(daily_sync_due(
-            Some(last_successful_sync),
-            last_successful_sync + DAILY_SYNC_INTERVAL_SECONDS
-        ));
     }
 }

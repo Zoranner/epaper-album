@@ -2,7 +2,7 @@ pub mod cycle;
 
 use crate::power::BatteryStatus;
 use crate::schedule::{display_needs_refresh, select_plan_for_date};
-use crate::state::{PersistedDisplay, PersistentDeviceState, RefreshReason, WakeReason};
+use crate::state::{PersistentDeviceState, RefreshReason, WakeReason};
 use crate::{model::LocalDate, model::Plan};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -32,7 +32,6 @@ pub enum RunOutcome {
 pub struct RunInput {
     pub trigger: RunTrigger,
     pub now_epoch_seconds: u64,
-    pub daily_sync_due: bool,
     pub display_refresh_due: bool,
     pub battery: BatteryStatus,
     pub persistent_state: PersistentDeviceState,
@@ -43,7 +42,6 @@ pub struct RunReport {
     pub trigger: RunTrigger,
     pub outcome: RunOutcome,
     pub wake_reason: WakeReason,
-    pub daily_sync_consumed: bool,
     pub display_refresh_due: bool,
     pub battery: BatteryStatus,
     pub persistent_state: PersistentDeviceState,
@@ -90,13 +88,11 @@ pub fn generate_display_decision_from_plans(
         return DisplayDecision::NoUsablePhoto(NoUsablePhotoReason::ResourceNotCached);
     }
 
-    let empty_display = PersistedDisplay::default();
-    let previous_display = previous_state
-        .map(|state| &state.current_display)
-        .unwrap_or(&empty_display);
+    let empty_state = PersistentDeviceState::default();
+    let previous_state = previous_state.unwrap_or(&empty_state);
 
-    if display_needs_refresh(previous_display, plan) {
-        let reason = if previous_display.image.is_some() {
+    if display_needs_refresh(previous_state, plan) {
+        let reason = if previous_state.image.is_some() {
             RefreshReason::PlanChanged
         } else {
             RefreshReason::FirstBoot
@@ -111,14 +107,13 @@ pub fn generate_display_decision_from_plans(
     DisplayDecision::SleepOnly { plan: plan.clone() }
 }
 
-pub fn run_once(mut input: RunInput) -> RunReport {
+pub fn run_once(input: RunInput) -> RunReport {
     let wake_reason = input.trigger.wake_reason();
-    input.persistent_state.last_wake_reason = Some(wake_reason);
 
     let sync_requested = true;
-    let daily_sync_consumed = input.daily_sync_due && !input.battery.low_battery;
+    let effective_low_battery = input.battery.effective_low_battery();
 
-    let outcome = if sync_requested && input.battery.low_battery {
+    let outcome = if sync_requested && effective_low_battery {
         RunOutcome::LowBatterySkipSync
     } else if sync_requested {
         RunOutcome::SyncRequested
@@ -132,7 +127,6 @@ pub fn run_once(mut input: RunInput) -> RunReport {
         trigger: input.trigger,
         outcome,
         wake_reason,
-        daily_sync_consumed,
         display_refresh_due: input.display_refresh_due,
         battery: input.battery,
         persistent_state: input.persistent_state,
@@ -147,7 +141,6 @@ mod tests {
         RunInput {
             trigger,
             now_epoch_seconds: 1,
-            daily_sync_due: false,
             display_refresh_due: false,
             battery: BatteryStatus::unknown(),
             persistent_state: PersistentDeviceState::default(),
@@ -167,27 +160,31 @@ mod tests {
     }
 
     #[test]
-    fn startup_run_requests_sync_and_consumes_due_daily_sync() {
-        let mut input = input(RunTrigger::Startup);
-        input.daily_sync_due = true;
-
-        let report = run_once(input);
+    fn startup_run_requests_sync() {
+        let report = run_once(input(RunTrigger::Startup));
 
         assert_eq!(report.outcome, RunOutcome::SyncRequested);
-        assert!(report.daily_sync_consumed);
         assert_eq!(report.wake_reason, WakeReason::Startup);
     }
 
     #[test]
-    fn low_battery_skips_sync_without_consuming_daily_sync() {
+    fn low_battery_skips_sync() {
         let mut input = input(RunTrigger::Wake(WakeReason::Timer));
-        input.daily_sync_due = true;
         input.battery.low_battery = true;
 
         let report = run_once(input);
 
         assert_eq!(report.outcome, RunOutcome::LowBatterySkipSync);
-        assert!(!report.daily_sync_consumed);
+    }
+
+    #[test]
+    fn charging_low_battery_status_requests_sync() {
+        let mut input = input(RunTrigger::Wake(WakeReason::Timer));
+        input.battery = BatteryStatus::new(0, Some(0), crate::power::ChargeState::Charging, true);
+
+        let report = run_once(input);
+
+        assert_eq!(report.outcome, RunOutcome::SyncRequested);
     }
 
     #[test]
@@ -279,8 +276,7 @@ mod tests {
     #[test]
     fn display_decision_sleeps_when_previous_state_matches() {
         let plans = vec![plan("2026-06-08", "caption", "a")];
-        let mut previous_state = PersistentDeviceState::default();
-        previous_state.set_current_display(&plans[0]);
+        let previous_state = PersistentDeviceState::from_plan(&plans[0], None);
 
         let decision = generate_display_decision_from_plans(
             &plans,

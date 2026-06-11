@@ -102,7 +102,6 @@ pub fn write_device_state_file(
 mod tests {
     use super::*;
     use crate::model::LocalDate;
-    use crate::state::PersistedDisplay;
 
     fn date(value: &str) -> LocalDate {
         LocalDate::parse(value).unwrap()
@@ -124,11 +123,7 @@ mod tests {
             temp_dir.path().join("state.json"),
         ));
         let plans = vec![plan("a")];
-        let device_state = PersistentDeviceState {
-            current_display: PersistedDisplay::from_plan(&plans[0]),
-            last_successful_sync_epoch_seconds: Some(100),
-            ..PersistentDeviceState::default()
-        };
+        let device_state = PersistentDeviceState::from_plan(&plans[0], None);
 
         assert_eq!(files.write_plans(&plans), StorageJsonWrite::Written);
         assert_eq!(
@@ -146,10 +141,7 @@ mod tests {
     #[test]
     fn app_json_helpers_round_trip_domain_types() {
         let plans = vec![plan("a")];
-        let device_state = PersistentDeviceState {
-            current_display: PersistedDisplay::from_plan(&plans[0]),
-            ..PersistentDeviceState::default()
-        };
+        let device_state = PersistentDeviceState::from_plan(&plans[0], None);
 
         assert_eq!(
             plans_from_json(&plans_to_json(&plans).unwrap()).unwrap(),

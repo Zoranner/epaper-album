@@ -39,7 +39,7 @@ fn run_device() {
         log::info!(target: "epaper_album", "cycle outcome: {:?}", cycle.outcome);
         log::info!(target: "epaper_album", "sync attempted: {}", cycle.sync_attempted);
         log::info!(target: "epaper_album", "sync succeeded: {}", cycle.sync_succeeded);
-        if let Some(error) = &cycle.persistent_state.last_sync_error {
+        if let Some(error) = &cycle.sync_error {
             log::warn!(target: "epaper_album", "sync error: {error}");
         }
         log::info!(target: "epaper_album", "refresh attempted: {}", cycle.refresh_attempted);

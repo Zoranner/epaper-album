@@ -40,6 +40,14 @@ impl BatteryStatus {
             low_battery: false,
         }
     }
+
+    pub const fn externally_powered(&self) -> bool {
+        matches!(self.charge_state, ChargeState::Charging | ChargeState::Full)
+    }
+
+    pub const fn effective_low_battery(&self) -> bool {
+        self.low_battery && !self.externally_powered()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,22 +59,21 @@ pub enum PowerProfile {
 }
 
 impl PowerProfile {
-    pub const fn sync_interval_seconds(self) -> Option<u64> {
+    pub const fn wake_interval_seconds(self) -> u64 {
         match self {
-            Self::Battery => Some(BATTERY_SYNC_INTERVAL_SECONDS),
-            Self::Charging | Self::ExternalFull => Some(CHARGING_SYNC_INTERVAL_SECONDS),
-            Self::LowBattery => None,
+            Self::Battery | Self::LowBattery => BATTERY_SYNC_INTERVAL_SECONDS,
+            Self::Charging | Self::ExternalFull => CHARGING_SYNC_INTERVAL_SECONDS,
         }
     }
 
     pub const fn cloud_sync_enabled(self) -> bool {
-        self.sync_interval_seconds().is_some()
+        !matches!(self, Self::LowBattery)
     }
 }
 
 impl From<&BatteryStatus> for PowerProfile {
     fn from(status: &BatteryStatus) -> Self {
-        if status.low_battery {
+        if status.effective_low_battery() {
             return Self::LowBattery;
         }
 
@@ -91,7 +98,7 @@ impl Default for LowBatteryPolicy {
         Self {
             stop_cloud_sync: true,
             show_notice: true,
-            minimum_percent: Some(15),
+            minimum_percent: None,
             minimum_millivolts: None,
         }
     }
@@ -99,6 +106,10 @@ impl Default for LowBatteryPolicy {
 
 impl LowBatteryPolicy {
     pub fn is_low_battery(&self, battery: &BatteryStatus) -> bool {
+        if battery.externally_powered() {
+            return false;
+        }
+
         if battery.low_battery {
             return true;
         }
@@ -117,36 +128,6 @@ impl LowBatteryPolicy {
 
         false
     }
-}
-
-pub fn profile_sync_due(
-    profile: PowerProfile,
-    last_successful_sync_epoch_seconds: Option<u64>,
-    now_epoch_seconds: u64,
-) -> bool {
-    let Some(interval_seconds) = profile.sync_interval_seconds() else {
-        return false;
-    };
-    let Some(last_successful_sync_epoch_seconds) = last_successful_sync_epoch_seconds else {
-        return true;
-    };
-
-    now_epoch_seconds >= last_successful_sync_epoch_seconds.saturating_add(interval_seconds)
-}
-
-pub fn next_profile_sync_epoch_seconds(
-    profile: PowerProfile,
-    last_successful_sync_epoch_seconds: Option<u64>,
-    now_epoch_seconds: u64,
-) -> Option<u64> {
-    let interval_seconds = profile.sync_interval_seconds()?;
-    let Some(last_successful_sync_epoch_seconds) = last_successful_sync_epoch_seconds else {
-        return Some(now_epoch_seconds);
-    };
-    let scheduled_epoch_seconds =
-        last_successful_sync_epoch_seconds.saturating_add(interval_seconds);
-
-    Some(scheduled_epoch_seconds.max(now_epoch_seconds))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -210,7 +191,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn power_sleep_plan_uses_daily_sync_when_it_is_earliest() {
+    fn power_sleep_plan_uses_wake_interval_when_it_is_earliest() {
         assert_eq!(
             next_wakeup_sleep_plan(1_000, 1_100, Some(1_200), Some(300)),
             SleepPlan::wake_at_after(1_100, 100)
@@ -234,7 +215,7 @@ mod tests {
     }
 
     #[test]
-    fn power_sleep_plan_wakes_immediately_for_due_sync() {
+    fn power_sleep_plan_wakes_immediately_for_past_wake_time() {
         assert_eq!(
             next_wakeup_sleep_plan(1_000, 900, Some(1_250), Some(60)),
             SleepPlan::wake_at_after(1_000, 0)
@@ -277,57 +258,87 @@ mod tests {
                 ChargeState::Charging,
                 true
             )),
-            PowerProfile::LowBattery
+            PowerProfile::Charging
         );
     }
 
     #[test]
-    fn power_profile_sync_interval_matches_power_state() {
-        assert_eq!(
-            PowerProfile::Battery.sync_interval_seconds(),
-            Some(BATTERY_SYNC_INTERVAL_SECONDS)
-        );
-        assert_eq!(
-            PowerProfile::Charging.sync_interval_seconds(),
-            Some(CHARGING_SYNC_INTERVAL_SECONDS)
-        );
-        assert_eq!(
-            PowerProfile::ExternalFull.sync_interval_seconds(),
-            Some(CHARGING_SYNC_INTERVAL_SECONDS)
-        );
-        assert_eq!(PowerProfile::LowBattery.sync_interval_seconds(), None);
+    fn externally_powered_status_is_not_effective_low_battery() {
+        for charge_state in [ChargeState::Charging, ChargeState::Full] {
+            let battery = BatteryStatus::new(0, Some(0), charge_state, true);
+
+            assert!(battery.externally_powered());
+            assert!(!battery.effective_low_battery());
+            assert!(!LowBatteryPolicy::default().is_low_battery(&battery));
+            assert_ne!(PowerProfile::from(&battery), PowerProfile::LowBattery);
+        }
     }
 
     #[test]
-    fn charging_profile_syncs_every_hour() {
-        let last_sync = 1_000;
+    fn discharging_status_keeps_low_battery_policy() {
+        let explicit_low = BatteryStatus::new(0, Some(80), ChargeState::Discharging, true);
 
-        assert!(!profile_sync_due(
-            PowerProfile::Charging,
-            Some(last_sync),
-            last_sync + CHARGING_SYNC_INTERVAL_SECONDS - 1
-        ));
-        assert!(profile_sync_due(
-            PowerProfile::Charging,
-            Some(last_sync),
-            last_sync + CHARGING_SYNC_INTERVAL_SECONDS
-        ));
+        assert!(explicit_low.effective_low_battery());
+        assert!(LowBatteryPolicy::default().is_low_battery(&explicit_low));
+        assert_eq!(PowerProfile::from(&explicit_low), PowerProfile::LowBattery);
+    }
+
+    #[test]
+    fn default_low_battery_policy_ignores_uncalibrated_percent() {
+        let battery = BatteryStatus::new(0, Some(0), ChargeState::Unknown, false);
+
+        assert!(!LowBatteryPolicy::default().is_low_battery(&battery));
+    }
+
+    #[test]
+    fn percent_threshold_only_applies_when_explicitly_configured() {
+        let policy = LowBatteryPolicy {
+            minimum_percent: Some(15),
+            ..LowBatteryPolicy::default()
+        };
+        let battery = BatteryStatus::new(0, Some(0), ChargeState::Discharging, false);
+
+        assert!(policy.is_low_battery(&battery));
+    }
+
+    #[test]
+    fn power_profile_wake_interval_matches_power_state() {
+        assert_eq!(
+            PowerProfile::Battery.wake_interval_seconds(),
+            BATTERY_SYNC_INTERVAL_SECONDS
+        );
+        assert_eq!(
+            PowerProfile::Charging.wake_interval_seconds(),
+            CHARGING_SYNC_INTERVAL_SECONDS
+        );
+        assert_eq!(
+            PowerProfile::ExternalFull.wake_interval_seconds(),
+            CHARGING_SYNC_INTERVAL_SECONDS
+        );
+        assert_eq!(
+            PowerProfile::LowBattery.wake_interval_seconds(),
+            BATTERY_SYNC_INTERVAL_SECONDS
+        );
+    }
+
+    #[test]
+    fn charging_profile_wakes_every_hour() {
+        assert_eq!(
+            PowerProfile::Charging.wake_interval_seconds(),
+            CHARGING_SYNC_INTERVAL_SECONDS
+        );
     }
 
     #[test]
     fn low_battery_profile_skips_cloud_sync() {
-        assert!(!profile_sync_due(PowerProfile::LowBattery, None, 1_000));
-        assert_eq!(
-            next_profile_sync_epoch_seconds(PowerProfile::LowBattery, None, 1_000),
-            None
-        );
+        assert!(!PowerProfile::LowBattery.cloud_sync_enabled());
     }
 
     #[test]
     fn external_full_profile_uses_charging_interval() {
         assert_eq!(
-            next_profile_sync_epoch_seconds(PowerProfile::ExternalFull, Some(1_000), 1_200),
-            Some(1_000 + CHARGING_SYNC_INTERVAL_SECONDS)
+            PowerProfile::ExternalFull.wake_interval_seconds(),
+            CHARGING_SYNC_INTERVAL_SECONDS
         );
     }
 }

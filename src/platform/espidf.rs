@@ -19,14 +19,11 @@ use crate::epd::espidf::EspEpdBus;
 #[cfg(target_os = "espidf")]
 use crate::model::LocalDate;
 #[cfg(target_os = "espidf")]
-use crate::pmic::espidf::init_axp2101_for_photo_painter;
+use crate::pmic::espidf::{init_axp2101_for_photo_painter, status_summary};
 #[cfg(target_os = "espidf")]
-use crate::power::{
-    next_profile_sync_epoch_seconds, next_wakeup_sleep_plan, profile_sync_due, BatteryStatus,
-    PowerProfile, SleepPlan,
-};
+use crate::power::{next_wakeup_sleep_plan, BatteryStatus, PowerProfile, SleepPlan};
 #[cfg(target_os = "espidf")]
-use crate::schedule::{next_plan_change_date, DAILY_SYNC_INTERVAL_SECONDS};
+use crate::schedule::next_plan_change_date;
 #[cfg(target_os = "espidf")]
 use crate::state::PersistentDeviceState;
 #[cfg(target_os = "espidf")]
@@ -85,24 +82,34 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
     };
 
     let pins = peripherals.pins;
-    let pmic_probe =
-        match init_axp2101_for_photo_painter(peripherals.i2c0, pins.gpio47, pins.gpio48) {
-            Ok(probe) => {
-                log::info!(
-                    target: "epaper_album",
-                    "pmic: chip=0x{:02x} battery={:?} percent={:?} low={}",
-                    probe.chip_id,
-                    probe.battery.charge_state,
-                    probe.battery.percent,
-                    probe.battery.low_battery
-                );
-                Some(probe)
-            }
-            Err(error) => {
-                log::warn!(target: "epaper_album", "pmic: init-error: {error:?}");
-                None
-            }
-        };
+    let pmic_probe = match init_axp2101_for_photo_painter(
+        peripherals.i2c0,
+        pins.gpio47,
+        pins.gpio48,
+    ) {
+        Ok(probe) => {
+            let pmic_status = status_summary(probe.status1, probe.status2);
+            log::info!(
+                target: "epaper_album",
+                "pmic: chip=0x{:02x} status1=0x{:02x} status2=0x{:02x} vbus={} battery-present={} current-dir={} charge-step={} battery={:?} percent={:?} low={}",
+                probe.chip_id,
+                probe.status1,
+                probe.status2,
+                pmic_status.vbus_good,
+                pmic_status.battery_connected,
+                pmic_status.battery_current_direction,
+                pmic_status.charge_step,
+                probe.battery.charge_state,
+                probe.battery.percent,
+                probe.battery.low_battery
+            );
+            Some(probe)
+        }
+        Err(error) => {
+            log::warn!(target: "epaper_album", "pmic: init-error: {error:?}");
+            None
+        }
+    };
 
     let mut now_epoch_seconds = current_epoch_seconds();
     let mut date = today();
@@ -146,7 +153,7 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
 
             if let Some(config) = config
                 .as_ref()
-                .filter(|config| config.has_required_values())
+                .filter(|config| config.has_required_values() && !battery.effective_low_battery())
             {
                 sync.prepare_network(config);
                 now_epoch_seconds = current_epoch_seconds();
@@ -160,16 +167,11 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
             }
 
             let power_profile = PowerProfile::from(&battery);
-            let due = profile_sync_due(
-                power_profile,
-                persistent_state.last_successful_sync_epoch_seconds,
-                now_epoch_seconds,
-            );
             log::info!(
                 target: "epaper_album",
-                "power: profile={:?} sync-due={} battery={:?} percent={:?} low={}",
+                "power: profile={:?} wake-interval={:?} battery={:?} percent={:?} low={}",
                 power_profile,
-                due,
+                power_profile.wake_interval_seconds(),
                 battery.charge_state,
                 battery.percent,
                 battery.low_battery
@@ -183,7 +185,6 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
                     now_epoch_seconds,
                     date,
                     battery,
-                    daily_sync_due: due,
                 },
                 &mut sync,
                 &mut display,
@@ -405,19 +406,14 @@ fn build_sleep_plan(
     date: LocalDate,
 ) -> SleepPlan {
     let power_profile = PowerProfile::from(&cycle.battery);
-    let next_sync = next_profile_sync_epoch_seconds(
-        power_profile,
-        cycle.persistent_state.last_successful_sync_epoch_seconds,
-        now_epoch_seconds,
-    )
-    .unwrap_or(now_epoch_seconds.saturating_add(DAILY_SYNC_INTERVAL_SECONDS));
+    let next_wake = now_epoch_seconds.saturating_add(power_profile.wake_interval_seconds());
     let next_plan_change = cycle
         .plans
         .as_ref()
         .and_then(|plans| next_plan_change_date(plans, date))
         .map(local_date_start_epoch_seconds);
 
-    next_wakeup_sleep_plan(now_epoch_seconds, next_sync, next_plan_change, None)
+    next_wakeup_sleep_plan(now_epoch_seconds, next_wake, next_plan_change, None)
 }
 
 #[cfg(target_os = "espidf")]

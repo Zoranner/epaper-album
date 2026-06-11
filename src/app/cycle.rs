@@ -17,7 +17,6 @@ pub struct DeviceCycleInput {
     pub now_epoch_seconds: u64,
     pub date: LocalDate,
     pub battery: BatteryStatus,
-    pub daily_sync_due: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -83,7 +82,7 @@ pub struct DeviceCycleResult {
     pub outcome: DeviceCycleOutcome,
     pub sync_attempted: bool,
     pub sync_succeeded: bool,
-    pub daily_sync_consumed: bool,
+    pub sync_error: Option<String>,
     pub refresh_attempted: bool,
     pub refresh_succeeded: bool,
 }
@@ -124,25 +123,23 @@ where
         config,
         mut plans,
         mut persistent_state,
-        trigger,
+        trigger: _,
         now_epoch_seconds,
         date,
         battery,
-        daily_sync_due,
     } = input;
 
-    let wake_reason = trigger.wake_reason();
-    persistent_state.last_wake_reason = Some(wake_reason);
-
     let sync_requested = true;
+    let effective_low_battery = battery.effective_low_battery();
+    let previous_notice = persistent_state.notice;
     let mut sync_attempted = false;
     let mut sync_succeeded = false;
-    let mut daily_sync_consumed = false;
+    let mut sync_error = None;
     let mut sync_failed = false;
     let mut sprites = SpriteSet::default();
     let mut sprites_changed = false;
 
-    if sync_requested && !battery.low_battery {
+    if sync_requested && !effective_low_battery {
         if let Some(config) = config
             .as_ref()
             .filter(|config| config.has_required_values())
@@ -151,7 +148,7 @@ where
             let request = SyncRequest {
                 config: config.clone(),
                 local_plans: plans.clone(),
-                notice: refresh_notice(battery.low_battery, false),
+                notice: refresh_notice(effective_low_battery, false),
                 now_epoch_seconds,
             };
 
@@ -160,18 +157,15 @@ where
                     plans = Some(sync_result.plans);
                     sprites = sync_result.sprites;
                     sprites_changed = sync_result.sprites_changed;
-                    persistent_state.last_successful_sync_epoch_seconds = Some(now_epoch_seconds);
-                    persistent_state.last_sync_error = None;
                     sync_succeeded = true;
-                    daily_sync_consumed = daily_sync_due;
                 }
                 Err(error) => {
-                    persistent_state.last_sync_error = Some(error.to_string());
+                    sync_error = Some(error.to_string());
                     sync_failed = true;
                 }
             }
         } else {
-            persistent_state.last_sync_error = Some("missing or incomplete config".to_string());
+            sync_error = Some("missing or incomplete config".to_string());
         }
     }
 
@@ -185,23 +179,35 @@ where
     let mut refresh_attempted = false;
     let mut refresh_succeeded = false;
     let mut refresh_failed = false;
-
-    let sync_failure_fallback = (sync_failed
+    let low_battery_refresh = effective_low_battery
+        .then(|| low_battery_refresh_for_notice(display, &persistent_state))
+        .flatten();
+    let recovered_notice_refresh = (!effective_low_battery
+        && previous_notice.is_some()
         && matches!(decision, DisplayDecision::SleepOnly { .. }))
     .then(|| fallback_refresh_for_notice(plans.as_deref(), display, date))
     .flatten();
-    let overlay_refresh = (sync_succeeded
+
+    let sync_failure_fallback = (low_battery_refresh.is_none()
+        && recovered_notice_refresh.is_none()
+        && sync_failed
+        && matches!(decision, DisplayDecision::SleepOnly { .. }))
+    .then(|| fallback_refresh_for_notice(plans.as_deref(), display, date))
+    .flatten();
+    let overlay_refresh = (low_battery_refresh.is_none()
+        && recovered_notice_refresh.is_none()
+        && sync_succeeded
         && sprites_changed
         && matches!(decision, DisplayDecision::SleepOnly { .. }))
     .then(|| fallback_refresh_for_notice(plans.as_deref(), display, date))
     .flatten();
 
-    if let Some((plan, reason)) = sync_failure_fallback {
+    if let Some((plan, reason)) = low_battery_refresh {
         refresh_attempted = true;
         let request = photo_refresh_request(
             plan,
             reason,
-            refresh_notice(battery.low_battery, sync_failed),
+            Some(RenderNotice::LowBattery),
             SpriteSet::default(),
             now_epoch_seconds,
         );
@@ -209,7 +215,35 @@ where
             Ok(()) => refresh_succeeded = true,
             Err(error) => {
                 log::warn!(target: "epaper_album", "refresh: {error}");
-                persistent_state.last_sync_error = Some(error.to_string());
+                sync_error = Some(error.to_string());
+                refresh_failed = true;
+            }
+        }
+    } else if let Some((plan, reason)) = recovered_notice_refresh {
+        refresh_attempted = true;
+        let request = photo_refresh_request(plan, reason, None, sprites.clone(), now_epoch_seconds);
+        match refresh_photo(display, &mut persistent_state, request) {
+            Ok(()) => refresh_succeeded = true,
+            Err(error) => {
+                log::warn!(target: "epaper_album", "refresh: {error}");
+                sync_error = Some(error.to_string());
+                refresh_failed = true;
+            }
+        }
+    } else if let Some((plan, reason)) = sync_failure_fallback {
+        refresh_attempted = true;
+        let request = photo_refresh_request(
+            plan,
+            reason,
+            refresh_notice(effective_low_battery, sync_failed),
+            SpriteSet::default(),
+            now_epoch_seconds,
+        );
+        match refresh_photo(display, &mut persistent_state, request) {
+            Ok(()) => refresh_succeeded = true,
+            Err(error) => {
+                log::warn!(target: "epaper_album", "refresh: {error}");
+                sync_error = Some(error.to_string());
                 refresh_failed = true;
             }
         }
@@ -218,7 +252,7 @@ where
         let request = photo_refresh_request(
             plan,
             reason,
-            refresh_notice(battery.low_battery, sync_failed),
+            refresh_notice(effective_low_battery, sync_failed),
             sprites.clone(),
             now_epoch_seconds,
         );
@@ -226,7 +260,7 @@ where
             Ok(()) => refresh_succeeded = true,
             Err(error) => {
                 log::warn!(target: "epaper_album", "refresh: {error}");
-                persistent_state.last_sync_error = Some(error.to_string());
+                sync_error = Some(error.to_string());
                 refresh_failed = true;
             }
         }
@@ -235,7 +269,7 @@ where
         let request = photo_refresh_request(
             plan.clone(),
             *reason,
-            refresh_notice(battery.low_battery, sync_failed),
+            refresh_notice(effective_low_battery, sync_failed),
             sprites.clone(),
             now_epoch_seconds,
         );
@@ -243,14 +277,14 @@ where
             Ok(()) => refresh_succeeded = true,
             Err(error) => {
                 log::warn!(target: "epaper_album", "refresh: {error}");
-                persistent_state.last_sync_error = Some(error.to_string());
+                sync_error = Some(error.to_string());
                 refresh_failed = true;
             }
         }
     } else if let Some(request) = error_refresh_request(
         config.as_ref(),
         &decision,
-        persistent_state.last_sync_error.as_deref(),
+        sync_error.as_deref(),
         sync_failed,
         now_epoch_seconds,
     ) {
@@ -260,7 +294,7 @@ where
             Ok(()) => refresh_succeeded = true,
             Err(error) => {
                 log::warn!(target: "epaper_album", "error page refresh: {error}");
-                persistent_state.last_sync_error = Some(error.to_string());
+                sync_error = Some(error.to_string());
                 refresh_failed = true;
             }
         }
@@ -270,7 +304,7 @@ where
         &decision,
         config.as_ref(),
         sync_requested,
-        battery.low_battery,
+        effective_low_battery,
         sync_failed,
         refresh_failed,
         refresh_attempted,
@@ -284,7 +318,7 @@ where
         outcome,
         sync_attempted,
         sync_succeeded,
-        daily_sync_consumed,
+        sync_error,
         refresh_attempted,
         refresh_succeeded,
     }
@@ -327,12 +361,30 @@ where
     D: DeviceDisplay,
 {
     let plan = request.plan.clone();
-    let reason = request.reason;
+    let notice = request.notice;
 
     display.refresh(request)?;
-    persistent_state.set_current_display(&plan);
-    persistent_state.last_refresh_reason = Some(reason);
+    persistent_state.set(&plan, notice);
     Ok(())
+}
+
+fn low_battery_refresh_for_notice<D>(
+    display: &D,
+    persistent_state: &PersistentDeviceState,
+) -> Option<(Plan, RefreshReason)>
+where
+    D: DeviceDisplay,
+{
+    if persistent_state.notice == Some(RenderNotice::LowBattery) {
+        return None;
+    }
+
+    let plan = persistent_state.to_plan()?;
+    if !display.has_image(&plan.image) {
+        return None;
+    }
+
+    Some((plan, RefreshReason::NoticeChanged))
 }
 
 fn fallback_refresh_for_notice<D>(
@@ -544,7 +596,6 @@ mod tests {
             now_epoch_seconds: 100,
             date: date("2026-06-08"),
             battery: BatteryStatus::unknown(),
-            daily_sync_due: false,
         }
     }
 
@@ -571,17 +622,14 @@ mod tests {
         assert_eq!(display.requests[0].plan.image, "a");
         assert!(result.sync_succeeded);
         assert!(result.refresh_succeeded);
-        assert_eq!(
-            result.persistent_state.current_display.image.as_deref(),
-            Some("a")
-        );
+        assert_eq!(result.persistent_state.image.as_deref(), Some("a"));
     }
 
     #[test]
-    fn low_battery_skips_sync_but_refreshes_from_local_plans() {
+    fn low_battery_skips_sync_but_refreshes_current_state() {
         let plans = vec![plan("a")];
         let mut input = input(Some(plans));
-        input.daily_sync_due = true;
+        input.persistent_state = PersistentDeviceState::from_plan(&plan("a"), None);
         input.battery.low_battery = true;
         let mut sync = FakeSync::default();
         let mut display = FakeDisplay {
@@ -593,8 +641,85 @@ mod tests {
 
         assert!(sync.requests.is_empty());
         assert_eq!(display.requests.len(), 1);
+        assert_eq!(display.requests[0].notice, Some(RenderNotice::LowBattery));
         assert_eq!(result.outcome, DeviceCycleOutcome::LowBatterySkipSync);
-        assert!(!result.daily_sync_consumed);
+        assert_eq!(
+            result.persistent_state.notice,
+            Some(RenderNotice::LowBattery)
+        );
+    }
+
+    #[test]
+    fn low_battery_does_not_refresh_when_notice_is_already_displayed() {
+        let plans = vec![plan("a")];
+        let mut input = input(Some(plans));
+        input.battery.low_battery = true;
+        input.persistent_state =
+            PersistentDeviceState::from_plan(&plan("a"), Some(RenderNotice::LowBattery));
+        let mut sync = FakeSync::default();
+        let mut display = FakeDisplay {
+            images: vec!["a".to_string()],
+            ..FakeDisplay::default()
+        };
+
+        let result = run_device_cycle(input, &mut sync, &mut display);
+
+        assert!(sync.requests.is_empty());
+        assert!(display.requests.is_empty());
+        assert_eq!(result.outcome, DeviceCycleOutcome::LowBatterySkipSync);
+    }
+
+    #[test]
+    fn charging_low_battery_status_still_syncs() {
+        let mut input = input(Some(vec![plan("a")]));
+        input.battery = BatteryStatus::new(0, Some(0), crate::power::ChargeState::Charging, true);
+        let mut sync = FakeSync {
+            result: Some(Ok(SyncResult {
+                plans: vec![plan("a")],
+                sprites: SpriteSet::default(),
+                sprites_changed: false,
+            })),
+            requests: Vec::new(),
+        };
+        let mut display = FakeDisplay {
+            images: vec!["a".to_string()],
+            ..FakeDisplay::default()
+        };
+
+        let result = run_device_cycle(input, &mut sync, &mut display);
+
+        assert_eq!(sync.requests.len(), 1);
+        assert!(result.sync_attempted);
+        assert!(result.sync_succeeded);
+        assert!(sync.requests[0].notice.is_none());
+        assert_ne!(result.outcome, DeviceCycleOutcome::LowBatterySkipSync);
+    }
+
+    #[test]
+    fn charging_clears_previous_low_battery_notice_after_sync() {
+        let mut input = input(Some(vec![plan("a")]));
+        input.persistent_state =
+            PersistentDeviceState::from_plan(&plan("a"), Some(RenderNotice::LowBattery));
+        input.battery = BatteryStatus::new(0, Some(100), crate::power::ChargeState::Full, false);
+        let mut sync = FakeSync {
+            result: Some(Ok(SyncResult {
+                plans: vec![plan("a")],
+                sprites: SpriteSet::default(),
+                sprites_changed: false,
+            })),
+            requests: Vec::new(),
+        };
+        let mut display = FakeDisplay {
+            images: vec!["a".to_string()],
+            ..FakeDisplay::default()
+        };
+
+        let result = run_device_cycle(input, &mut sync, &mut display);
+
+        assert_eq!(sync.requests.len(), 1);
+        assert_eq!(display.requests.len(), 1);
+        assert_eq!(display.requests[0].notice, None);
+        assert_eq!(result.persistent_state.notice, None);
     }
 
     #[test]
