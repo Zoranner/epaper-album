@@ -1,6 +1,7 @@
 use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
+    sync::Arc,
 };
 
 use axum::{
@@ -11,12 +12,13 @@ use axum::{
 use epaper_album_server::{
     db::{self, Store},
     error::AppError,
-    routes::{self, AppState},
+    routes::{self, AdminSession, AppState},
 };
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use sha2::Digest;
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
+use tokio::sync::Mutex;
 use tower::ServiceExt;
 
 static TEST_ID: AtomicU64 = AtomicU64::new(1);
@@ -55,8 +57,10 @@ async fn test_app_with_options(admin_token_expires_at: chrono::DateTime<chrono::
         secret_key: "test-secret".to_string(),
         admin_username: "admin".to_string(),
         admin_password: "password".to_string(),
-        admin_token: admin_token.clone(),
-        admin_token_expires_at,
+        admin_session: Arc::new(Mutex::new(AdminSession::new(
+            admin_token.clone(),
+            admin_token_expires_at,
+        ))),
         data_dir: data_dir.clone(),
         enqueue_processing: false,
     };
@@ -252,7 +256,9 @@ async fn login_returns_jwt_token_expiration_and_rejects_bad_credentials() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(value["code"], 0);
     assert_eq!(value["message"], "ok");
-    assert_eq!(value["data"]["jwtToken"], app.admin_token);
+    let token = value["data"]["jwtToken"].as_str().expect("jwtToken string");
+    assert!(!token.is_empty());
+    assert_ne!(token, app.admin_token);
     let expires_at = value["data"]["expiresAt"]
         .as_str()
         .expect("expiresAt string");
@@ -265,6 +271,35 @@ async fn login_returns_jwt_token_expiration_and_rejects_bad_credentials() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(value["code"], 401);
     assert_eq!(value["data"], Value::Null);
+}
+
+#[tokio::test]
+async fn login_refreshes_expired_admin_session() {
+    let app = test_app_with_options(chrono::Utc::now() - chrono::Duration::seconds(1)).await;
+
+    let (status, value) = login(&app, "admin", "password").await;
+    assert_eq!(status, StatusCode::OK);
+    let token = value["data"]["jwtToken"].as_str().expect("jwtToken string");
+    let expires_at = value["data"]["expiresAt"]
+        .as_str()
+        .expect("expiresAt string");
+    assert_ne!(token, app.admin_token);
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(expires_at).expect("expiresAt rfc3339")
+            > chrono::Utc::now()
+    );
+
+    let (status, value) = request_json(
+        app.app.clone(),
+        Request::builder()
+            .uri("/api/images")
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["code"], 0);
 }
 
 #[tokio::test]
@@ -842,8 +877,10 @@ async fn recover_ready_image_requires_display_bmp_file() {
         secret_key: "test-secret".to_string(),
         admin_username: "admin".to_string(),
         admin_password: "password".to_string(),
-        admin_token: app.admin_token.clone(),
-        admin_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        admin_session: Arc::new(Mutex::new(AdminSession::new(
+            app.admin_token.clone(),
+            chrono::Utc::now() + chrono::Duration::hours(1),
+        ))),
         data_dir: app.data_dir.clone(),
         enqueue_processing: false,
     })

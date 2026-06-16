@@ -1,9 +1,11 @@
 use epaper_album_server::{
     config::AppConfig,
     db::{self, Store},
-    routes::{self, AppState},
+    routes::{self, AdminSession, AppState},
 };
 use sqlx::sqlite::SqlitePoolOptions;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tower_http::cors::CorsLayer;
 
 #[tokio::main]
@@ -32,8 +34,10 @@ async fn main() -> anyhow::Result<()> {
         secret_key: config.secret_key,
         admin_username: config.admin_username,
         admin_password: config.admin_password,
-        admin_token: config.admin_token,
-        admin_token_expires_at: config.admin_token_expires_at,
+        admin_session: Arc::new(Mutex::new(AdminSession::new(
+            config.admin_token,
+            config.admin_token_expires_at,
+        ))),
         data_dir: "data".into(),
         enqueue_processing: true,
     };

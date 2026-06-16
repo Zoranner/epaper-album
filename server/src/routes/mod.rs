@@ -48,10 +48,21 @@ pub struct AppState {
     pub secret_key: String,
     pub admin_username: String,
     pub admin_password: String,
-    pub admin_token: String,
-    pub admin_token_expires_at: DateTime<Utc>,
+    pub admin_session: Arc<Mutex<AdminSession>>,
     pub data_dir: PathBuf,
     pub enqueue_processing: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct AdminSession {
+    pub token: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+impl AdminSession {
+    pub fn new(token: String, expires_at: DateTime<Utc>) -> Self {
+        Self { token, expires_at }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -240,9 +251,12 @@ async fn login(
 ) -> Result<impl IntoResponse, AppError> {
     if payload.username == state.app.admin_username && payload.password == state.app.admin_password
     {
+        let mut session = state.app.admin_session.lock().await;
+        let expires_at = Utc::now() + Duration::hours(24);
+        *session = AdminSession::new(uuid::Uuid::new_v4().to_string(), expires_at);
         Ok(Json(ApiResponse::ok(LoginResponse {
-            jwt_token: state.app.admin_token,
-            expires_at: state.app.admin_token_expires_at.to_rfc3339(),
+            jwt_token: session.token.clone(),
+            expires_at: session.expires_at.to_rfc3339(),
         })))
     } else {
         Err(AppError::Unauthorized)
@@ -254,7 +268,7 @@ async fn list_plans(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
-    let permission = require_any_permission(&headers, &state.app)?;
+    let permission = require_any_permission(&headers, &state.app).await?;
     let days = parse_days(params.get("days"));
     let start = Local::now().date_naive();
     let end = start + Duration::days((days - 1) as i64);
@@ -278,7 +292,7 @@ async fn create_plan(
     headers: HeaderMap,
     payload: Result<Json<Plan>, JsonRejection>,
 ) -> Result<impl IntoResponse, AppError> {
-    require_admin(&headers, &state.app)?;
+    require_admin(&headers, &state.app).await?;
     let Json(payload) = payload.map_err(map_json_rejection)?;
     validate_plan_payload(&payload)?;
     let plan = state
@@ -296,7 +310,7 @@ async fn update_plan(
     Path(date): Path<String>,
     payload: Result<Json<Plan>, JsonRejection>,
 ) -> Result<impl IntoResponse, AppError> {
-    require_admin(&headers, &state.app)?;
+    require_admin(&headers, &state.app).await?;
     let date = parse_plan_date(&date)?;
     let Json(payload) = payload.map_err(map_json_rejection)?;
     validate_plan_payload(&payload)?;
@@ -315,7 +329,7 @@ async fn delete_plan(
     headers: HeaderMap,
     Path(date): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    require_admin(&headers, &state.app)?;
+    require_admin(&headers, &state.app).await?;
     let date = parse_plan_date(&date)?;
     if state.app.store.delete_plan(date).await? {
         Ok(Json(ApiResponse::ok(null_data())))
@@ -329,7 +343,7 @@ async fn list_images(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
-    require_admin(&headers, &state.app)?;
+    require_admin(&headers, &state.app).await?;
     let images = state
         .app
         .store
@@ -343,7 +357,7 @@ async fn upload_image(
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<impl IntoResponse, AppError> {
-    require_admin(&headers, &state.app)?;
+    require_admin(&headers, &state.app).await?;
 
     let mut image: Option<Bytes> = None;
     let mut remark: Option<String> = None;
@@ -404,7 +418,7 @@ async fn update_image(
     Path(sha256): Path<String>,
     Json(payload): Json<ImageRemarkPayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    require_admin(&headers, &state.app)?;
+    require_admin(&headers, &state.app).await?;
     validate_sha256(&sha256)?;
     let image = state
         .app
@@ -420,7 +434,7 @@ async fn delete_image(
     headers: HeaderMap,
     Path(sha256): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    require_admin(&headers, &state.app)?;
+    require_admin(&headers, &state.app).await?;
     validate_sha256(&sha256)?;
     if !state.app.store.delete_image(&sha256).await? {
         return Err(AppError::NotFound("图片不存在".to_string()));
@@ -435,7 +449,7 @@ async fn redither_image(
     headers: HeaderMap,
     Path(sha256): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    require_admin(&headers, &state.app)?;
+    require_admin(&headers, &state.app).await?;
     validate_sha256(&sha256)?;
     remove_file_if_exists(display_image_path(&state.app.data_dir, &sha256)).await?;
     let image = state
@@ -453,7 +467,7 @@ async fn download_image(
     headers: HeaderMap,
     Path(sha256): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    require_any_permission(&headers, &state.app)?;
+    require_any_permission(&headers, &state.app).await?;
     validate_sha256(&sha256)?;
 
     let image = state
@@ -482,7 +496,7 @@ async fn sprite_metadata(
     headers: HeaderMap,
     Query(payload): Query<SpritePayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    require_any_permission(&headers, &state.app)?;
+    require_any_permission(&headers, &state.app).await?;
     let kind = validate_sprite_payload(&payload)?;
     let font_config = load_sprite_font_config().await?;
     validate_sprite_font_config(&font_config.parsed)?;
@@ -498,7 +512,7 @@ async fn download_sprite(
     headers: HeaderMap,
     Path(sha256): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    require_any_permission(&headers, &state.app)?;
+    require_any_permission(&headers, &state.app).await?;
     validate_sha256(&sha256)?;
     let cache_path = sprite_cache_path(&state.app.data_dir, &sha256);
     if cache_path.exists() {
@@ -1013,8 +1027,11 @@ fn color_distance(left: Rgba<u8>, right: Rgba<u8>) -> u32 {
         .sum()
 }
 
-fn require_any_permission(headers: &HeaderMap, state: &AppState) -> Result<Permission, AppError> {
-    if is_admin(headers, state) {
+async fn require_any_permission(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> Result<Permission, AppError> {
+    if is_admin(headers, state).await {
         return Ok(Permission::Admin);
     }
     if headers
@@ -1027,16 +1044,17 @@ fn require_any_permission(headers: &HeaderMap, state: &AppState) -> Result<Permi
     Err(AppError::Unauthorized)
 }
 
-fn require_admin(headers: &HeaderMap, state: &AppState) -> Result<(), AppError> {
-    if is_admin(headers, state) {
+async fn require_admin(headers: &HeaderMap, state: &AppState) -> Result<(), AppError> {
+    if is_admin(headers, state).await {
         Ok(())
     } else {
         Err(AppError::Unauthorized)
     }
 }
 
-fn is_admin(headers: &HeaderMap, state: &AppState) -> bool {
-    if Utc::now() >= state.admin_token_expires_at {
+async fn is_admin(headers: &HeaderMap, state: &AppState) -> bool {
+    let session = state.admin_session.lock().await;
+    if Utc::now() >= session.expires_at {
         return false;
     }
 
@@ -1044,7 +1062,7 @@ fn is_admin(headers: &HeaderMap, state: &AppState) -> bool {
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .is_some_and(|token| token == state.admin_token)
+        .is_some_and(|token| token == session.token)
 }
 
 fn parse_days(value: Option<&String>) -> u32 {
