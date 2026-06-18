@@ -111,9 +111,9 @@ GET {base_url}/api/sprite?type=caption&text=晚风和海
 secret-key: local-secret-key
 ```
 
-`type` 取值为 `caption`、`date`、`notice` 或 `status`。服务端根据 `server/assets/fonts.toml` 和字体目录生成白底黑字 BMP 小图块，字体、字号、fallback 顺序、内边距和字形栅格化规则由服务端统一管理。设备当前使用 `caption`、`date` 和 `notice`，分别用于左下角标题、右下角日期和左上角通知合成；`status` 作为右上角扩展类型保留。
+`type` 取值为 `caption`、`date` 或 `status`。服务端根据 `server/assets/fonts.toml` 和字体目录生成白底黑字 BMP 小图块，字体、字号、fallback 顺序、内边距和字形栅格化规则由服务端统一管理。设备当前使用 `caption` 和 `date`，分别用于左下角标题和右下角日期合成；`status` 作为右上角扩展类型保留。
 
-设备端和服务端按同一组 sprite 术语处理：`caption` 是左下角标题，`date` 是右下角日期，`notice` 是左上角通知，`status` 是右上角扩展。服务端图片处理状态使用 `images.status` 字段表达。
+设备端和服务端按同一组 sprite 术语处理：`caption` 是左下角标题，`date` 是右下角日期，`status` 是右上角扩展。服务端图片处理状态使用 `images.status` 字段表达。
 
 ## 显示资源
 
@@ -123,7 +123,7 @@ secret-key: local-secret-key
 
 设备所有正常展示图片都从 TF 卡缓存读取。缓存是正常显示路径，不触发异常通知。
 
-文字 sprite 作为显示资源的一部分缓存到 TF 卡。计划同步成功后，设备为当前及未来计划标题预取 `caption` sprite，为显示日期预取 `date` sprite，并为常见通知预取 `notice` sprite。离线运行时优先使用本地已缓存 sprite 合成页面。
+文字 sprite 作为显示资源的一部分缓存到 TF 卡。计划同步成功后，设备为当前计划标题预取 `caption` sprite，为显示日期预取 `date` sprite。离线运行时优先使用本地已缓存 sprite 合成照片页面。
 
 ## 渲染规则
 
@@ -135,7 +135,7 @@ secret-key: local-secret-key
 - 图片尺寸不匹配时按居中适配处理，空白区域使用白色。
 - 标题非空时，加载或下载 `caption` sprite，并合成到左下角。
 - 加载或下载设备当前日期对应的 `date` sprite，并合成到右下角。
-- 存在通知时，加载或下载 `notice` sprite，并合成到左上角。
+- 运行错误使用全屏错误页，不在照片页叠加角标。
 - 将最终缓冲区提交给屏幕做整屏刷新。
 
 左下角标题、右下角日期和左上角通知的字体样式由服务端 sprite 生成配置统一控制。设备端负责读取 sprite BMP、按固定位置合成到 800 x 480 屏幕缓冲区，并保持边距、对齐和覆盖规则稳定。
