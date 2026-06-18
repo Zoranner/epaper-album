@@ -1,5 +1,26 @@
+#[cfg(any(target_os = "espidf", test))]
+const AXP2101_WAKEUP_IRQ_PIN_TO_LOW: u8 = 1 << 4;
+#[cfg(any(target_os = "espidf", test))]
+const AXP2101_VBUS_INSERT_IRQ_ENABLE: u8 = 1 << 7;
+#[cfg(any(target_os = "espidf", test))]
+const AXP2101_VBUS_REMOVE_IRQ_ENABLE: u8 = 1 << 6;
+#[cfg(any(target_os = "espidf", test))]
+const AXP2101_VBUS_CHANGE_IRQ_ENABLE: u8 =
+    AXP2101_VBUS_INSERT_IRQ_ENABLE | AXP2101_VBUS_REMOVE_IRQ_ENABLE;
+
+#[cfg(any(target_os = "espidf", test))]
+const fn enable_vbus_change_irq_bits(value: u8) -> u8 {
+    value | AXP2101_VBUS_CHANGE_IRQ_ENABLE
+}
+
+#[cfg(any(target_os = "espidf", test))]
+const fn enable_irq_pin_wakeup_bits(value: u8) -> u8 {
+    value | AXP2101_WAKEUP_IRQ_PIN_TO_LOW
+}
+
 #[cfg(target_os = "espidf")]
 pub mod espidf {
+    use super::{enable_irq_pin_wakeup_bits, enable_vbus_change_irq_bits};
     use crate::power::{BatteryStatus, ChargeState};
     use esp_idf_hal::i2c::{I2cConfig, I2cDriver};
     use esp_idf_hal::units::FromValueType;
@@ -10,6 +31,11 @@ pub mod espidf {
     const REG_STATUS1: u8 = 0x00;
     const REG_STATUS2: u8 = 0x01;
     const REG_CHIP_ID: u8 = 0x03;
+    const REG_SLEEP_WAKEUP_CTRL: u8 = 0x26;
+    const REG_IRQ_ENABLE2: u8 = 0x41;
+    const REG_IRQ_STATUS1: u8 = 0x48;
+    const REG_IRQ_STATUS2: u8 = 0x49;
+    const REG_IRQ_STATUS3: u8 = 0x4A;
     const REG_DC_ONOFF: u8 = 0x80;
     const REG_DC1_VOLTAGE: u8 = 0x82;
     const REG_LDO_ONOFF0: u8 = 0x90;
@@ -54,6 +80,7 @@ pub mod espidf {
         write_register(&mut i2c, REG_LDO_ONOFF0, ldo_onoff0)?;
 
         let (battery, status1, status2) = read_battery_status(&mut i2c)?;
+        configure_vbus_change_irq(&mut i2c)?;
 
         Ok(PmicProbe {
             chip_id,
@@ -67,6 +94,21 @@ pub mod espidf {
 
     pub fn chip_id_is_axp2101(probe: PmicProbe) -> bool {
         probe.chip_id == AXP2101_CHIP_ID
+    }
+
+    fn configure_vbus_change_irq(i2c: &mut I2cDriver<'_>) -> Result<(), esp_idf_sys::EspError> {
+        clear_irq_status(i2c)?;
+
+        update_register(i2c, REG_IRQ_ENABLE2, enable_vbus_change_irq_bits)?;
+        update_register(i2c, REG_SLEEP_WAKEUP_CTRL, enable_irq_pin_wakeup_bits)
+    }
+
+    fn clear_irq_status(i2c: &mut I2cDriver<'_>) -> Result<(), esp_idf_sys::EspError> {
+        for register in [REG_IRQ_STATUS1, REG_IRQ_STATUS2, REG_IRQ_STATUS3] {
+            write_register(i2c, register, 0xFF)?;
+        }
+
+        Ok(())
     }
 
     fn read_battery_status(
@@ -138,6 +180,15 @@ pub mod espidf {
         i2c.write(AXP2101_ADDRESS, &[register, value], I2C_TIMEOUT_TICKS)
     }
 
+    fn update_register(
+        i2c: &mut I2cDriver<'_>,
+        register: u8,
+        update: impl FnOnce(u8) -> u8,
+    ) -> Result<(), esp_idf_sys::EspError> {
+        let value = read_register(i2c, register)?;
+        write_register(i2c, register, update(value))
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -161,5 +212,20 @@ pub mod espidf {
             );
             assert_eq!(charge_state_from_status(vbus_good, 0x00), ChargeState::Full);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enables_vbus_insert_and_remove_irqs_without_clearing_existing_irqs() {
+        assert_eq!(enable_vbus_change_irq_bits(0x01), 0xC1);
+    }
+
+    #[test]
+    fn enables_irq_pin_low_wakeup_without_clearing_existing_wakeup_bits() {
+        assert_eq!(enable_irq_pin_wakeup_bits(0x04), 0x14);
     }
 }

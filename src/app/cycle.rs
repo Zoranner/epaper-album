@@ -1,11 +1,8 @@
-use crate::app::{
-    generate_display_decision, DisplayDecision, NoUsablePhotoReason, RunOutcome, RunTrigger,
-};
+use crate::app::RunTrigger;
 use crate::config::Config;
 use crate::model::{LocalDate, Plan};
-use crate::power::BatteryStatus;
-use crate::render::RenderNotice;
-use crate::state::{PersistentDeviceState, RefreshReason};
+use crate::power::{BatteryStatus, PowerProfile};
+use crate::state::{PersistentDeviceState, PersistentSyncState, RefreshReason};
 use std::fmt;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -13,6 +10,8 @@ pub struct DeviceCycleInput {
     pub config: Option<Config>,
     pub plans: Option<Vec<Plan>>,
     pub persistent_state: PersistentDeviceState,
+    pub persistent_state_loaded: bool,
+    pub sync_state: PersistentSyncState,
     pub trigger: RunTrigger,
     pub now_epoch_seconds: u64,
     pub date: LocalDate,
@@ -23,7 +22,7 @@ pub struct DeviceCycleInput {
 pub struct SyncRequest {
     pub config: Config,
     pub local_plans: Option<Vec<Plan>>,
-    pub notice: Option<RenderNotice>,
+    pub date: LocalDate,
     pub now_epoch_seconds: u64,
 }
 
@@ -31,27 +30,29 @@ pub struct SyncRequest {
 pub struct SyncResult {
     pub plans: Vec<Plan>,
     pub sprites: SpriteSet,
-    pub sprites_changed: bool,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SpriteSet {
     pub caption: Option<String>,
     pub date: Option<String>,
-    pub notice: Option<String>,
 }
 
 pub trait DeviceCloudSync {
     type Error: fmt::Display;
 
     fn sync_resources(&mut self, request: SyncRequest) -> Result<SyncResult, Self::Error>;
+
+    fn describe_error(&self, error: &Self::Error) -> SyncErrorReport {
+        SyncErrorReport::from_display(error)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DisplayRefreshRequest {
     pub plan: Plan,
+    pub date: LocalDate,
     pub reason: RefreshReason,
-    pub notice: Option<RenderNotice>,
     pub sprites: SpriteSet,
     pub now_epoch_seconds: u64,
 }
@@ -77,14 +78,55 @@ pub trait DeviceDisplay {
 pub struct DeviceCycleResult {
     pub plans: Option<Vec<Plan>>,
     pub persistent_state: PersistentDeviceState,
+    pub sync_state: PersistentSyncState,
     pub battery: BatteryStatus,
+    pub sync_decision: SyncDecision,
     pub display_decision: DisplayDecision,
     pub outcome: DeviceCycleOutcome,
     pub sync_attempted: bool,
     pub sync_succeeded: bool,
     pub sync_error: Option<String>,
+    pub sync_error_report: Option<SyncErrorReport>,
     pub refresh_attempted: bool,
     pub refresh_succeeded: bool,
+    pub display_available: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncErrorReport {
+    pub code: String,
+    pub category: String,
+    pub stage: Option<String>,
+    pub message: String,
+    pub detail: String,
+}
+
+impl SyncErrorReport {
+    pub fn new(
+        code: impl Into<String>,
+        category: impl Into<String>,
+        stage: Option<String>,
+        message: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            code: code.into(),
+            category: category.into(),
+            stage,
+            message: message.into(),
+            detail: detail.into(),
+        }
+    }
+
+    pub fn from_display(error: &impl fmt::Display) -> Self {
+        Self::new(
+            "sync.error",
+            "sync",
+            None,
+            "CANNOT UPDATE SERVER DATA",
+            error.to_string(),
+        )
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -96,17 +138,224 @@ pub enum DeviceCycleOutcome {
     LowBatterySkipSync,
     SyncFailed,
     RefreshFailed,
-    NoUsablePhoto(NoUsablePhotoReason),
+    NoUsablePhoto,
 }
 
-impl From<RunOutcome> for DeviceCycleOutcome {
-    fn from(outcome: RunOutcome) -> Self {
-        match outcome {
-            RunOutcome::SyncRequested => Self::SyncRequested,
-            RunOutcome::RefreshOnly => Self::RefreshOnly,
-            RunOutcome::SleepOnly => Self::SleepOnly,
-            RunOutcome::LowBatterySkipSync => Self::LowBatterySkipSync,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SyncAction {
+    Fetch,
+    Skip,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SyncCause {
+    External,
+    Daily,
+    Done,
+    LowBattery,
+    MissingConfig,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SyncDecision {
+    pub action: SyncAction,
+    pub cause: SyncCause,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DisplayAction {
+    Keep,
+    Refresh(DisplayTarget),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DisplayTarget {
+    Photo {
+        date: LocalDate,
+        image: String,
+        caption: String,
+    },
+    Page {
+        date: LocalDate,
+        title: String,
+        message: String,
+        hint: String,
+        detail: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DisplayCause {
+    First,
+    Date,
+    Photo,
+    LowBattery,
+    Sync,
+    MissingConfig,
+    MissingPhoto,
+    Same,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisplayDecision {
+    pub action: DisplayAction,
+    pub cause: DisplayCause,
+}
+
+pub fn decide_sync(
+    config: Option<&Config>,
+    battery: &BatteryStatus,
+    sync_state: &PersistentSyncState,
+    date: LocalDate,
+) -> SyncDecision {
+    if battery.effective_low_battery() {
+        return SyncDecision {
+            action: SyncAction::Skip,
+            cause: SyncCause::LowBattery,
+        };
+    }
+
+    if config.is_none_or(|config| !config.has_required_values()) {
+        return SyncDecision {
+            action: SyncAction::Skip,
+            cause: SyncCause::MissingConfig,
+        };
+    }
+
+    if matches!(PowerProfile::from(battery), PowerProfile::External) {
+        return SyncDecision {
+            action: SyncAction::Fetch,
+            cause: SyncCause::External,
+        };
+    }
+
+    if sync_state.date != Some(date) {
+        return SyncDecision {
+            action: SyncAction::Fetch,
+            cause: SyncCause::Daily,
+        };
+    }
+
+    SyncDecision {
+        action: SyncAction::Skip,
+        cause: SyncCause::Done,
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RunContext {
+    pub now: u64,
+    pub date: LocalDate,
+    pub trigger: RunTrigger,
+    pub battery: BatteryStatus,
+    pub power: PowerProfile,
+    pub config: Option<Config>,
+    pub plans: Option<Vec<Plan>>,
+    pub state: PersistentDeviceState,
+    pub sync: PersistentSyncState,
+}
+
+pub fn decide_display(
+    context: &RunContext,
+    image_exists: impl Fn(&str) -> bool,
+    sync_error: Option<&SyncErrorReport>,
+) -> DisplayDecision {
+    if context.config.is_none() {
+        return DisplayDecision {
+            action: DisplayAction::Refresh(DisplayTarget::Page {
+                date: context.date,
+                title: "CONFIG ERROR".to_string(),
+                message: "DEVICE CONFIG IS MISSING".to_string(),
+                hint: "CHECK /SDCARD/CONFIG.TOML".to_string(),
+                detail: "WIFI BASE URL AND SECRET KEY REQUIRED".to_string(),
+            }),
+            cause: DisplayCause::MissingConfig,
+        };
+    }
+
+    let effective_low_battery = context.battery.effective_low_battery();
+    if effective_low_battery {
+        return DisplayDecision {
+            action: DisplayAction::Refresh(DisplayTarget::Page {
+                date: context.date,
+                title: "LOW BATTERY".to_string(),
+                message: "BATTERY IS LOW".to_string(),
+                hint: "CONNECT POWER".to_string(),
+                detail: "CLOUD SYNC PAUSED".to_string(),
+            }),
+            cause: DisplayCause::LowBattery,
+        };
+    }
+
+    let selected = context
+        .plans
+        .as_deref()
+        .and_then(|plans| crate::schedule::select_plan_for_date(plans, context.date));
+
+    if let Some(sync_error) = sync_error {
+        return sync_error_report_decision(context.date, sync_error);
+    }
+
+    if let Some(plan) = selected {
+        if !image_exists(&plan.image) {
+            return missing_photo_decision(context.date);
         }
+
+        if context.state.matches_display(context.date, plan) {
+            return DisplayDecision {
+                action: DisplayAction::Keep,
+                cause: DisplayCause::Same,
+            };
+        }
+
+        let cause = if context.state.image.is_none() {
+            DisplayCause::First
+        } else if context.state.date != Some(context.date) {
+            DisplayCause::Date
+        } else {
+            DisplayCause::Photo
+        };
+
+        return DisplayDecision {
+            action: DisplayAction::Refresh(photo_target_from_plan(context.date, plan)),
+            cause,
+        };
+    }
+
+    missing_photo_decision(context.date)
+}
+
+fn sync_error_report_decision(date: LocalDate, sync_error: &SyncErrorReport) -> DisplayDecision {
+    DisplayDecision {
+        action: DisplayAction::Refresh(DisplayTarget::Page {
+            date,
+            title: "SYNC ERROR".to_string(),
+            message: sync_error.message.to_ascii_uppercase(),
+            hint: "CHECK WIFI BASE URL AND SERVER".to_string(),
+            detail: sync_error.detail.clone(),
+        }),
+        cause: DisplayCause::Sync,
+    }
+}
+
+fn photo_target_from_plan(date: LocalDate, plan: &Plan) -> DisplayTarget {
+    DisplayTarget::Photo {
+        date,
+        image: plan.image.clone(),
+        caption: plan.caption.clone(),
+    }
+}
+
+fn missing_photo_decision(date: LocalDate) -> DisplayDecision {
+    DisplayDecision {
+        action: DisplayAction::Refresh(DisplayTarget::Page {
+            date,
+            title: "NO PHOTO".to_string(),
+            message: "NO DISPLAYABLE PHOTO".to_string(),
+            hint: "CHECK SERVER PLAN AND IMAGE CACHE".to_string(),
+            detail: "PHOTO RESOURCE IS MISSING".to_string(),
+        }),
+        cause: DisplayCause::MissingPhoto,
     }
 }
 
@@ -123,22 +372,23 @@ where
         config,
         mut plans,
         mut persistent_state,
-        trigger: _,
+        persistent_state_loaded,
+        mut sync_state,
+        trigger,
         now_epoch_seconds,
         date,
         battery,
     } = input;
 
-    let sync_requested = true;
+    let sync_decision = decide_sync(config.as_ref(), &battery, &sync_state, date);
+    let sync_requested = sync_decision.action == SyncAction::Fetch;
     let effective_low_battery = battery.effective_low_battery();
-    let previous_notice = persistent_state.notice;
     let mut sync_attempted = false;
     let mut sync_succeeded = false;
     let mut sync_error = None;
+    let mut sync_error_report = None;
     let mut sync_failed = false;
     let mut sprites = SpriteSet::default();
-    let mut sprites_changed = false;
-
     if sync_requested && !effective_low_battery {
         if let Some(config) = config
             .as_ref()
@@ -148,7 +398,7 @@ where
             let request = SyncRequest {
                 config: config.clone(),
                 local_plans: plans.clone(),
-                notice: refresh_notice(effective_low_battery, false),
+                date,
                 now_epoch_seconds,
             };
 
@@ -156,149 +406,76 @@ where
                 Ok(sync_result) => {
                     plans = Some(sync_result.plans);
                     sprites = sync_result.sprites;
-                    sprites_changed = sync_result.sprites_changed;
                     sync_succeeded = true;
+                    sync_state.date = Some(date);
                 }
                 Err(error) => {
+                    let report = sync.describe_error(&error);
                     sync_error = Some(error.to_string());
+                    sync_error_report = Some(report);
                     sync_failed = true;
                 }
             }
         } else {
             sync_error = Some("missing or incomplete config".to_string());
+            sync_error_report = Some(SyncErrorReport::new(
+                "config.missing",
+                "config",
+                None,
+                "DEVICE CONFIG IS MISSING",
+                "missing or incomplete config",
+            ));
         }
     }
 
-    let decision = generate_display_decision(
-        plans.as_deref(),
-        |sha256| display.has_image(sha256),
+    let context = RunContext {
+        now: now_epoch_seconds,
         date,
-        Some(&persistent_state),
+        trigger,
+        battery,
+        power: PowerProfile::from(&battery),
+        config: config.clone(),
+        plans: plans.clone(),
+        state: persistent_state.clone(),
+        sync: sync_state.clone(),
+    };
+    let decision = decide_display(
+        &context,
+        |sha256| display.has_image(sha256),
+        sync_error_report.as_ref(),
     );
 
     let mut refresh_attempted = false;
     let mut refresh_succeeded = false;
     let mut refresh_failed = false;
-    let low_battery_refresh = effective_low_battery
-        .then(|| low_battery_refresh_for_notice(display, &persistent_state))
-        .flatten();
-    let recovered_notice_refresh = (!effective_low_battery
-        && previous_notice.is_some()
-        && matches!(decision, DisplayDecision::SleepOnly { .. }))
-    .then(|| fallback_refresh_for_notice(plans.as_deref(), display, date))
-    .flatten();
-
-    let sync_failure_fallback = (low_battery_refresh.is_none()
-        && recovered_notice_refresh.is_none()
-        && sync_failed
-        && matches!(decision, DisplayDecision::SleepOnly { .. }))
-    .then(|| fallback_refresh_for_notice(plans.as_deref(), display, date))
-    .flatten();
-    let overlay_refresh = (low_battery_refresh.is_none()
-        && recovered_notice_refresh.is_none()
-        && sync_succeeded
-        && sprites_changed
-        && matches!(decision, DisplayDecision::SleepOnly { .. }))
-    .then(|| fallback_refresh_for_notice(plans.as_deref(), display, date))
-    .flatten();
-
-    if let Some((plan, reason)) = low_battery_refresh {
+    if let DisplayAction::Refresh(target) = &decision.action {
         refresh_attempted = true;
-        let request = photo_refresh_request(
-            plan,
-            reason,
-            Some(RenderNotice::LowBattery),
-            SpriteSet::default(),
-            now_epoch_seconds,
-        );
-        match refresh_photo(display, &mut persistent_state, request) {
-            Ok(()) => refresh_succeeded = true,
-            Err(error) => {
-                log::warn!(target: "epaper_album", "refresh: {error}");
-                sync_error = Some(error.to_string());
-                refresh_failed = true;
-            }
-        }
-    } else if let Some((plan, reason)) = recovered_notice_refresh {
-        refresh_attempted = true;
-        let request = photo_refresh_request(plan, reason, None, sprites.clone(), now_epoch_seconds);
-        match refresh_photo(display, &mut persistent_state, request) {
-            Ok(()) => refresh_succeeded = true,
-            Err(error) => {
-                log::warn!(target: "epaper_album", "refresh: {error}");
-                sync_error = Some(error.to_string());
-                refresh_failed = true;
-            }
-        }
-    } else if let Some((plan, reason)) = sync_failure_fallback {
-        refresh_attempted = true;
-        let request = photo_refresh_request(
-            plan,
-            reason,
-            refresh_notice(effective_low_battery, sync_failed),
-            SpriteSet::default(),
-            now_epoch_seconds,
-        );
-        match refresh_photo(display, &mut persistent_state, request) {
-            Ok(()) => refresh_succeeded = true,
-            Err(error) => {
-                log::warn!(target: "epaper_album", "refresh: {error}");
-                sync_error = Some(error.to_string());
-                refresh_failed = true;
-            }
-        }
-    } else if let Some((plan, reason)) = overlay_refresh {
-        refresh_attempted = true;
-        let request = photo_refresh_request(
-            plan,
-            reason,
-            refresh_notice(effective_low_battery, sync_failed),
+        let result = refresh_target(
+            display,
+            &mut persistent_state,
+            target.clone(),
             sprites.clone(),
             now_epoch_seconds,
+            decision.cause,
         );
-        match refresh_photo(display, &mut persistent_state, request) {
+        match result {
             Ok(()) => refresh_succeeded = true,
             Err(error) => {
                 log::warn!(target: "epaper_album", "refresh: {error}");
                 sync_error = Some(error.to_string());
-                refresh_failed = true;
-            }
-        }
-    } else if let DisplayDecision::RefreshRequired { plan, reason } = &decision {
-        refresh_attempted = true;
-        let request = photo_refresh_request(
-            plan.clone(),
-            *reason,
-            refresh_notice(effective_low_battery, sync_failed),
-            sprites.clone(),
-            now_epoch_seconds,
-        );
-        match refresh_photo(display, &mut persistent_state, request) {
-            Ok(()) => refresh_succeeded = true,
-            Err(error) => {
-                log::warn!(target: "epaper_album", "refresh: {error}");
-                sync_error = Some(error.to_string());
-                refresh_failed = true;
-            }
-        }
-    } else if let Some(request) = error_refresh_request(
-        config.as_ref(),
-        &decision,
-        sync_error.as_deref(),
-        sync_failed,
-        now_epoch_seconds,
-    ) {
-        refresh_attempted = true;
-
-        match display.refresh_error_page(request) {
-            Ok(()) => refresh_succeeded = true,
-            Err(error) => {
-                log::warn!(target: "epaper_album", "error page refresh: {error}");
-                sync_error = Some(error.to_string());
+                sync_error_report = Some(SyncErrorReport::new(
+                    "display.refresh",
+                    "display",
+                    None,
+                    "DISPLAY REFRESH FAILED",
+                    error.to_string(),
+                ));
                 refresh_failed = true;
             }
         }
     }
+    let display_available = refresh_succeeded
+        || (persistent_state_loaded && matches!(decision.action, DisplayAction::Keep));
 
     let outcome = cycle_outcome(
         &decision,
@@ -313,40 +490,32 @@ where
     DeviceCycleResult {
         plans,
         persistent_state,
+        sync_state,
         battery,
+        sync_decision,
         display_decision: decision,
         outcome,
         sync_attempted,
         sync_succeeded,
         sync_error,
+        sync_error_report,
         refresh_attempted,
         refresh_succeeded,
+        display_available,
     }
-}
-
-fn refresh_notice(low_battery: bool, sync_failed: bool) -> Option<RenderNotice> {
-    if low_battery {
-        return Some(RenderNotice::LowBattery);
-    }
-
-    if sync_failed {
-        return Some(RenderNotice::SyncFailed);
-    }
-
-    None
 }
 
 fn photo_refresh_request(
     plan: Plan,
+    date: LocalDate,
     reason: RefreshReason,
-    notice: Option<RenderNotice>,
     sprites: SpriteSet,
     now_epoch_seconds: u64,
 ) -> DisplayRefreshRequest {
     DisplayRefreshRequest {
         plan,
+        date,
         reason,
-        notice,
         sprites,
         now_epoch_seconds,
     }
@@ -361,110 +530,73 @@ where
     D: DeviceDisplay,
 {
     let plan = request.plan.clone();
-    let notice = request.notice;
+    let date = request.date;
 
     display.refresh(request)?;
-    persistent_state.set(&plan, notice);
+    persistent_state.set_display(date, &plan);
     Ok(())
 }
 
-fn low_battery_refresh_for_notice<D>(
-    display: &D,
-    persistent_state: &PersistentDeviceState,
-) -> Option<(Plan, RefreshReason)>
-where
-    D: DeviceDisplay,
-{
-    if persistent_state.notice == Some(RenderNotice::LowBattery) {
-        return None;
-    }
-
-    let plan = persistent_state.to_plan()?;
-    if !display.has_image(&plan.image) {
-        return None;
-    }
-
-    Some((plan, RefreshReason::NoticeChanged))
-}
-
-fn fallback_refresh_for_notice<D>(
-    plans: Option<&[Plan]>,
-    display: &D,
-    date: LocalDate,
-) -> Option<(Plan, RefreshReason)>
-where
-    D: DeviceDisplay,
-{
-    let plan = crate::schedule::select_plan_for_date(plans?, date)?;
-    display
-        .has_image(&plan.image)
-        .then(|| (plan.clone(), RefreshReason::NoticeChanged))
-}
-
-fn error_refresh_request(
-    config: Option<&Config>,
-    decision: &DisplayDecision,
-    sync_error: Option<&str>,
-    sync_failed: bool,
+fn refresh_target<D>(
+    display: &mut D,
+    persistent_state: &mut PersistentDeviceState,
+    target: DisplayTarget,
+    sprites: SpriteSet,
     now_epoch_seconds: u64,
-) -> Option<ErrorRefreshRequest> {
-    if config.is_none_or(|config| !config.has_required_values()) {
-        return Some(ErrorRefreshRequest {
-            title: "CONFIG ERROR".to_string(),
-            message: "DEVICE CONFIG IS MISSING".to_string(),
-            hint: "CHECK /SDCARD/CONFIG.TOML".to_string(),
-            detail: "WIFI BASE URL AND SECRET KEY REQUIRED".to_string(),
-            now_epoch_seconds,
-        });
-    }
-
-    match decision {
-        DisplayDecision::MissingConfig => {
-            if sync_failed {
-                return Some(ErrorRefreshRequest {
-                    title: "SYNC ERROR".to_string(),
-                    message: "CANNOT UPDATE SERVER DATA".to_string(),
-                    hint: "CHECK WIFI BASE URL AND SERVER".to_string(),
-                    detail: sync_error.unwrap_or("SYNC FAILED").to_string(),
-                    now_epoch_seconds,
-                });
-            }
-
-            Some(ErrorRefreshRequest {
-                title: "CONFIG ERROR".to_string(),
-                message: "DEVICE CONFIG IS MISSING".to_string(),
-                hint: "CHECK /SDCARD/CONFIG.TOML".to_string(),
-                detail: "WIFI BASE URL AND SECRET KEY REQUIRED".to_string(),
-                now_epoch_seconds,
-            })
-        }
-        DisplayDecision::NoUsablePhoto(reason) => {
-            if sync_failed {
-                return Some(ErrorRefreshRequest {
-                    title: "SYNC ERROR".to_string(),
-                    message: "CANNOT UPDATE SERVER DATA".to_string(),
-                    hint: "CHECK WIFI BASE URL AND SECRET KEY".to_string(),
-                    detail: sync_error.unwrap_or("SYNC FAILED").to_string(),
-                    now_epoch_seconds,
-                });
-            }
-
-            let (message, detail) = match reason {
-                NoUsablePhotoReason::NoPlan => ("NO PLAN", "WAITING FOR SERVER PLAN"),
-                NoUsablePhotoReason::ResourceNotCached => {
-                    ("PLANNED IMAGE IS NOT READY", "IMAGE CACHE IS MISSING")
-                }
+    cause: DisplayCause,
+) -> Result<(), D::Error>
+where
+    D: DeviceDisplay,
+{
+    match target {
+        DisplayTarget::Photo {
+            date,
+            image,
+            caption,
+        } => {
+            let plan = Plan {
+                date,
+                image,
+                caption,
             };
-
-            Some(ErrorRefreshRequest {
-                title: "NO PHOTO".to_string(),
-                message: message.to_string(),
-                hint: "CHECK SERVER PLAN AND IMAGE CACHE".to_string(),
-                detail: detail.to_string(),
+            let request = photo_refresh_request(
+                plan,
+                date,
+                refresh_reason(cause),
+                sprites,
                 now_epoch_seconds,
-            })
+            );
+            refresh_photo(display, persistent_state, request)
         }
-        DisplayDecision::RefreshRequired { .. } | DisplayDecision::SleepOnly { .. } => None,
+        DisplayTarget::Page {
+            date,
+            title,
+            message,
+            hint,
+            detail,
+        } => {
+            display.refresh_error_page(ErrorRefreshRequest {
+                title,
+                message,
+                hint,
+                detail,
+                now_epoch_seconds,
+            })?;
+            persistent_state.set_page(date);
+            Ok(())
+        }
+    }
+}
+
+const fn refresh_reason(cause: DisplayCause) -> RefreshReason {
+    match cause {
+        DisplayCause::First => RefreshReason::FirstBoot,
+        DisplayCause::Date | DisplayCause::Photo => RefreshReason::PlanChanged,
+        DisplayCause::LowBattery
+        | DisplayCause::Sync
+        | DisplayCause::MissingConfig
+        | DisplayCause::MissingPhoto
+        | DisplayCause::Same => RefreshReason::ErrorPage,
     }
 }
 
@@ -481,7 +613,7 @@ fn cycle_outcome(
         return DeviceCycleOutcome::MissingConfig;
     }
 
-    if sync_requested && low_battery {
+    if low_battery {
         return DeviceCycleOutcome::LowBatterySkipSync;
     }
 
@@ -489,23 +621,18 @@ fn cycle_outcome(
         return DeviceCycleOutcome::RefreshFailed;
     }
 
-    if let DisplayDecision::NoUsablePhoto(reason) = decision {
-        return DeviceCycleOutcome::NoUsablePhoto(reason.clone());
-    }
-
     if sync_failed {
         return DeviceCycleOutcome::SyncFailed;
     }
 
-    match decision {
-        DisplayDecision::MissingConfig => DeviceCycleOutcome::MissingConfig,
-        DisplayDecision::NoUsablePhoto(reason) => DeviceCycleOutcome::NoUsablePhoto(reason.clone()),
-        DisplayDecision::RefreshRequired { .. } if refresh_attempted => {
+    match decision.cause {
+        DisplayCause::MissingConfig => DeviceCycleOutcome::MissingConfig,
+        DisplayCause::MissingPhoto => DeviceCycleOutcome::NoUsablePhoto,
+        _ if matches!(decision.action, DisplayAction::Refresh(_)) || refresh_attempted => {
             DeviceCycleOutcome::RefreshOnly
         }
-        DisplayDecision::RefreshRequired { .. } => DeviceCycleOutcome::RefreshOnly,
-        DisplayDecision::SleepOnly { .. } if sync_requested => DeviceCycleOutcome::SyncRequested,
-        DisplayDecision::SleepOnly { .. } => DeviceCycleOutcome::SleepOnly,
+        _ if sync_requested => DeviceCycleOutcome::SyncRequested,
+        _ => DeviceCycleOutcome::SleepOnly,
     }
 }
 
@@ -592,6 +719,8 @@ mod tests {
             config: Some(config()),
             plans,
             persistent_state: PersistentDeviceState::default(),
+            persistent_state_loaded: false,
+            sync_state: crate::state::PersistentSyncState::default(),
             trigger: RunTrigger::Wake(WakeReason::Timer),
             now_epoch_seconds: 100,
             date: date("2026-06-08"),
@@ -606,7 +735,6 @@ mod tests {
             result: Some(Ok(SyncResult {
                 plans: remote_plans.clone(),
                 sprites: SpriteSet::default(),
-                sprites_changed: false,
             })),
             requests: Vec::new(),
         };
@@ -618,6 +746,8 @@ mod tests {
         let result = run_device_cycle(input(None), &mut sync, &mut display);
 
         assert_eq!(sync.requests.len(), 1);
+        assert_eq!(result.sync_decision.action, SyncAction::Fetch);
+        assert_eq!(result.sync_decision.cause, SyncCause::Daily);
         assert_eq!(display.requests.len(), 1);
         assert_eq!(display.requests[0].plan.image, "a");
         assert!(result.sync_succeeded);
@@ -629,7 +759,7 @@ mod tests {
     fn low_battery_skips_sync_but_refreshes_current_state() {
         let plans = vec![plan("a")];
         let mut input = input(Some(plans));
-        input.persistent_state = PersistentDeviceState::from_plan(&plan("a"), None);
+        input.persistent_state = PersistentDeviceState::from_display(input.date, &plan("a"));
         input.battery.low_battery = true;
         let mut sync = FakeSync::default();
         let mut display = FakeDisplay {
@@ -640,22 +770,46 @@ mod tests {
         let result = run_device_cycle(input, &mut sync, &mut display);
 
         assert!(sync.requests.is_empty());
-        assert_eq!(display.requests.len(), 1);
-        assert_eq!(display.requests[0].notice, Some(RenderNotice::LowBattery));
+        assert_eq!(result.sync_decision.action, SyncAction::Skip);
+        assert_eq!(result.sync_decision.cause, SyncCause::LowBattery);
+        assert!(display.requests.is_empty());
+        assert_eq!(display.error_requests.len(), 1);
+        assert_eq!(display.error_requests[0].title, "LOW BATTERY");
         assert_eq!(result.outcome, DeviceCycleOutcome::LowBatterySkipSync);
-        assert_eq!(
-            result.persistent_state.notice,
-            Some(RenderNotice::LowBattery)
-        );
+        assert_eq!(result.persistent_state.image, None);
     }
 
     #[test]
-    fn low_battery_does_not_refresh_when_notice_is_already_displayed() {
+    fn low_battery_refreshes_error_page_when_photo_state_matches() {
         let plans = vec![plan("a")];
         let mut input = input(Some(plans));
         input.battery.low_battery = true;
-        input.persistent_state =
-            PersistentDeviceState::from_plan(&plan("a"), Some(RenderNotice::LowBattery));
+        input.persistent_state = PersistentDeviceState::from_display(input.date, &plan("a"));
+        let mut sync = FakeSync::default();
+        let mut display = FakeDisplay {
+            images: vec!["a".to_string()],
+            ..FakeDisplay::default()
+        };
+
+        let result = run_device_cycle(input, &mut sync, &mut display);
+
+        assert!(sync.requests.is_empty());
+        assert_eq!(result.sync_decision.action, SyncAction::Skip);
+        assert_eq!(result.sync_decision.cause, SyncCause::LowBattery);
+        assert!(display.requests.is_empty());
+        assert_eq!(display.error_requests.len(), 1);
+        assert_eq!(display.error_requests[0].title, "LOW BATTERY");
+        assert_eq!(result.outcome, DeviceCycleOutcome::LowBatterySkipSync);
+        assert!(result.display_available);
+    }
+
+    #[test]
+    fn keep_decision_marks_display_available_when_state_was_loaded() {
+        let plans = vec![plan("a")];
+        let mut input = input(Some(plans));
+        input.persistent_state_loaded = true;
+        input.sync_state.date = Some(input.date);
+        input.persistent_state = PersistentDeviceState::from_display(input.date, &plan("a"));
         let mut sync = FakeSync::default();
         let mut display = FakeDisplay {
             images: vec!["a".to_string()],
@@ -666,7 +820,7 @@ mod tests {
 
         assert!(sync.requests.is_empty());
         assert!(display.requests.is_empty());
-        assert_eq!(result.outcome, DeviceCycleOutcome::LowBatterySkipSync);
+        assert!(result.display_available);
     }
 
     #[test]
@@ -677,7 +831,6 @@ mod tests {
             result: Some(Ok(SyncResult {
                 plans: vec![plan("a")],
                 sprites: SpriteSet::default(),
-                sprites_changed: false,
             })),
             requests: Vec::new(),
         };
@@ -689,23 +842,23 @@ mod tests {
         let result = run_device_cycle(input, &mut sync, &mut display);
 
         assert_eq!(sync.requests.len(), 1);
+        assert_eq!(result.sync_decision.action, SyncAction::Fetch);
+        assert_eq!(result.sync_decision.cause, SyncCause::External);
         assert!(result.sync_attempted);
         assert!(result.sync_succeeded);
-        assert!(sync.requests[0].notice.is_none());
         assert_ne!(result.outcome, DeviceCycleOutcome::LowBatterySkipSync);
     }
 
     #[test]
-    fn charging_clears_previous_low_battery_notice_after_sync() {
+    fn charging_keeps_screen_when_photo_is_unchanged_after_sync() {
         let mut input = input(Some(vec![plan("a")]));
-        input.persistent_state =
-            PersistentDeviceState::from_plan(&plan("a"), Some(RenderNotice::LowBattery));
+        input.persistent_state_loaded = true;
+        input.persistent_state = PersistentDeviceState::from_display(input.date, &plan("a"));
         input.battery = BatteryStatus::new(0, Some(100), crate::power::ChargeState::Full, false);
         let mut sync = FakeSync {
             result: Some(Ok(SyncResult {
                 plans: vec![plan("a")],
                 sprites: SpriteSet::default(),
-                sprites_changed: false,
             })),
             requests: Vec::new(),
         };
@@ -717,9 +870,11 @@ mod tests {
         let result = run_device_cycle(input, &mut sync, &mut display);
 
         assert_eq!(sync.requests.len(), 1);
-        assert_eq!(display.requests.len(), 1);
-        assert_eq!(display.requests[0].notice, None);
-        assert_eq!(result.persistent_state.notice, None);
+        assert_eq!(result.sync_decision.action, SyncAction::Fetch);
+        assert_eq!(result.sync_decision.cause, SyncCause::External);
+        assert!(display.requests.is_empty());
+        assert!(display.error_requests.is_empty());
+        assert_eq!(result.display_decision.cause, DisplayCause::Same);
     }
 
     #[test]
@@ -736,9 +891,176 @@ mod tests {
         assert!(display.requests.is_empty());
         assert_eq!(display.error_requests.len(), 1);
         assert_eq!(display.error_requests[0].title, "SYNC ERROR");
+        assert_eq!(display.error_requests[0].detail, "network down");
         assert_eq!(
-            result.outcome,
-            DeviceCycleOutcome::NoUsablePhoto(NoUsablePhotoReason::ResourceNotCached)
+            result.sync_error_report,
+            Some(SyncErrorReport::new(
+                "sync.error",
+                "sync",
+                None,
+                "CANNOT UPDATE SERVER DATA",
+                "network down"
+            ))
         );
+        assert_eq!(result.outcome, DeviceCycleOutcome::SyncFailed);
+    }
+
+    #[test]
+    fn sync_failure_refreshes_error_page_even_when_photo_is_usable() {
+        let mut input = input(Some(vec![plan("a")]));
+        input.persistent_state_loaded = true;
+        input.persistent_state = PersistentDeviceState::from_display(input.date, &plan("a"));
+        input.sync_state.date = Some(date("2026-06-07"));
+        let mut sync = FakeSync {
+            result: Some(Err(FakeError("network down"))),
+            requests: Vec::new(),
+        };
+        let mut display = FakeDisplay {
+            images: vec!["a".to_string()],
+            ..FakeDisplay::default()
+        };
+
+        let result = run_device_cycle(input, &mut sync, &mut display);
+
+        assert_eq!(sync.requests.len(), 1);
+        assert!(display.requests.is_empty());
+        assert_eq!(display.error_requests.len(), 1);
+        assert_eq!(display.error_requests[0].title, "SYNC ERROR");
+        assert_eq!(display.error_requests[0].detail, "network down");
+        assert_eq!(result.display_decision.cause, DisplayCause::Sync);
+        assert_eq!(result.persistent_state.image, None);
+        assert_eq!(result.outcome, DeviceCycleOutcome::SyncFailed);
+    }
+
+    #[test]
+    fn missing_today_plan_keeps_latest_past_plan_without_sync_error() {
+        let plans = vec![Plan {
+            date: date("2026-06-16"),
+            caption: "past".to_string(),
+            image: "a".to_string(),
+        }];
+        let mut input = input(Some(plans.clone()));
+        input.date = date("2026-06-18");
+        input.sync_state.date = Some(date("2026-06-18"));
+        let mut sync = FakeSync::default();
+        let mut display = FakeDisplay {
+            images: vec!["a".to_string()],
+            ..FakeDisplay::default()
+        };
+
+        let result = run_device_cycle(input, &mut sync, &mut display);
+
+        assert!(sync.requests.is_empty());
+        assert_eq!(display.requests.len(), 1);
+        assert!(display.error_requests.is_empty());
+        assert_eq!(display.requests[0].date, date("2026-06-18"));
+        assert_eq!(display.requests[0].plan.image, "a");
+        assert_eq!(result.display_decision.cause, DisplayCause::First);
+        assert_ne!(result.outcome, DeviceCycleOutcome::SyncFailed);
+    }
+
+    #[test]
+    fn sync_success_keeps_screen_when_photo_is_unchanged() {
+        let mut input = input(Some(vec![plan("a")]));
+        input.persistent_state_loaded = true;
+        input.persistent_state = PersistentDeviceState::from_display(input.date, &plan("a"));
+        input.sync_state.date = Some(date("2026-06-07"));
+        let mut sync = FakeSync {
+            result: Some(Ok(SyncResult {
+                plans: vec![plan("a")],
+                sprites: SpriteSet::default(),
+            })),
+            requests: Vec::new(),
+        };
+        let mut display = FakeDisplay {
+            images: vec!["a".to_string()],
+            ..FakeDisplay::default()
+        };
+
+        let result = run_device_cycle(input, &mut sync, &mut display);
+
+        assert_eq!(sync.requests.len(), 1);
+        assert!(result.sync_succeeded);
+        assert!(display.requests.is_empty());
+        assert!(display.error_requests.is_empty());
+        assert_eq!(result.display_decision.cause, DisplayCause::Same);
+        assert_eq!(result.outcome, DeviceCycleOutcome::SyncRequested);
+    }
+
+    #[test]
+    fn battery_skips_sync_when_plan_already_synced_today() {
+        let mut input = input(Some(vec![plan("a")]));
+        input.sync_state.date = Some(date("2026-06-08"));
+        input.persistent_state =
+            PersistentDeviceState::from_display(date("2026-06-08"), &plan("a"));
+        let mut sync = FakeSync::default();
+        let mut display = FakeDisplay {
+            images: vec!["a".to_string()],
+            ..FakeDisplay::default()
+        };
+
+        let result = run_device_cycle(input, &mut sync, &mut display);
+
+        assert!(sync.requests.is_empty());
+        assert_eq!(result.sync_decision.action, SyncAction::Skip);
+        assert_eq!(result.sync_decision.cause, SyncCause::Done);
+        assert!(!result.sync_attempted);
+    }
+
+    #[test]
+    fn battery_requests_sync_when_plan_not_synced_today() {
+        let mut input = input(Some(vec![plan("a")]));
+        input.sync_state.date = Some(date("2026-06-07"));
+        let mut sync = FakeSync {
+            result: Some(Ok(SyncResult {
+                plans: vec![plan("a")],
+                sprites: SpriteSet::default(),
+            })),
+            requests: Vec::new(),
+        };
+        let mut display = FakeDisplay {
+            images: vec!["a".to_string()],
+            ..FakeDisplay::default()
+        };
+
+        let result = run_device_cycle(input, &mut sync, &mut display);
+
+        assert_eq!(sync.requests.len(), 1);
+        assert_eq!(result.sync_decision.action, SyncAction::Fetch);
+        assert_eq!(result.sync_decision.cause, SyncCause::Daily);
+        assert!(result.sync_attempted);
+        assert!(result.sync_succeeded);
+        assert_eq!(result.sync_state.date, Some(date("2026-06-08")));
+    }
+
+    #[test]
+    fn external_power_syncs_but_keeps_screen_when_display_is_unchanged() {
+        let plans = vec![plan("a")];
+        let mut input = input(Some(plans.clone()));
+        input.persistent_state_loaded = true;
+        input.persistent_state = PersistentDeviceState::from_display(input.date, &plans[0]);
+        input.battery = BatteryStatus::new(0, Some(100), crate::power::ChargeState::Full, false);
+        let mut sync = FakeSync {
+            result: Some(Ok(SyncResult {
+                plans,
+                sprites: SpriteSet::default(),
+            })),
+            requests: Vec::new(),
+        };
+        let mut display = FakeDisplay {
+            images: vec!["a".to_string()],
+            ..FakeDisplay::default()
+        };
+
+        let result = run_device_cycle(input, &mut sync, &mut display);
+
+        assert_eq!(result.sync_decision.action, SyncAction::Fetch);
+        assert_eq!(result.sync_decision.cause, SyncCause::External);
+        assert!(result.sync_attempted);
+        assert!(result.sync_succeeded);
+        assert!(display.requests.is_empty());
+        assert_eq!(result.display_decision.cause, DisplayCause::Same);
+        assert_eq!(result.outcome, DeviceCycleOutcome::SyncRequested);
+        assert!(result.display_available);
     }
 }

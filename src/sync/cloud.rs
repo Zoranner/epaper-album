@@ -2,38 +2,37 @@ use crate::config::Config;
 use crate::model::{ApiResponse, Plan, SpriteMeta};
 use serde::Deserialize;
 use serde_json::Value;
-use std::fmt;
+use thiserror::Error;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum CloudSyncError {
+    #[error("invalid-base-url")]
     InvalidBaseUrl,
-    HttpClient,
-    HttpRequest,
-    HttpResponse,
-    HttpRead,
+
+    #[error("http-client: {0}")]
+    HttpClient(String),
+
+    #[error("http-request: {0}")]
+    HttpRequest(String),
+
+    #[error("http-response: {0}")]
+    HttpResponse(String),
+
+    #[error("http-read: {0}")]
+    HttpRead(String),
+
+    #[error("http-status-{0}")]
     HttpStatus(u16),
+
+    #[error("api-status-{0}: {1}")]
     ApiStatus(u16, String),
+
+    #[error("invalid-json")]
     InvalidJson,
+
+    #[error("invalid-sha256")]
     InvalidSha256,
 }
-
-impl fmt::Display for CloudSyncError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidBaseUrl => formatter.write_str("invalid-base-url"),
-            Self::HttpClient => formatter.write_str("http-client"),
-            Self::HttpRequest => formatter.write_str("http-request"),
-            Self::HttpResponse => formatter.write_str("http-response"),
-            Self::HttpRead => formatter.write_str("http-read"),
-            Self::HttpStatus(status) => write!(formatter, "http-status-{status}"),
-            Self::ApiStatus(code, message) => write!(formatter, "api-status-{code}: {message}"),
-            Self::InvalidJson => formatter.write_str("invalid-json"),
-            Self::InvalidSha256 => formatter.write_str("invalid-sha256"),
-        }
-    }
-}
-
-impl std::error::Error for CloudSyncError {}
 
 pub trait HttpClient {
     fn get_bytes(
@@ -129,6 +128,53 @@ pub fn trim_secret_key(config: &Config) -> &str {
     config.secret_key.trim()
 }
 
+impl CloudSyncError {
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidBaseUrl => "invalid-base-url",
+            Self::HttpClient(_) => "http-client",
+            Self::HttpRequest(_) => "http-request",
+            Self::HttpResponse(_) => "http-response",
+            Self::HttpRead(_) => "http-read",
+            Self::HttpStatus(_) => "http-status",
+            Self::ApiStatus(_, _) => "api-status",
+            Self::InvalidJson => "invalid-json",
+            Self::InvalidSha256 => "invalid-sha256",
+        }
+    }
+
+    pub const fn category(&self) -> &'static str {
+        match self {
+            Self::InvalidBaseUrl | Self::InvalidJson | Self::InvalidSha256 => "cloud",
+            Self::HttpClient(_)
+            | Self::HttpRequest(_)
+            | Self::HttpResponse(_)
+            | Self::HttpRead(_)
+            | Self::HttpStatus(_) => "http",
+            Self::ApiStatus(_, _) => "api",
+        }
+    }
+
+    pub const fn status_code(&self) -> Option<u16> {
+        match self {
+            Self::HttpStatus(status) | Self::ApiStatus(status, _) => Some(*status),
+            _ => None,
+        }
+    }
+
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::HttpClient(source)
+            | Self::HttpRequest(source)
+            | Self::HttpResponse(source)
+            | Self::HttpRead(source) => Some(source.clone()),
+            Self::HttpStatus(status) => Some(format!("status={status}")),
+            Self::ApiStatus(code, message) => Some(format!("code={code} message={message}")),
+            Self::InvalidBaseUrl | Self::InvalidJson | Self::InvalidSha256 => None,
+        }
+    }
+}
+
 fn endpoint_url(base_url: &str, path: &str) -> Result<String, CloudSyncError> {
     let base_url = base_url.trim().trim_end_matches('/');
     if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
@@ -202,21 +248,30 @@ pub mod espidf {
         secret_key: &str,
         max_bytes: usize,
     ) -> Result<Vec<u8>, CloudSyncError> {
+        log::info!(target: "epaper_album", "http request: url={url} max-bytes={max_bytes}");
         let mut connection = EspHttpConnection::new(&HttpConfiguration {
             timeout: Some(Duration::from_secs(HTTP_TIMEOUT_SECONDS)),
             follow_redirects_policy: FollowRedirectsPolicy::FollowAll,
             crt_bundle_attach: Some(esp_idf_sys::esp_crt_bundle_attach),
             ..Default::default()
         })
-        .map_err(|_| CloudSyncError::HttpClient)?;
+        .map_err(|error| {
+            log::warn!(target: "epaper_album", "http client: {error:?}");
+            CloudSyncError::HttpClient(format!("{error:?}"))
+        })?;
         connection
             .initiate_request(Method::Get, url, &[("secret-key", secret_key)])
-            .map_err(|_| CloudSyncError::HttpRequest)?;
-        connection
-            .initiate_response()
-            .map_err(|_| CloudSyncError::HttpResponse)?;
+            .map_err(|error| {
+                log::warn!(target: "epaper_album", "http request failed: url={url} error={error:?}");
+                CloudSyncError::HttpRequest(format!("{error:?}"))
+            })?;
+        connection.initiate_response().map_err(|error| {
+            log::warn!(target: "epaper_album", "http response failed: url={url} error={error:?}");
+            CloudSyncError::HttpResponse(format!("{error:?}"))
+        })?;
 
         let status = connection.status();
+        log::info!(target: "epaper_album", "http response: url={url} status={status}");
         if status != 200 {
             return Err(CloudSyncError::HttpStatus(status));
         }
@@ -224,18 +279,29 @@ pub mod espidf {
         let mut body = Vec::new();
         let mut buffer = [0u8; 512];
         loop {
-            let read_len = connection
-                .read(&mut buffer)
-                .map_err(|_| CloudSyncError::HttpRead)?;
+            let read_len = connection.read(&mut buffer).map_err(|error| {
+                log::warn!(target: "epaper_album", "http read failed: url={url} error={error:?}");
+                CloudSyncError::HttpRead(format!("{error:?}"))
+            })?;
             if read_len == 0 {
                 break;
             }
             if body.len().saturating_add(read_len) > max_bytes {
-                return Err(CloudSyncError::HttpRead);
+                log::warn!(
+                    target: "epaper_album",
+                    "http read exceeded limit: url={url} bytes={} read={} max={max_bytes}",
+                    body.len(),
+                    read_len
+                );
+                return Err(CloudSyncError::HttpRead(format!(
+                    "max-bytes-exceeded bytes={} read={read_len} max={max_bytes}",
+                    body.len()
+                )));
             }
             body.extend_from_slice(&buffer[..read_len]);
         }
 
+        log::info!(target: "epaper_album", "http read complete: url={url} bytes={}", body.len());
         Ok(body)
     }
 }
@@ -333,5 +399,29 @@ mod tests {
                 .unwrap_err();
 
         assert_eq!(error, CloudSyncError::InvalidSha256);
+    }
+
+    #[test]
+    fn http_failures_keep_stable_codes_and_details() {
+        let request_error = CloudSyncError::HttpRequest("ESP_ERR_HTTP_CONNECT".to_string());
+
+        assert_eq!(request_error.code(), "http-request");
+        assert_eq!(request_error.category(), "http");
+        assert_eq!(
+            request_error.detail(),
+            Some("ESP_ERR_HTTP_CONNECT".to_string())
+        );
+        assert_eq!(
+            request_error.to_string(),
+            "http-request: ESP_ERR_HTTP_CONNECT"
+        );
+
+        let status_error = CloudSyncError::HttpStatus(503);
+
+        assert_eq!(status_error.code(), "http-status");
+        assert_eq!(status_error.category(), "http");
+        assert_eq!(status_error.status_code(), Some(503));
+        assert_eq!(status_error.detail(), Some("status=503".to_string()));
+        assert_eq!(status_error.to_string(), "http-status-503");
     }
 }

@@ -6,8 +6,9 @@ pub enum ChargeState {
     Full,
 }
 
-pub const BATTERY_SYNC_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
-pub const CHARGING_SYNC_INTERVAL_SECONDS: u64 = 60 * 60;
+pub const DAILY_SECONDS: u64 = 24 * 60 * 60;
+pub const HOURLY_RUN_INTERVAL_SECONDS: u64 = 60 * 60;
+pub const BEIJING_UTC_OFFSET_SECONDS: u64 = 8 * 60 * 60;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BatteryStatus {
@@ -53,21 +54,38 @@ impl BatteryStatus {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PowerProfile {
     Battery,
-    Charging,
-    ExternalFull,
+    External,
     LowBattery,
 }
 
-impl PowerProfile {
-    pub const fn wake_interval_seconds(self) -> u64 {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WakeProbe {
+    Timer,
+    Button,
+    External,
+    Ulp,
+    Unknown,
+    Other(u32),
+}
+
+impl WakeProbe {
+    pub const fn label(self) -> &'static str {
         match self {
-            Self::Battery | Self::LowBattery => BATTERY_SYNC_INTERVAL_SECONDS,
-            Self::Charging | Self::ExternalFull => CHARGING_SYNC_INTERVAL_SECONDS,
+            Self::Timer => "timer",
+            Self::Button => "button",
+            Self::External => "external",
+            Self::Ulp => "ulp",
+            Self::Unknown => "unknown",
+            Self::Other(_) => "other",
         }
     }
+}
 
-    pub const fn cloud_sync_enabled(self) -> bool {
-        !matches!(self, Self::LowBattery)
+impl PowerProfile {
+    pub const fn run_interval_seconds(self) -> u64 {
+        match self {
+            Self::Battery | Self::External | Self::LowBattery => HOURLY_RUN_INTERVAL_SECONDS,
+        }
     }
 }
 
@@ -78,8 +96,7 @@ impl From<&BatteryStatus> for PowerProfile {
         }
 
         match status.charge_state {
-            ChargeState::Charging => Self::Charging,
-            ChargeState::Full => Self::ExternalFull,
+            ChargeState::Charging | ChargeState::Full => Self::External,
             ChargeState::Unknown | ChargeState::Discharging => Self::Battery,
         }
     }
@@ -88,7 +105,6 @@ impl From<&BatteryStatus> for PowerProfile {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LowBatteryPolicy {
     pub stop_cloud_sync: bool,
-    pub show_notice: bool,
     pub minimum_percent: Option<u8>,
     pub minimum_millivolts: Option<u16>,
 }
@@ -97,7 +113,6 @@ impl Default for LowBatteryPolicy {
     fn default() -> Self {
         Self {
             stop_cloud_sync: true,
-            show_notice: true,
             minimum_percent: None,
             minimum_millivolts: None,
         }
@@ -131,45 +146,37 @@ impl LowBatteryPolicy {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SleepPlan {
-    pub next_wakeup_epoch_seconds: Option<u64>,
-    pub deep_sleep_seconds: Option<u32>,
+pub struct NextRunPlan {
+    pub next_run_epoch_seconds: u64,
+    pub wait_seconds: u64,
 }
 
-impl SleepPlan {
-    pub const fn wake_at(next_wakeup_epoch_seconds: u64) -> Self {
-        Self {
-            next_wakeup_epoch_seconds: Some(next_wakeup_epoch_seconds),
-            deep_sleep_seconds: None,
-        }
-    }
+impl NextRunPlan {
+    pub const fn new(now_epoch_seconds: u64, next_run_epoch_seconds: u64) -> Self {
+        let next_run_epoch_seconds = if next_run_epoch_seconds < now_epoch_seconds {
+            now_epoch_seconds
+        } else {
+            next_run_epoch_seconds
+        };
 
-    pub const fn sleep_for(deep_sleep_seconds: u32) -> Self {
         Self {
-            next_wakeup_epoch_seconds: None,
-            deep_sleep_seconds: Some(deep_sleep_seconds),
-        }
-    }
-
-    pub const fn wake_at_after(next_wakeup_epoch_seconds: u64, deep_sleep_seconds: u32) -> Self {
-        Self {
-            next_wakeup_epoch_seconds: Some(next_wakeup_epoch_seconds),
-            deep_sleep_seconds: Some(deep_sleep_seconds),
+            next_run_epoch_seconds,
+            wait_seconds: next_run_epoch_seconds - now_epoch_seconds,
         }
     }
 }
 
-pub fn next_wakeup_sleep_plan(
+pub fn next_run_plan(
     now_epoch_seconds: u64,
-    next_sync_epoch_seconds: u64,
+    next_power_interval_epoch_seconds: u64,
     next_plan_date_change_epoch_seconds: Option<u64>,
     carousel_seconds: Option<u32>,
-) -> SleepPlan {
+) -> NextRunPlan {
     let carousel_epoch_seconds =
         carousel_seconds.map(|seconds| now_epoch_seconds.saturating_add(u64::from(seconds)));
 
     let earliest_candidate_epoch_seconds = [
-        Some(next_sync_epoch_seconds),
+        Some(next_power_interval_epoch_seconds),
         next_plan_date_change_epoch_seconds,
         carousel_epoch_seconds,
     ]
@@ -177,13 +184,46 @@ pub fn next_wakeup_sleep_plan(
     .flatten()
     .min()
     .unwrap_or(now_epoch_seconds);
-    let next_wakeup_epoch_seconds = earliest_candidate_epoch_seconds.max(now_epoch_seconds);
+    NextRunPlan::new(now_epoch_seconds, earliest_candidate_epoch_seconds)
+}
 
-    let deep_sleep_seconds = next_wakeup_epoch_seconds
-        .saturating_sub(now_epoch_seconds)
-        .min(u64::from(u32::MAX)) as u32;
+pub fn next_power_run_epoch_seconds(now_epoch_seconds: u64, power_profile: PowerProfile) -> u64 {
+    match power_profile {
+        PowerProfile::External | PowerProfile::Battery | PowerProfile::LowBattery => {
+            next_beijing_hour_epoch_seconds(now_epoch_seconds)
+        }
+    }
+}
 
-    SleepPlan::wake_at_after(next_wakeup_epoch_seconds, deep_sleep_seconds)
+pub fn next_beijing_hour_epoch_seconds(now_epoch_seconds: u64) -> u64 {
+    next_local_period_epoch_seconds(now_epoch_seconds, HOURLY_RUN_INTERVAL_SECONDS)
+}
+
+pub fn local_date_start_epoch_seconds(date: crate::model::LocalDate) -> u64 {
+    let days = days_from_civil(date.year as i32, u32::from(date.month), u32::from(date.day));
+    let local_epoch_seconds = i128::from(days) * i128::from(DAILY_SECONDS);
+    local_epoch_seconds
+        .saturating_sub(i128::from(BEIJING_UTC_OFFSET_SECONDS))
+        .max(0) as u64
+}
+
+fn next_local_period_epoch_seconds(now_epoch_seconds: u64, period_seconds: u64) -> u64 {
+    let local_epoch_seconds = now_epoch_seconds.saturating_add(BEIJING_UTC_OFFSET_SECONDS);
+    local_epoch_seconds
+        .saturating_div(period_seconds)
+        .saturating_add(1)
+        .saturating_mul(period_seconds)
+        .saturating_sub(BEIJING_UTC_OFFSET_SECONDS)
+}
+
+fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
+    let year = year - i32::from(month <= 2);
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = (year - era * 400) as u32;
+    let month_prime = if month > 2 { month - 3 } else { month + 9 };
+    let day_of_year = (153 * month_prime + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    i64::from(era) * 146_097 + i64::from(day_of_era) - 719_468
 }
 
 #[cfg(test)]
@@ -191,34 +231,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn power_sleep_plan_uses_wake_interval_when_it_is_earliest() {
+    fn next_run_plan_uses_power_interval_when_it_is_earliest() {
         assert_eq!(
-            next_wakeup_sleep_plan(1_000, 1_100, Some(1_200), Some(300)),
-            SleepPlan::wake_at_after(1_100, 100)
+            next_run_plan(1_000, 1_100, Some(1_200), Some(300)),
+            NextRunPlan {
+                next_run_epoch_seconds: 1_100,
+                wait_seconds: 100,
+            }
         );
     }
 
     #[test]
-    fn power_sleep_plan_uses_plan_date_change_when_it_is_earliest() {
+    fn next_run_plan_uses_plan_date_change_when_it_is_earliest() {
         assert_eq!(
-            next_wakeup_sleep_plan(1_000, 1_300, Some(1_120), Some(200)),
-            SleepPlan::wake_at_after(1_120, 120)
+            next_run_plan(1_000, 1_300, Some(1_120), Some(200)),
+            NextRunPlan {
+                next_run_epoch_seconds: 1_120,
+                wait_seconds: 120,
+            }
         );
     }
 
     #[test]
-    fn power_sleep_plan_uses_carousel_interval_when_it_is_earliest() {
+    fn next_run_plan_uses_carousel_interval_when_it_is_earliest() {
         assert_eq!(
-            next_wakeup_sleep_plan(1_000, 1_300, Some(1_250), Some(60)),
-            SleepPlan::wake_at_after(1_060, 60)
+            next_run_plan(1_000, 1_300, Some(1_250), Some(60)),
+            NextRunPlan {
+                next_run_epoch_seconds: 1_060,
+                wait_seconds: 60,
+            }
         );
     }
 
     #[test]
-    fn power_sleep_plan_wakes_immediately_for_past_wake_time() {
+    fn next_run_plan_runs_immediately_for_past_time() {
         assert_eq!(
-            next_wakeup_sleep_plan(1_000, 900, Some(1_250), Some(60)),
-            SleepPlan::wake_at_after(1_000, 0)
+            next_run_plan(1_000, 900, Some(1_250), Some(60)),
+            NextRunPlan {
+                next_run_epoch_seconds: 1_000,
+                wait_seconds: 0,
+            }
         );
     }
 
@@ -240,7 +292,7 @@ mod tests {
                 ChargeState::Charging,
                 false
             )),
-            PowerProfile::Charging
+            PowerProfile::External
         );
         assert_eq!(
             PowerProfile::from(&BatteryStatus::new(
@@ -249,7 +301,7 @@ mod tests {
                 ChargeState::Full,
                 false
             )),
-            PowerProfile::ExternalFull
+            PowerProfile::External
         );
         assert_eq!(
             PowerProfile::from(&BatteryStatus::new(
@@ -258,7 +310,7 @@ mod tests {
                 ChargeState::Charging,
                 true
             )),
-            PowerProfile::Charging
+            PowerProfile::External
         );
     }
 
@@ -302,44 +354,83 @@ mod tests {
     }
 
     #[test]
-    fn power_profile_wake_interval_matches_power_state() {
+    fn power_profile_run_interval_matches_power_state() {
         assert_eq!(
-            PowerProfile::Battery.wake_interval_seconds(),
-            BATTERY_SYNC_INTERVAL_SECONDS
+            PowerProfile::Battery.run_interval_seconds(),
+            HOURLY_RUN_INTERVAL_SECONDS
         );
         assert_eq!(
-            PowerProfile::Charging.wake_interval_seconds(),
-            CHARGING_SYNC_INTERVAL_SECONDS
+            PowerProfile::External.run_interval_seconds(),
+            HOURLY_RUN_INTERVAL_SECONDS
         );
         assert_eq!(
-            PowerProfile::ExternalFull.wake_interval_seconds(),
-            CHARGING_SYNC_INTERVAL_SECONDS
-        );
-        assert_eq!(
-            PowerProfile::LowBattery.wake_interval_seconds(),
-            BATTERY_SYNC_INTERVAL_SECONDS
+            PowerProfile::LowBattery.run_interval_seconds(),
+            HOURLY_RUN_INTERVAL_SECONDS
         );
     }
 
     #[test]
-    fn charging_profile_wakes_every_hour() {
+    fn external_profile_wakes_every_hour() {
         assert_eq!(
-            PowerProfile::Charging.wake_interval_seconds(),
-            CHARGING_SYNC_INTERVAL_SECONDS
+            PowerProfile::External.run_interval_seconds(),
+            HOURLY_RUN_INTERVAL_SECONDS
         );
     }
 
     #[test]
-    fn low_battery_profile_skips_cloud_sync() {
-        assert!(!PowerProfile::LowBattery.cloud_sync_enabled());
+    fn external_profile_uses_hourly_interval() {
+        assert_eq!(
+            PowerProfile::External.run_interval_seconds(),
+            HOURLY_RUN_INTERVAL_SECONDS
+        );
     }
 
     #[test]
-    fn external_full_profile_uses_charging_interval() {
+    fn external_power_runs_at_next_beijing_hour() {
         assert_eq!(
-            PowerProfile::ExternalFull.wake_interval_seconds(),
-            CHARGING_SYNC_INTERVAL_SECONDS
+            next_power_run_epoch_seconds(1_781_273_730, PowerProfile::External),
+            1_781_276_400
         );
+    }
+
+    #[test]
+    fn battery_power_runs_at_next_beijing_hour_from_previous_hour() {
+        assert_eq!(
+            next_power_run_epoch_seconds(1_781_276_400, PowerProfile::Battery),
+            1_781_280_000
+        );
+    }
+
+    #[test]
+    fn battery_power_runs_at_next_beijing_hour() {
+        assert_eq!(
+            next_power_run_epoch_seconds(1_781_276_400, PowerProfile::Battery),
+            1_781_280_000
+        );
+        assert_eq!(
+            next_power_run_epoch_seconds(1_781_280_000, PowerProfile::Battery),
+            1_781_283_600
+        );
+    }
+
+    #[test]
+    fn battery_power_at_beijing_midnight_runs_next_day() {
+        assert_eq!(
+            next_power_run_epoch_seconds(1_781_280_000, PowerProfile::Battery),
+            1_781_283_600
+        );
+    }
+
+    #[test]
+    fn local_date_start_uses_fixed_beijing_midnight() {
+        let date = crate::model::LocalDate::parse("2026-06-13").unwrap();
+
+        assert_eq!(local_date_start_epoch_seconds(date), 1_781_280_000);
+    }
+
+    #[test]
+    fn wake_probe_has_external_label() {
+        assert_eq!(WakeProbe::External.label(), "external");
     }
 }
 
@@ -347,37 +438,30 @@ mod tests {
 pub mod espidf {
     use core::time::Duration;
 
+    pub use super::WakeProbe;
+    use esp_idf_hal::gpio::PinId;
     use esp_idf_hal::reset::WakeupReason;
-    use esp_idf_hal::sleep::DeepSleep;
+    use esp_idf_hal::sleep::{DeepSleep, RtcWakeLevel, RtcWakeupPins};
     use esp_idf_sys::{
-        esp, gpio_config, gpio_config_t, gpio_get_level, gpio_int_type_t_GPIO_INTR_DISABLE,
-        gpio_mode_t_GPIO_MODE_INPUT, gpio_num_t_GPIO_NUM_4, gpio_pulldown_t_GPIO_PULLDOWN_DISABLE,
+        esp, esp_restart, esp_sleep_get_ext1_wakeup_status, gpio_config, gpio_config_t,
+        gpio_get_level, gpio_int_type_t_GPIO_INTR_DISABLE, gpio_mode_t_GPIO_MODE_INPUT,
+        gpio_num_t_GPIO_NUM_21, gpio_num_t_GPIO_NUM_4, gpio_pulldown_t_GPIO_PULLDOWN_DISABLE,
         gpio_pullup_t_GPIO_PULLUP_ENABLE,
     };
 
     pub const SELF_TEST_TIMER_WAKE_SECONDS: u64 = 20;
     pub const SELF_TEST_KEY_GPIO: i32 = gpio_num_t_GPIO_NUM_4;
-    const SELF_TEST_KEY_HOLD_MS: u32 = 1_800;
+    const PMIC_IRQ_GPIO: i32 = gpio_num_t_GPIO_NUM_21;
+    const SELF_TEST_KEY_HOLD_MS: u32 = 5_000;
     const SELF_TEST_KEY_SAMPLE_MS: u32 = 30;
 
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    pub enum WakeProbe {
-        Timer,
-        Button,
-        Ulp,
-        Unknown,
-        Other(u32),
-    }
+    struct PmicIrqWakePin;
 
-    impl WakeProbe {
-        pub const fn label(self) -> &'static str {
-            match self {
-                Self::Timer => "timer",
-                Self::Button => "button",
-                Self::Ulp => "ulp",
-                Self::Unknown => "unknown",
-                Self::Other(_) => "other",
-            }
+    impl RtcWakeupPins for PmicIrqWakePin {
+        type Iterator<'a> = core::iter::Once<PinId>;
+
+        fn iter(&self) -> Self::Iterator<'_> {
+            core::iter::once(PMIC_IRQ_GPIO as PinId)
         }
     }
 
@@ -394,10 +478,29 @@ pub mod espidf {
     }
 
     pub fn wake_probe() -> WakeProbe {
-        WakeupReason::get().into()
+        match WakeupReason::get() {
+            WakeupReason::Button if external_wakeup_gpio_mask() & pmic_irq_gpio_mask() != 0 => {
+                WakeProbe::External
+            }
+            wakeup_reason => wakeup_reason.into(),
+        }
     }
 
     pub fn self_test_key_long_pressed() -> bool {
+        self_test_key_pressed_for(SELF_TEST_KEY_HOLD_MS)
+    }
+
+    pub fn self_test_key_clicked() -> bool {
+        if configure_self_test_key().is_err() {
+            return false;
+        }
+
+        let was_pressed = self_test_key_pressed();
+        esp_idf_hal::delay::FreeRtos::delay_ms(120);
+        was_pressed && !self_test_key_pressed()
+    }
+
+    pub fn self_test_key_pressed_for(milliseconds: u32) -> bool {
         if configure_self_test_key().is_err() {
             return false;
         }
@@ -406,7 +509,7 @@ pub mod espidf {
             return false;
         }
 
-        let samples = SELF_TEST_KEY_HOLD_MS / SELF_TEST_KEY_SAMPLE_MS;
+        let samples = milliseconds / SELF_TEST_KEY_SAMPLE_MS;
         for _ in 0..samples {
             esp_idf_hal::delay::FreeRtos::delay_ms(SELF_TEST_KEY_SAMPLE_MS);
             if !self_test_key_pressed() {
@@ -433,8 +536,72 @@ pub mod espidf {
         unsafe { gpio_get_level(SELF_TEST_KEY_GPIO) == 0 }
     }
 
-    pub fn enter_timer_deep_sleep(seconds: u64) -> Result<(), esp_idf_sys::EspError> {
+    pub fn restart_now() -> ! {
+        unsafe { esp_restart() }
+    }
+
+    pub fn enter_deep_sleep_until(
+        next_run_epoch_seconds: u64,
+    ) -> Result<(), esp_idf_sys::EspError> {
+        let seconds = seconds_until(next_run_epoch_seconds);
+        if seconds == 0 {
+            unsafe { esp_restart() }
+        }
+
         let sleep = DeepSleep::new()?.wakeup_on_timer(Duration::from_secs(seconds))?;
+        configure_pmic_irq_deep_sleep_wakeup()?;
         sleep.enter()
+    }
+
+    pub fn restart_at(next_run_epoch_seconds: u64) -> ! {
+        restart_at_with_poll(next_run_epoch_seconds, || false)
+    }
+
+    pub fn restart_at_with_poll(next_run_epoch_seconds: u64, mut poll: impl FnMut() -> bool) -> ! {
+        if seconds_until(next_run_epoch_seconds) == 0 {
+            unsafe { esp_restart() }
+        }
+
+        loop {
+            for _ in 0..2_000 {
+                if seconds_until(next_run_epoch_seconds) == 0 {
+                    unsafe { esp_restart() }
+                }
+                if poll() {
+                    unsafe { esp_restart() }
+                }
+                esp_idf_hal::delay::FreeRtos::delay_ms(30);
+            }
+        }
+    }
+
+    fn seconds_until(next_run_epoch_seconds: u64) -> u64 {
+        let now_epoch_seconds = chrono::Utc::now().timestamp().max(0) as u64;
+        next_run_epoch_seconds.saturating_sub(now_epoch_seconds)
+    }
+
+    fn configure_pmic_irq_deep_sleep_wakeup() -> Result<(), esp_idf_sys::EspError> {
+        configure_pmic_irq_gpio_input()?;
+        esp_idf_hal::sleep::rtc::configure(PmicIrqWakePin, RtcWakeLevel::AllLow)
+    }
+
+    fn configure_pmic_irq_gpio_input() -> Result<(), esp_idf_sys::EspError> {
+        let config = gpio_config_t {
+            pin_bit_mask: pmic_irq_gpio_mask(),
+            mode: gpio_mode_t_GPIO_MODE_INPUT,
+            pull_up_en: gpio_pullup_t_GPIO_PULLUP_ENABLE,
+            pull_down_en: gpio_pulldown_t_GPIO_PULLDOWN_DISABLE,
+            intr_type: gpio_int_type_t_GPIO_INTR_DISABLE,
+        };
+
+        unsafe { esp!(gpio_config(&config)) }
+    }
+
+    fn external_wakeup_gpio_mask() -> u64 {
+        unsafe { esp_sleep_get_ext1_wakeup_status() }
+    }
+
+    const fn pmic_irq_gpio_mask() -> u64 {
+        1u64 << PMIC_IRQ_GPIO
     }
 }

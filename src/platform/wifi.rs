@@ -178,8 +178,18 @@ pub mod espidf {
         wifi.connect().map_err(|_| WifiConnectError::ConnectError)?;
         wifi.wait_netif_up()
             .map_err(|_| WifiConnectError::NetifError)?;
+        disable_wifi_power_save();
 
         Ok(ConnectedWifi { wifi })
+    }
+
+    fn disable_wifi_power_save() {
+        match esp_idf_sys::esp!(unsafe { esp_idf_sys::esp_wifi_set_ps(0) }) {
+            Ok(()) => log::info!(target: "epaper_album", "wifi power save disabled"),
+            Err(error) => {
+                log::warn!(target: "epaper_album", "wifi power save disable failed: {error:?}")
+            }
+        }
     }
 
     const fn wifi_probe_from_error(error: WifiConnectError) -> WifiProbe {

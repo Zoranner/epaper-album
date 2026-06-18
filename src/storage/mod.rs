@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 pub const DATA_ROOT: &str = "/sdcard/data";
 pub const PLAN_PATH: &str = "/sdcard/data/plan.json";
 pub const STATE_PATH: &str = "/sdcard/data/state.json";
+pub const SYNC_PATH: &str = "/sdcard/data/sync.json";
 pub const IMAGES_DIR: &str = "/sdcard/data/images";
 pub const SPRITES_DIR: &str = "/sdcard/data/sprites";
 
@@ -54,6 +55,8 @@ pub trait ResourceStore {
     fn save_plans(&mut self, plans: &[Plan]) -> StorageJsonWrite;
     fn save_image_bytes(&mut self, sha256: &str, content: &[u8]) -> StorageWrite;
     fn save_sprite_bytes(&mut self, sha256: &str, content: &[u8]) -> StorageWrite;
+    fn read_image_bytes(&self, sha256: &str) -> StorageBinaryRead;
+    fn read_sprite_bytes(&self, sha256: &str) -> StorageBinaryRead;
     fn has_image(&self, sha256: &str) -> bool;
     fn has_sprite(&self, sha256: &str) -> bool;
 }
@@ -77,6 +80,14 @@ impl ResourceStore for SdCardResourceStore {
         write_binary_file_atomic(sprite_bmp_path(sha256), content)
     }
 
+    fn read_image_bytes(&self, sha256: &str) -> StorageBinaryRead {
+        read_binary_file(image_bmp_path(sha256))
+    }
+
+    fn read_sprite_bytes(&self, sha256: &str) -> StorageBinaryRead {
+        read_binary_file(sprite_bmp_path(sha256))
+    }
+
     fn has_image(&self, sha256: &str) -> bool {
         image_bmp_path(sha256).exists()
     }
@@ -97,6 +108,14 @@ impl ResourceStore for MountedSdCardResourceStore {
 
     fn save_sprite_bytes(&mut self, sha256: &str, content: &[u8]) -> StorageWrite {
         write_binary_file_atomic_mounted(sprite_bmp_path(sha256), content)
+    }
+
+    fn read_image_bytes(&self, sha256: &str) -> StorageBinaryRead {
+        read_binary_file_mounted(image_bmp_path(sha256))
+    }
+
+    fn read_sprite_bytes(&self, sha256: &str) -> StorageBinaryRead {
+        read_binary_file_mounted(sprite_bmp_path(sha256))
     }
 
     fn has_image(&self, sha256: &str) -> bool {

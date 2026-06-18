@@ -1,12 +1,22 @@
 use crate::bmp::{BmpError, BmpImage};
 use crate::display::{Color, ScreenBuffer, SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::epd::{pack_epd_pixels, set_logical_packed_frame_pixel, EPD_FRAME_BYTES};
-use serde::{Deserialize, Serialize};
 use std::fmt;
 
 const PLACEHOLDER_GLYPH_WIDTH: usize = 5;
 const PLACEHOLDER_GLYPH_HEIGHT: usize = 7;
 const GLYPH_GAP: usize = 1;
+const ERROR_TITLE_BOX_X: usize = 56;
+const ERROR_TITLE_BOX_Y: usize = 42;
+const ERROR_TITLE_BOX_HEIGHT: usize = 92;
+const ERROR_MESSAGE_AREA_Y: usize = 154;
+const ERROR_MESSAGE_AREA_HEIGHT: usize = 94;
+const ERROR_HINT_AREA_Y: usize = 250;
+const ERROR_HINT_AREA_HEIGHT: usize = 80;
+const ERROR_DETAIL_AREA_X: usize = 96;
+const ERROR_DETAIL_AREA_Y: usize = 334;
+const ERROR_DETAIL_AREA_WIDTH: usize = SCREEN_WIDTH - 192;
+const ERROR_DETAIL_AREA_HEIGHT: usize = 102;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TextStyle {
@@ -50,6 +60,7 @@ pub enum RenderError {
     InvalidPhotoSize,
     InvalidFrameLength,
     Bmp(BmpError),
+    ResourceBmp(RenderResource, BmpError),
 }
 
 impl fmt::Display for RenderError {
@@ -58,6 +69,7 @@ impl fmt::Display for RenderError {
             Self::InvalidPhotoSize => write!(f, "invalid-photo-size"),
             Self::InvalidFrameLength => write!(f, "invalid-frame-length"),
             Self::Bmp(error) => write!(f, "bmp-{error}"),
+            Self::ResourceBmp(resource, error) => write!(f, "{}-bmp-{error}", resource.label()),
         }
     }
 }
@@ -70,23 +82,19 @@ impl From<BmpError> for RenderError {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum RenderNotice {
-    LowBattery,
-    Offline,
-    SyncFailed,
-    PlanExpired,
-    StorageLow,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RenderResource {
+    Photo,
+    Caption,
+    Date,
 }
 
-impl RenderNotice {
-    pub const fn text(self) -> &'static str {
+impl RenderResource {
+    pub const fn label(self) -> &'static str {
         match self {
-            Self::LowBattery => "LOW BAT",
-            Self::Offline => "OFFLINE",
-            Self::SyncFailed => "SYNC FAIL",
-            Self::PlanExpired => "EXPIRED",
-            Self::StorageLow => "STORAGE LOW",
+            Self::Photo => "photo",
+            Self::Caption => "caption",
+            Self::Date => "date",
         }
     }
 }
@@ -124,7 +132,6 @@ impl<'a> BuiltinErrorPageInput<'a> {
 pub struct SpriteBmps<'a> {
     pub caption: Option<&'a [u8]>,
     pub date: Option<&'a [u8]>,
-    pub notice: Option<&'a [u8]>,
     pub status: Option<&'a [u8]>,
 }
 
@@ -138,7 +145,6 @@ pub struct SpritePlacement {
 pub struct PackedFrameRenderInput<'a> {
     pub photo_bmp: &'a [u8],
     pub sprites: SpriteBmps<'a>,
-    pub notice: Option<RenderNotice>,
     pub placement: SpritePlacement,
 }
 
@@ -149,10 +155,8 @@ impl<'a> PackedFrameRenderInput<'a> {
             sprites: SpriteBmps {
                 caption: None,
                 date: None,
-                notice: None,
                 status: None,
             },
-            notice: None,
             placement: SpritePlacement {
                 margin_x: 0,
                 margin_y: 0,
@@ -162,11 +166,6 @@ impl<'a> PackedFrameRenderInput<'a> {
 
     pub const fn with_sprites(mut self, sprites: SpriteBmps<'a>) -> Self {
         self.sprites = sprites;
-        self
-    }
-
-    pub const fn with_notice(mut self, notice: Option<RenderNotice>) -> Self {
-        self.notice = notice;
         self
     }
 
@@ -198,7 +197,6 @@ pub struct RenderInput<'a> {
     pub image: Option<RenderImage<'a>>,
     pub caption: &'a str,
     pub date: &'a str,
-    pub notice: Option<RenderNotice>,
     pub style: TextStyle,
 }
 
@@ -208,7 +206,6 @@ impl<'a> RenderInput<'a> {
             image: None,
             caption,
             date,
-            notice: None,
             style: TextStyle {
                 foreground: Color::Black,
                 background: Color::White,
@@ -225,11 +222,6 @@ impl<'a> RenderInput<'a> {
 
     pub const fn with_image(mut self, image: RenderImage<'a>) -> Self {
         self.image = Some(image);
-        self
-    }
-
-    pub const fn with_notice(mut self, notice: RenderNotice) -> Self {
-        self.notice = Some(notice);
         self
     }
 
@@ -267,7 +259,8 @@ pub fn render_epd_packed_frame_from_bmps_into(
         return Err(RenderError::InvalidFrameLength);
     }
 
-    let photo = BmpImage::parse(input.photo_bmp)?;
+    let photo = BmpImage::parse(input.photo_bmp)
+        .map_err(|error| RenderError::ResourceBmp(RenderResource::Photo, error))?;
     if photo.width() != SCREEN_WIDTH || photo.height() != SCREEN_HEIGHT {
         return Err(RenderError::InvalidPhotoSize);
     }
@@ -275,30 +268,23 @@ pub fn render_epd_packed_frame_from_bmps_into(
     draw_bmp_at(frame, &photo, 0, 0)?;
 
     if let Some(caption) = input.sprites.caption {
-        draw_sprite_bmp(frame, caption, OverlaySlot::BottomLeft, input.placement)?;
+        draw_sprite_bmp(
+            frame,
+            RenderResource::Caption,
+            caption,
+            OverlaySlot::BottomLeft,
+            input.placement,
+        )?;
     }
 
     if let Some(date) = input.sprites.date {
-        draw_sprite_bmp(frame, date, OverlaySlot::BottomRight, input.placement)?;
-    }
-
-    if let Some(notice) = input.sprites.notice {
-        draw_sprite_bmp(frame, notice, OverlaySlot::TopLeft, input.placement)?;
-    } else if let Some(notice) = input.notice {
-        let style = TextStyle {
-            foreground: Color::White,
-            background: Color::Black,
-            padding_x: 8,
-            padding_y: 6,
-            margin_x: input.placement.margin_x,
-            margin_y: input.placement.margin_y,
-            glyph_width: PLACEHOLDER_GLYPH_WIDTH,
-            glyph_height: PLACEHOLDER_GLYPH_HEIGHT,
-            glyph_gap: GLYPH_GAP,
-        };
-        let size = text_size(notice.text(), &style).unwrap_or((0, 0));
-        let (x, y) = overlay_origin(OverlaySlot::TopLeft, size.0, size.1, &style);
-        draw_text_on_packed_frame(frame, x, y, notice.text(), &style);
+        draw_sprite_bmp(
+            frame,
+            RenderResource::Date,
+            date,
+            OverlaySlot::BottomRight,
+            input.placement,
+        )?;
     }
 
     Ok(())
@@ -318,25 +304,21 @@ pub fn render_into(buffer: &mut ScreenBuffer, input: &RenderInput<'_>) {
     if !input.date.is_empty() {
         draw_text(buffer, OverlaySlot::BottomRight, input.date, &input.style);
     }
-
-    if let Some(notice) = input.notice {
-        draw_text(buffer, OverlaySlot::TopLeft, notice.text(), &input.style);
-    }
 }
 
 fn render_builtin_error_page_into_frame(frame: &mut [u8], input: &BuiltinErrorPageInput<'_>) {
     let title_style = TextStyle {
         foreground: Color::White,
         background: Color::Black,
-        padding_x: 18,
-        padding_y: 14,
+        padding_x: 20,
+        padding_y: 12,
         margin_x: 0,
         margin_y: 0,
-        glyph_width: 16,
-        glyph_height: 22,
+        glyph_width: 15,
+        glyph_height: 21,
         glyph_gap: 4,
     };
-    let body_style = TextStyle {
+    let message_style = TextStyle {
         foreground: Color::Black,
         background: Color::White,
         padding_x: 0,
@@ -351,38 +333,157 @@ fn render_builtin_error_page_into_frame(frame: &mut [u8], input: &BuiltinErrorPa
         glyph_width: 8,
         glyph_height: 11,
         glyph_gap: 2,
-        ..body_style
+        ..message_style
+    };
+    let detail_style = TextStyle {
+        foreground: Color::Black,
+        background: Color::White,
+        padding_x: 12,
+        padding_y: 10,
+        margin_x: 0,
+        margin_y: 0,
+        glyph_width: 8,
+        glyph_height: 11,
+        glyph_gap: 2,
     };
 
-    let title = input.title;
-    let title_size = text_size(title, &title_style).unwrap_or((0, 0));
-    let title_x = SCREEN_WIDTH.saturating_sub(title_size.0) / 2;
-    let title_y = 64usize;
     fill_packed_frame_rect(
         frame,
-        0,
-        title_y.saturating_sub(18),
-        SCREEN_WIDTH,
-        96,
+        ERROR_TITLE_BOX_X,
+        ERROR_TITLE_BOX_Y,
+        SCREEN_WIDTH.saturating_sub(112),
+        ERROR_TITLE_BOX_HEIGHT,
         Color::Black,
     );
-    draw_text_on_packed_frame(frame, title_x, title_y, title, &title_style);
+    fill_packed_frame_rect(
+        frame,
+        56,
+        138,
+        SCREEN_WIDTH.saturating_sub(112),
+        4,
+        Color::Black,
+    );
+    fill_packed_frame_rect(
+        frame,
+        68,
+        34,
+        SCREEN_WIDTH.saturating_sub(136),
+        4,
+        Color::Black,
+    );
+    draw_centered_text_in_area(
+        frame,
+        ERROR_TITLE_BOX_Y,
+        ERROR_TITLE_BOX_HEIGHT,
+        input.title,
+        &title_style,
+    );
 
-    let message = input.message;
-    let message_size = text_size(message, &body_style).unwrap_or((0, 0));
-    let message_x = SCREEN_WIDTH.saturating_sub(message_size.0) / 2;
-    draw_text_on_packed_frame(frame, message_x, 210, message, &body_style);
+    fill_packed_frame_rect(
+        frame,
+        96,
+        248,
+        SCREEN_WIDTH.saturating_sub(192),
+        2,
+        Color::Black,
+    );
+    fill_packed_frame_rect(
+        frame,
+        96,
+        330,
+        SCREEN_WIDTH.saturating_sub(192),
+        2,
+        Color::Black,
+    );
+    fill_packed_frame_rect(
+        frame,
+        96,
+        436,
+        SCREEN_WIDTH.saturating_sub(192),
+        2,
+        Color::Black,
+    );
+
+    draw_centered_text_in_area(
+        frame,
+        ERROR_MESSAGE_AREA_Y,
+        ERROR_MESSAGE_AREA_HEIGHT,
+        input.message,
+        &message_style,
+    );
 
     if !input.hint.is_empty() {
-        let hint_size = text_size(input.hint, &hint_style).unwrap_or((0, 0));
-        let hint_x = SCREEN_WIDTH.saturating_sub(hint_size.0) / 2;
-        draw_text_on_packed_frame(frame, hint_x, 280, input.hint, &hint_style);
+        draw_centered_text_in_area(
+            frame,
+            ERROR_HINT_AREA_Y,
+            ERROR_HINT_AREA_HEIGHT,
+            input.hint,
+            &hint_style,
+        );
     }
 
     if !input.detail.is_empty() {
-        let detail_size = text_size(input.detail, &hint_style).unwrap_or((0, 0));
-        let detail_x = SCREEN_WIDTH.saturating_sub(detail_size.0) / 2;
-        draw_text_on_packed_frame(frame, detail_x, 330, input.detail, &hint_style);
+        draw_centered_wrapped_text_in_area(
+            frame,
+            ERROR_DETAIL_AREA_X,
+            ERROR_DETAIL_AREA_Y,
+            ERROR_DETAIL_AREA_WIDTH,
+            ERROR_DETAIL_AREA_HEIGHT,
+            input.detail,
+            &detail_style,
+        );
+    }
+}
+
+fn draw_centered_text_in_area(
+    frame: &mut [u8],
+    area_y: usize,
+    area_height: usize,
+    text: &str,
+    style: &TextStyle,
+) {
+    let Some((block_width, block_height)) = text_size(text, style) else {
+        return;
+    };
+    let x = SCREEN_WIDTH.saturating_sub(block_width) / 2;
+    let y = area_y.saturating_add(area_height.saturating_sub(block_height) / 2);
+    draw_text_on_packed_frame(frame, x, y, text, style);
+}
+
+fn draw_centered_wrapped_text_in_area(
+    frame: &mut [u8],
+    area_x: usize,
+    area_y: usize,
+    area_width: usize,
+    area_height: usize,
+    text: &str,
+    style: &TextStyle,
+) {
+    let lines = wrap_text_lines(text, style, area_width);
+    let Some((_, line_height)) = text_size("A", style) else {
+        return;
+    };
+    let line_gap = 2usize;
+    let max_lines = area_height
+        .saturating_add(line_gap)
+        .checked_div(line_height.saturating_add(line_gap))
+        .unwrap_or(0);
+    let line_count = lines.len().min(max_lines);
+    if line_count == 0 {
+        return;
+    }
+
+    let total_height = line_count
+        .saturating_mul(line_height)
+        .saturating_add(line_count.saturating_sub(1).saturating_mul(line_gap));
+    let mut y = area_y.saturating_add(area_height.saturating_sub(total_height) / 2);
+    for line in lines.iter().take(line_count) {
+        let Some((line_width, _)) = text_size(line, style) else {
+            continue;
+        };
+        let x = area_x.saturating_add(area_width.saturating_sub(line_width) / 2);
+        draw_text_on_packed_frame(frame, x, y, line, style);
+        y = y.saturating_add(line_height).saturating_add(line_gap);
     }
 }
 
@@ -443,6 +544,70 @@ fn draw_glyph_on_packed_frame(
             }
         }
     }
+}
+
+fn wrap_text_lines(text: &str, style: &TextStyle, max_width: usize) -> Vec<String> {
+    let max_chars = max_chars_per_wrapped_line(style, max_width);
+    if max_chars == 0 {
+        return Vec::new();
+    }
+
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        let candidate = if current.is_empty() {
+            word.to_string()
+        } else {
+            format!("{current} {word}")
+        };
+        if text_fits_width(&candidate, style, max_width) {
+            current = candidate;
+            continue;
+        }
+
+        if !current.is_empty() {
+            lines.push(current);
+            current = String::new();
+        }
+
+        if text_fits_width(word, style, max_width) {
+            current.push_str(word);
+            continue;
+        }
+
+        let mut chunk = String::new();
+        for character in word.chars() {
+            chunk.push(character);
+            if chunk.chars().count() == max_chars {
+                lines.push(chunk);
+                chunk = String::new();
+            }
+        }
+        current = chunk;
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+
+    lines
+}
+
+fn text_fits_width(text: &str, style: &TextStyle, max_width: usize) -> bool {
+    text_size(text, style).is_some_and(|(width, _)| width <= max_width)
+}
+
+fn max_chars_per_wrapped_line(style: &TextStyle, max_width: usize) -> usize {
+    let available_width = max_width.saturating_sub(style.padding_x.saturating_mul(2));
+    if style.glyph_width == 0 || available_width < style.glyph_width {
+        return 0;
+    }
+
+    available_width
+        .saturating_sub(style.glyph_width)
+        .checked_div(style.glyph_width.saturating_add(style.glyph_gap))
+        .unwrap_or(0)
+        .saturating_add(1)
 }
 
 fn fill_packed_frame_rect(
@@ -593,6 +758,10 @@ pub fn glyph_pattern(character: char) -> [u8; PLACEHOLDER_GLYPH_HEIGHT] {
         ':' => [0x00, 0x04, 0x04, 0x00, 0x04, 0x04, 0x00],
         '/' => [0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x10],
         '.' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C],
+        '(' => [0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02],
+        ')' => [0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08],
+        '=' => [0x00, 0x00, 0x1F, 0x00, 0x1F, 0x00, 0x00],
+        '_' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F],
         _ => [0x1F, 0x11, 0x15, 0x15, 0x15, 0x11, 0x1F],
     }
 }
@@ -629,11 +798,13 @@ fn draw_centered_image(buffer: &mut ScreenBuffer, image: RenderImage<'_>, backgr
 
 fn draw_sprite_bmp(
     frame: &mut [u8],
+    resource: RenderResource,
     sprite_bmp: &[u8],
     slot: OverlaySlot,
     placement: SpritePlacement,
 ) -> Result<(), RenderError> {
-    let sprite = BmpImage::parse(sprite_bmp)?;
+    let sprite =
+        BmpImage::parse(sprite_bmp).map_err(|error| RenderError::ResourceBmp(resource, error))?;
     let (x, y) = packed_overlay_origin(slot, sprite.width(), sprite.height(), placement);
     draw_sprite_bmp_at(frame, &sprite, x, y)
 }
@@ -786,13 +957,11 @@ mod tests {
         let photo = solid_bmp(EPD_WIDTH, EPD_HEIGHT, Color::White);
         let caption = sprite_bmp(3, 2, Color::Black);
         let date = sprite_bmp(4, 2, Color::Red);
-        let notice = sprite_bmp(2, 3, Color::Blue);
 
         let frame = render_epd_packed_frame_from_bmps(
             &PackedFrameRenderInput::new(&photo).with_sprites(SpriteBmps {
                 caption: Some(&caption),
                 date: Some(&date),
-                notice: Some(&notice),
                 status: None,
             }),
         )
@@ -814,8 +983,6 @@ mod tests {
             Color::Red
         );
         assert_eq!(logical_frame_color(&frame, 0, 0), Color::White);
-        assert_eq!(logical_frame_color(&frame, 1, 0), Color::Blue);
-        assert_eq!(logical_frame_color(&frame, 1, 2), Color::Blue);
     }
 
     #[test]
@@ -831,7 +998,6 @@ mod tests {
             &PackedFrameRenderInput::new(&photo).with_sprites(SpriteBmps {
                 caption: Some(&caption),
                 date: None,
-                notice: None,
                 status: None,
             }),
         )
@@ -857,6 +1023,25 @@ mod tests {
     }
 
     #[test]
+    fn render_error_names_invalid_sprite_resource() {
+        let photo = solid_bmp(EPD_WIDTH, EPD_HEIGHT, Color::White);
+        let invalid_caption = b"not-a-bmp";
+
+        let result = render_epd_packed_frame_from_bmps(
+            &PackedFrameRenderInput::new(&photo).with_sprites(SpriteBmps {
+                caption: Some(invalid_caption),
+                date: None,
+                status: None,
+            }),
+        );
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "caption-bmp-invalid-header"
+        );
+    }
+
+    #[test]
     fn keeps_status_sprite_reserved_without_composing_it() {
         let photo = solid_bmp(EPD_WIDTH, EPD_HEIGHT, Color::White);
         let status = solid_bmp(2, 2, Color::Black);
@@ -865,7 +1050,6 @@ mod tests {
             &PackedFrameRenderInput::new(&photo).with_sprites(SpriteBmps {
                 caption: None,
                 date: None,
-                notice: None,
                 status: Some(&status),
             }),
         )
@@ -887,6 +1071,67 @@ mod tests {
     }
 
     #[test]
+    fn builtin_error_page_separates_message_hint_and_detail_regions() {
+        let frame = render_builtin_error_page_packed_frame(
+            &BuiltinErrorPageInput::new("SYNC FAILED", "PHOTO UPDATE DID NOT COMPLETE")
+                .with_hint("KEEPING CURRENT PHOTO")
+                .with_detail("DETAIL SYNC HTTP 500 RETRY NEXT WAKE"),
+        );
+
+        assert!(has_non_white_pixel_in_region(&frame, 0..EPD_WIDTH, 48..148));
+        assert!(has_non_white_pixel_in_region(&frame, 120..680, 170..230));
+        assert!(has_non_white_pixel_in_region(&frame, 120..680, 264..308));
+        assert!(has_non_white_pixel_in_region(&frame, 120..680, 356..430));
+        assert!(has_non_white_pixel_in_region(&frame, 96..704, 330..334));
+    }
+
+    #[test]
+    fn builtin_error_page_centers_text_blocks_in_their_pixel_regions() {
+        let frame = render_builtin_error_page_packed_frame(
+            &BuiltinErrorPageInput::new("SYNC ERROR", "PLAN SYNC FAILED")
+                .with_hint("CHECK WIFI BASE URL AND SERVER")
+                .with_detail("resource.cloud.http-request"),
+        );
+
+        assert_color_region_is_vertically_centered(&frame, 56..744, 42..134, Color::White, 1);
+        assert_color_region_is_vertically_centered(&frame, 96..704, 154..248, Color::Black, 1);
+        assert_color_region_is_vertically_centered(&frame, 96..704, 250..330, Color::Black, 1);
+        assert_color_region_is_vertically_centered(&frame, 96..704, 334..436, Color::Black, 1);
+    }
+
+    #[test]
+    fn placeholder_font_renders_underscore_as_baseline_not_unknown_box() {
+        assert_eq!(
+            glyph_pattern('_'),
+            [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F]
+        );
+        assert_ne!(glyph_pattern('_'), glyph_pattern('?'));
+    }
+
+    #[test]
+    fn placeholder_font_renders_error_detail_punctuation_without_unknown_boxes() {
+        for character in ['(', ')', '='] {
+            assert_ne!(glyph_pattern(character), glyph_pattern('?'));
+        }
+    }
+
+    #[test]
+    fn builtin_error_page_wraps_long_detail_inside_detail_region() {
+        let frame = render_builtin_error_page_packed_frame(
+            &BuiltinErrorPageInput::new("SYNC ERROR", "PLAN SYNC FAILED")
+                .with_hint("CHECK WIFI BASE URL AND SERVER")
+                .with_detail(
+                    "cloud: api-status-500: ERROR CODE: SERVER TIMEOUT WHILE FETCHING PLAN DATA",
+                ),
+        );
+
+        assert!(
+            text_row_runs(&frame, 96..704, 334..436, Color::Black).len() >= 2,
+            "long detail should wrap to multiple visible lines"
+        );
+    }
+
+    #[test]
     fn builtin_error_page_hint_and_detail_are_optional() {
         let frame = render_builtin_error_page_packed_frame(&BuiltinErrorPageInput::new(
             "NO PHOTO",
@@ -898,7 +1143,71 @@ mod tests {
     }
 
     fn has_non_white_pixel_in_title_area(frame: &[u8]) -> bool {
-        (46..160).any(|y| (0..EPD_WIDTH).any(|x| logical_frame_color(frame, x, y) != Color::White))
+        has_non_white_pixel_in_region(frame, 0..EPD_WIDTH, 46..160)
+    }
+
+    fn has_non_white_pixel_in_region(
+        frame: &[u8],
+        xs: std::ops::Range<usize>,
+        ys: std::ops::Range<usize>,
+    ) -> bool {
+        ys.clone().any(|y| {
+            xs.clone()
+                .any(|x| logical_frame_color(frame, x, y) != Color::White)
+        })
+    }
+
+    fn assert_color_region_is_vertically_centered(
+        frame: &[u8],
+        xs: std::ops::Range<usize>,
+        ys: std::ops::Range<usize>,
+        color: Color,
+        tolerance: usize,
+    ) {
+        let ink_rows = ys
+            .clone()
+            .filter(|y| {
+                xs.clone()
+                    .any(|x| logical_frame_color(frame, x, *y) == color)
+            })
+            .collect::<Vec<_>>();
+        let top = *ink_rows.first().expect("region should contain ink");
+        let bottom = *ink_rows.last().expect("region should contain ink");
+        let top_padding = top.saturating_sub(ys.start);
+        let bottom_padding = ys.end.saturating_sub(1).saturating_sub(bottom);
+        assert!(
+            top_padding.abs_diff(bottom_padding) <= tolerance,
+            "ink is not centered: top_padding={top_padding} bottom_padding={bottom_padding}"
+        );
+    }
+
+    fn text_row_runs(
+        frame: &[u8],
+        xs: std::ops::Range<usize>,
+        ys: std::ops::Range<usize>,
+        color: Color,
+    ) -> Vec<std::ops::Range<usize>> {
+        let rows = ys
+            .clone()
+            .filter(|y| {
+                xs.clone()
+                    .any(|x| logical_frame_color(frame, x, *y) == color)
+            })
+            .collect::<Vec<_>>();
+        let mut runs = Vec::new();
+        let Some(mut start) = rows.first().copied() else {
+            return runs;
+        };
+        let mut previous = start;
+        for row in rows.into_iter().skip(1) {
+            if row > previous + 1 {
+                runs.push(start..previous + 1);
+                start = row;
+            }
+            previous = row;
+        }
+        runs.push(start..previous + 1);
+        runs
     }
 
     fn logical_frame_color(frame: &[u8], x: usize, y: usize) -> Color {

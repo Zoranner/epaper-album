@@ -26,6 +26,11 @@ pub mod cache {
     pub use crate::domain::cache::*;
 }
 
+pub mod button {
+    #[cfg(target_os = "espidf")]
+    pub use crate::platform::button::*;
+}
+
 pub mod cloud {
     pub use crate::sync::cloud::*;
 }
@@ -45,6 +50,10 @@ pub mod device_runtime {
 
 pub mod device_sync {
     pub use crate::sync::device::*;
+}
+
+pub mod diagnostics {
+    pub use crate::domain::diagnostics::*;
 }
 
 pub mod display {

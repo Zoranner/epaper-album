@@ -1,4 +1,6 @@
+use crate::bmp::BmpImage;
 use crate::device_runtime::{DeviceDisplay, DisplayRefreshRequest, ErrorRefreshRequest};
+use crate::display::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::epd::{run_epd_packed_frame, EpdBus, EpdError};
 use crate::render::{
     render_builtin_error_page_packed_frame, render_epd_packed_frame_from_bmps,
@@ -27,7 +29,7 @@ impl DisplayResourceReader for SdCardDisplayResourceReader {
     type Error = DisplayReadError;
 
     fn has_photo(&self, sha256: &str) -> bool {
-        image_bmp_path(sha256).exists()
+        photo_bmp_is_renderable(read_binary_file(image_bmp_path(sha256)))
     }
 
     fn read_photo_bmp(&mut self, sha256: &str) -> Result<Vec<u8>, Self::Error> {
@@ -55,7 +57,9 @@ impl DisplayResourceReader for MountedSdCardDisplayResourceReader {
     type Error = DisplayReadError;
 
     fn has_photo(&self, sha256: &str) -> bool {
-        image_bmp_path(sha256).exists()
+        photo_bmp_is_renderable(crate::storage::read_binary_file_mounted(image_bmp_path(
+            sha256,
+        )))
     }
 
     fn read_photo_bmp(&mut self, sha256: &str) -> Result<Vec<u8>, Self::Error> {
@@ -84,6 +88,16 @@ pub enum DisplayReadError {
     MissingPhoto,
     MountError,
     ReadError,
+}
+
+fn photo_bmp_is_renderable(read: StorageBinaryRead) -> bool {
+    let StorageBinaryRead::Bytes(bytes) = read else {
+        return false;
+    };
+
+    BmpImage::parse(&bytes)
+        .map(|image| image.width() == SCREEN_WIDTH && image.height() == SCREEN_HEIGHT)
+        .unwrap_or(false)
 }
 
 impl fmt::Display for DisplayReadError {
@@ -151,18 +165,14 @@ where
             read_caption_sprite(&mut self.reader, &request).map_err(DeviceDisplayError::Read)?;
         let date =
             read_date_sprite(&mut self.reader, &request).map_err(DeviceDisplayError::Read)?;
-        let notice =
-            read_notice_sprite(&mut self.reader, &request).map_err(DeviceDisplayError::Read)?;
 
         let frame = render_epd_packed_frame_from_bmps(
             &PackedFrameRenderInput::new(&photo)
                 .with_sprites(SpriteBmps {
                     caption: caption.as_deref(),
                     date: date.as_deref(),
-                    notice: notice.as_deref(),
                     status: None,
                 })
-                .with_notice(request.notice)
                 .with_placement(SpritePlacement {
                     margin_x: OVERLAY_MARGIN,
                     margin_y: OVERLAY_MARGIN,
@@ -218,31 +228,15 @@ where
     reader.read_sprite_bmp(sha256)
 }
 
-fn read_notice_sprite<R>(
-    reader: &mut R,
-    request: &DisplayRefreshRequest,
-) -> Result<Option<Vec<u8>>, R::Error>
-where
-    R: DisplayResourceReader,
-{
-    if request.notice.is_none() {
-        return Ok(None);
-    };
-
-    let Some(sha256) = request.sprites.notice.as_deref() else {
-        return Ok(None);
-    };
-    reader.read_sprite_bmp(sha256)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::bmp::bmp_row_stride;
     use crate::display::Color;
-    use crate::epd::{EpdError, EPD_FRAME_BYTES, EPD_HEIGHT, EPD_ROW_BYTES, EPD_WIDTH};
+    use crate::epd::{
+        epd_color_code, EpdError, EPD_FRAME_BYTES, EPD_HEIGHT, EPD_ROW_BYTES, EPD_WIDTH,
+    };
     use crate::model::{LocalDate, Plan};
-    use crate::render::RenderNotice;
     use crate::state::RefreshReason;
     use std::collections::BTreeMap;
 
@@ -258,7 +252,11 @@ mod tests {
         type Error = DisplayReadError;
 
         fn has_photo(&self, sha256: &str) -> bool {
-            self.photos.contains_key(sha256)
+            self.photos.get(sha256).is_some_and(|bytes| {
+                BmpImage::parse(bytes)
+                    .map(|image| image.width() == SCREEN_WIDTH && image.height() == SCREEN_HEIGHT)
+                    .unwrap_or(false)
+            })
         }
 
         fn read_photo_bmp(&mut self, sha256: &str) -> Result<Vec<u8>, Self::Error> {
@@ -279,6 +277,7 @@ mod tests {
     struct MockBus {
         row_count: usize,
         frame_bytes: usize,
+        frame: Vec<u8>,
     }
 
     impl EpdBus for MockBus {
@@ -300,6 +299,7 @@ mod tests {
             if data.len() == EPD_ROW_BYTES {
                 self.row_count += 1;
                 self.frame_bytes += data.len();
+                self.frame.extend_from_slice(data);
             }
             Ok(())
         }
@@ -318,15 +318,10 @@ mod tests {
         reader
             .sprites
             .insert("date-sha".to_string(), solid_bmp(8, 4, Color::Red));
-        reader
-            .sprites
-            .insert("notice-sha".to_string(), solid_bmp(8, 4, Color::Blue));
         let bus = MockBus::default();
         let mut display = PackedFrameDisplay::new(reader, bus);
 
-        display
-            .refresh(request(Some(RenderNotice::LowBattery)))
-            .unwrap();
+        display.refresh(request()).unwrap();
         let (_reader, bus) = display.into_parts();
 
         assert_eq!(bus.row_count, EPD_HEIGHT);
@@ -343,28 +338,22 @@ mod tests {
         let bus = MockBus::default();
         let mut display = PackedFrameDisplay::new(reader, bus);
 
-        display.refresh(request(None)).unwrap();
+        display.refresh(request()).unwrap();
         let (_reader, bus) = display.into_parts();
 
         assert_eq!(bus.row_count, EPD_HEIGHT);
     }
 
     #[test]
-    fn display_allows_missing_notice_sprite() {
+    fn display_rejects_unrenderable_cached_photo() {
         let mut reader = MockReader::default();
-        reader.photos.insert(
-            "photo".to_string(),
-            solid_bmp(EPD_WIDTH, EPD_HEIGHT, Color::White),
-        );
+        reader
+            .photos
+            .insert("photo".to_string(), b"not-a-bmp".to_vec());
         let bus = MockBus::default();
-        let mut display = PackedFrameDisplay::new(reader, bus);
-        let mut request = request(Some(RenderNotice::LowBattery));
-        request.sprites.notice = None;
+        let display = PackedFrameDisplay::new(reader, bus);
 
-        display.refresh(request).unwrap();
-        let (_reader, bus) = display.into_parts();
-
-        assert_eq!(bus.row_count, EPD_HEIGHT);
+        assert!(!display.has_image("photo"));
     }
 
     #[test]
@@ -388,21 +377,25 @@ mod tests {
         assert_eq!(reader.sprite_reads, 0);
         assert_eq!(bus.row_count, EPD_HEIGHT);
         assert_eq!(bus.frame_bytes, EPD_FRAME_BYTES);
+        assert!(has_non_white_pixel_in_region(
+            &bus.frame,
+            120..680,
+            356..430
+        ));
     }
 
-    fn request(notice: Option<RenderNotice>) -> DisplayRefreshRequest {
+    fn request() -> DisplayRefreshRequest {
         DisplayRefreshRequest {
             plan: Plan {
                 date: LocalDate::parse("2026-06-08").unwrap(),
                 image: "photo".to_string(),
                 caption: "caption".to_string(),
             },
+            date: LocalDate::parse("2026-06-08").unwrap(),
             reason: RefreshReason::FirstBoot,
-            notice,
             sprites: crate::device_runtime::SpriteSet {
                 caption: Some("caption-sha".to_string()),
                 date: Some("date-sha".to_string()),
-                notice: notice.map(|_| "notice-sha".to_string()),
             },
             now_epoch_seconds: 100,
         }
@@ -442,6 +435,38 @@ mod tests {
             Color::Red => (255, 0, 0),
             Color::Blue => (0, 0, 255),
             Color::Green => (0, 255, 0),
+        }
+    }
+
+    fn has_non_white_pixel_in_region(
+        frame: &[u8],
+        xs: std::ops::Range<usize>,
+        ys: std::ops::Range<usize>,
+    ) -> bool {
+        ys.clone().any(|y| {
+            xs.clone()
+                .any(|x| logical_frame_color(frame, x, y) != Color::White)
+        })
+    }
+
+    fn logical_frame_color(frame: &[u8], x: usize, y: usize) -> Color {
+        let panel_x = EPD_WIDTH - 1 - x;
+        let panel_y = EPD_HEIGHT - 1 - y;
+        let byte = frame[panel_y * EPD_ROW_BYTES + panel_x / 2];
+        let code = if panel_x.is_multiple_of(2) {
+            byte >> 4
+        } else {
+            byte & 0x0F
+        };
+
+        match code {
+            code if code == epd_color_code(Color::Black) => Color::Black,
+            code if code == epd_color_code(Color::White) => Color::White,
+            code if code == epd_color_code(Color::Yellow) => Color::Yellow,
+            code if code == epd_color_code(Color::Red) => Color::Red,
+            code if code == epd_color_code(Color::Blue) => Color::Blue,
+            code if code == epd_color_code(Color::Green) => Color::Green,
+            _ => panic!("unknown epd color code: {code}"),
         }
     }
 }

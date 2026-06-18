@@ -1,9 +1,6 @@
 pub mod cycle;
 
-use crate::power::BatteryStatus;
-use crate::schedule::{display_needs_refresh, select_plan_for_date};
-use crate::state::{PersistentDeviceState, RefreshReason, WakeReason};
-use crate::{model::LocalDate, model::Plan};
+use crate::state::WakeReason;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RunTrigger {
@@ -20,132 +17,15 @@ impl RunTrigger {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RunOutcome {
-    SyncRequested,
-    RefreshOnly,
-    SleepOnly,
-    LowBatterySkipSync,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RunInput {
-    pub trigger: RunTrigger,
-    pub now_epoch_seconds: u64,
-    pub display_refresh_due: bool,
-    pub battery: BatteryStatus,
-    pub persistent_state: PersistentDeviceState,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RunReport {
-    pub trigger: RunTrigger,
-    pub outcome: RunOutcome,
-    pub wake_reason: WakeReason,
-    pub display_refresh_due: bool,
-    pub battery: BatteryStatus,
-    pub persistent_state: PersistentDeviceState,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DisplayDecision {
-    MissingConfig,
-    NoUsablePhoto(NoUsablePhotoReason),
-    RefreshRequired { plan: Plan, reason: RefreshReason },
-    SleepOnly { plan: Plan },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum NoUsablePhotoReason {
-    NoPlan,
-    ResourceNotCached,
-}
-
-pub fn generate_display_decision(
-    plans: Option<&[Plan]>,
-    image_exists: impl FnMut(&str) -> bool,
-    date: LocalDate,
-    previous_state: Option<&PersistentDeviceState>,
-) -> DisplayDecision {
-    let Some(plans) = plans else {
-        return DisplayDecision::MissingConfig;
-    };
-
-    generate_display_decision_from_plans(plans, image_exists, date, previous_state)
-}
-
-pub fn generate_display_decision_from_plans(
-    plans: &[Plan],
-    mut image_exists: impl FnMut(&str) -> bool,
-    date: LocalDate,
-    previous_state: Option<&PersistentDeviceState>,
-) -> DisplayDecision {
-    let Some(plan) = select_plan_for_date(plans, date) else {
-        return DisplayDecision::NoUsablePhoto(NoUsablePhotoReason::NoPlan);
-    };
-
-    if !image_exists(&plan.image) {
-        return DisplayDecision::NoUsablePhoto(NoUsablePhotoReason::ResourceNotCached);
-    }
-
-    let empty_state = PersistentDeviceState::default();
-    let previous_state = previous_state.unwrap_or(&empty_state);
-
-    if display_needs_refresh(previous_state, plan) {
-        let reason = if previous_state.image.is_some() {
-            RefreshReason::PlanChanged
-        } else {
-            RefreshReason::FirstBoot
-        };
-
-        return DisplayDecision::RefreshRequired {
-            plan: plan.clone(),
-            reason,
-        };
-    }
-
-    DisplayDecision::SleepOnly { plan: plan.clone() }
-}
-
-pub fn run_once(input: RunInput) -> RunReport {
-    let wake_reason = input.trigger.wake_reason();
-
-    let sync_requested = true;
-    let effective_low_battery = input.battery.effective_low_battery();
-
-    let outcome = if sync_requested && effective_low_battery {
-        RunOutcome::LowBatterySkipSync
-    } else if sync_requested {
-        RunOutcome::SyncRequested
-    } else if input.display_refresh_due {
-        RunOutcome::RefreshOnly
-    } else {
-        RunOutcome::SleepOnly
-    };
-
-    RunReport {
-        trigger: input.trigger,
-        outcome,
-        wake_reason,
-        display_refresh_due: input.display_refresh_due,
-        battery: input.battery,
-        persistent_state: input.persistent_state,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn input(trigger: RunTrigger) -> RunInput {
-        RunInput {
-            trigger,
-            now_epoch_seconds: 1,
-            display_refresh_due: false,
-            battery: BatteryStatus::unknown(),
-            persistent_state: PersistentDeviceState::default(),
-        }
-    }
+    use crate::device_runtime::{
+        decide_display, DisplayAction, DisplayCause, DisplayTarget, RunContext,
+    };
+    use crate::model::{LocalDate, Plan};
+    use crate::power::{BatteryStatus, PowerProfile};
+    use crate::state::PersistentDeviceState;
 
     fn date(value: &str) -> LocalDate {
         LocalDate::parse(value).unwrap()
@@ -159,69 +39,56 @@ mod tests {
         }
     }
 
-    #[test]
-    fn startup_run_requests_sync() {
-        let report = run_once(input(RunTrigger::Startup));
-
-        assert_eq!(report.outcome, RunOutcome::SyncRequested);
-        assert_eq!(report.wake_reason, WakeReason::Startup);
-    }
-
-    #[test]
-    fn low_battery_skips_sync() {
-        let mut input = input(RunTrigger::Wake(WakeReason::Timer));
-        input.battery.low_battery = true;
-
-        let report = run_once(input);
-
-        assert_eq!(report.outcome, RunOutcome::LowBatterySkipSync);
-    }
-
-    #[test]
-    fn charging_low_battery_status_requests_sync() {
-        let mut input = input(RunTrigger::Wake(WakeReason::Timer));
-        input.battery = BatteryStatus::new(0, Some(0), crate::power::ChargeState::Charging, true);
-
-        let report = run_once(input);
-
-        assert_eq!(report.outcome, RunOutcome::SyncRequested);
+    fn context(plans: Option<Vec<Plan>>) -> RunContext {
+        RunContext {
+            now: 1,
+            date: date("2026-06-08"),
+            trigger: RunTrigger::Startup,
+            battery: BatteryStatus::unknown(),
+            power: PowerProfile::Battery,
+            config: Some(crate::config::Config {
+                wifi_ssid: "wifi".to_string(),
+                wifi_password: "password".to_string(),
+                base_url: "https://example.com".to_string(),
+                secret_key: "secret".to_string(),
+            }),
+            plans,
+            state: PersistentDeviceState::default(),
+            sync: crate::state::PersistentSyncState::default(),
+        }
     }
 
     #[test]
     fn display_decision_reports_missing_config() {
-        let decision = generate_display_decision(None, |_| false, date("2026-06-08"), None);
+        let mut context = context(None);
+        context.config = None;
 
-        assert_eq!(decision, DisplayDecision::MissingConfig);
+        let decision = decide_display(&context, |_| false, None);
+
+        assert_eq!(decision.cause, DisplayCause::MissingConfig);
     }
 
     #[test]
     fn display_decision_reports_no_usable_photo_when_resource_is_missing() {
         let plans = vec![plan("2026-06-08", "caption", "a")];
+        let context = context(Some(plans));
 
-        let decision =
-            generate_display_decision_from_plans(&plans, |_| false, date("2026-06-08"), None);
+        let decision = decide_display(&context, |_| false, None);
 
-        assert_eq!(
-            decision,
-            DisplayDecision::NoUsablePhoto(NoUsablePhotoReason::ResourceNotCached)
-        );
+        assert_eq!(decision.cause, DisplayCause::MissingPhoto);
     }
 
     #[test]
     fn display_decision_refreshes_cached_plan_photo() {
         let plans = vec![plan("2026-06-08", "caption", "a")];
+        let context = context(Some(plans));
 
-        let decision = generate_display_decision_from_plans(
-            &plans,
-            |image| image == "a",
-            date("2026-06-08"),
-            None,
-        );
+        let decision = decide_display(&context, |image| image == "a", None);
 
-        match decision {
-            DisplayDecision::RefreshRequired { plan, reason } => {
-                assert_eq!(plan.image, "a");
-                assert_eq!(reason, RefreshReason::FirstBoot);
+        match decision.action {
+            DisplayAction::Refresh(DisplayTarget::Photo { image, .. }) => {
+                assert_eq!(image, "a");
+                assert_eq!(decision.cause, DisplayCause::First);
             }
             other => panic!("unexpected decision: {other:?}"),
         }
@@ -234,18 +101,14 @@ mod tests {
             plan("2026-06-07", "day-7", "7"),
             plan("2026-06-13", "future", "13"),
         ];
+        let mut context = context(Some(plans));
+        context.date = date("2026-06-10");
 
-        let decision = generate_display_decision_from_plans(
-            &plans,
-            |image| image == "7",
-            date("2026-06-10"),
-            None,
-        );
+        let decision = decide_display(&context, |image| image == "7", None);
 
-        match decision {
-            DisplayDecision::RefreshRequired { plan, .. } => {
-                assert_eq!(plan.date, date("2026-06-07"));
-                assert_eq!(plan.caption, "day-7");
+        match decision.action {
+            DisplayAction::Refresh(DisplayTarget::Photo { caption, .. }) => {
+                assert_eq!(caption, "day-7");
             }
             other => panic!("unexpected decision: {other:?}"),
         }
@@ -257,17 +120,14 @@ mod tests {
             plan("2026-06-12", "future-12", "12"),
             plan("2026-06-13", "future-13", "13"),
         ];
+        let mut context = context(Some(plans));
+        context.date = date("2026-06-10");
 
-        let decision = generate_display_decision_from_plans(
-            &plans,
-            |image| image == "12",
-            date("2026-06-10"),
-            None,
-        );
+        let decision = decide_display(&context, |image| image == "12", None);
 
-        match decision {
-            DisplayDecision::RefreshRequired { plan, .. } => {
-                assert_eq!(plan.date, date("2026-06-12"));
+        match decision.action {
+            DisplayAction::Refresh(DisplayTarget::Photo { image, .. }) => {
+                assert_eq!(image, "12");
             }
             other => panic!("unexpected decision: {other:?}"),
         }
@@ -276,20 +136,11 @@ mod tests {
     #[test]
     fn display_decision_sleeps_when_previous_state_matches() {
         let plans = vec![plan("2026-06-08", "caption", "a")];
-        let previous_state = PersistentDeviceState::from_plan(&plans[0], None);
+        let mut context = context(Some(plans.clone()));
+        context.state = PersistentDeviceState::from_display(date("2026-06-08"), &plans[0]);
 
-        let decision = generate_display_decision_from_plans(
-            &plans,
-            |image| image == "a",
-            date("2026-06-08"),
-            Some(&previous_state),
-        );
+        let decision = decide_display(&context, |image| image == "a", None);
 
-        match decision {
-            DisplayDecision::SleepOnly { plan } => {
-                assert_eq!(plan.image, "a");
-            }
-            other => panic!("unexpected decision: {other:?}"),
-        }
+        assert_eq!(decision.action, DisplayAction::Keep);
     }
 }

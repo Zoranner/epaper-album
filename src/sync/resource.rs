@@ -2,41 +2,61 @@ use crate::cloud::{
     image_url, parse_plan_response, parse_sprite_metadata_response, plans_url, sprite_download_url,
     sprite_url, CloudSyncError, HttpClient,
 };
+use crate::graphics::bmp::BmpImage;
 use crate::model::Plan;
-use crate::storage::{ResourceStore, StorageJsonWrite, StorageWrite};
+use crate::storage::{ResourceStore, StorageBinaryRead, StorageJsonWrite, StorageWrite};
 use sha2::{Digest, Sha256};
-use std::fmt;
+use thiserror::Error;
 
 const MAX_PLAN_RESPONSE_BYTES: usize = 32 * 1024;
 const MAX_SPRITE_META_BYTES: usize = 1024;
 const MAX_IMAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SPRITE_BYTES: usize = 256 * 1024;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum ResourceSyncError {
+    #[error("cloud: {0}")]
     Cloud(CloudSyncError),
+
+    #[error("sha256-mismatch: expected {expected}, actual {actual}")]
     Sha256Mismatch { expected: String, actual: String },
+
+    #[error("storage: {0:?}")]
     Storage(StorageWrite),
+
+    #[error("storage-json: {0:?}")]
     StorageJson(StorageJsonWrite),
 }
 
-impl fmt::Display for ResourceSyncError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl ResourceSyncError {
+    pub fn code(&self) -> String {
         match self {
-            Self::Cloud(error) => write!(formatter, "cloud: {error}"),
+            Self::Cloud(error) => format!("cloud.{}", error.code()),
+            Self::Sha256Mismatch { .. } => "sha256-mismatch".to_string(),
+            Self::Storage(_) => "storage".to_string(),
+            Self::StorageJson(_) => "storage-json".to_string(),
+        }
+    }
+
+    pub const fn category(&self) -> &'static str {
+        match self {
+            Self::Cloud(_) => "cloud",
+            Self::Sha256Mismatch { .. } => "resource",
+            Self::Storage(_) | Self::StorageJson(_) => "storage",
+        }
+    }
+
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::Cloud(error) => Some(error.to_string()),
             Self::Sha256Mismatch { expected, actual } => {
-                write!(
-                    formatter,
-                    "sha256-mismatch: expected {expected}, actual {actual}"
-                )
+                Some(format!("expected={expected} actual={actual}"))
             }
-            Self::Storage(error) => write!(formatter, "storage: {error:?}"),
-            Self::StorageJson(error) => write!(formatter, "storage-json: {error:?}"),
+            Self::Storage(error) => Some(format!("{error:?}")),
+            Self::StorageJson(error) => Some(format!("{error:?}")),
         }
     }
 }
-
-impl std::error::Error for ResourceSyncError {}
 
 impl From<CloudSyncError> for ResourceSyncError {
     fn from(error: CloudSyncError) -> Self {
@@ -98,7 +118,7 @@ pub fn sync_sprite(
     let metadata_url = sprite_url(base_url, kind, text)?;
     let metadata_body = client.get_bytes(&metadata_url, secret_key, MAX_SPRITE_META_BYTES)?;
     let metadata = parse_sprite_metadata_response(&metadata_body)?;
-    if store.has_sprite(&metadata.sha256) {
+    if cached_sprite_is_renderable(store, &metadata.sha256) {
         return Ok(SpriteSyncResult {
             sha256: metadata.sha256,
             downloaded: false,
@@ -112,6 +132,14 @@ pub fn sync_sprite(
         sha256: metadata.sha256,
         downloaded: true,
     })
+}
+
+fn cached_sprite_is_renderable(store: &impl ResourceStore, sha256: &str) -> bool {
+    let StorageBinaryRead::Bytes(bytes) = store.read_sprite_bytes(sha256) else {
+        return false;
+    };
+
+    BmpImage::parse(&bytes).is_ok()
 }
 
 fn save_or_error(result: StorageWrite) -> Result<(), ResourceSyncError> {
@@ -211,6 +239,22 @@ mod tests {
             self.result()
         }
 
+        fn read_image_bytes(&self, sha256: &str) -> crate::storage::StorageBinaryRead {
+            self.images
+                .get(sha256)
+                .cloned()
+                .map(crate::storage::StorageBinaryRead::Bytes)
+                .unwrap_or(crate::storage::StorageBinaryRead::Missing)
+        }
+
+        fn read_sprite_bytes(&self, sha256: &str) -> crate::storage::StorageBinaryRead {
+            self.sprites
+                .get(sha256)
+                .cloned()
+                .map(crate::storage::StorageBinaryRead::Bytes)
+                .unwrap_or(crate::storage::StorageBinaryRead::Missing)
+        }
+
         fn has_image(&self, sha256: &str) -> bool {
             self.images.contains_key(sha256)
         }
@@ -299,5 +343,23 @@ mod tests {
             }
         );
         assert_eq!(store.sprites.get(sha256), Some(&b"sprite bytes".to_vec()));
+    }
+
+    #[test]
+    fn cloud_error_keeps_http_failure_detail() {
+        let error = ResourceSyncError::Cloud(CloudSyncError::HttpRequest(
+            "ESP_ERR_HTTP_CONNECT".to_string(),
+        ));
+
+        assert_eq!(error.code(), "cloud.http-request");
+        assert_eq!(error.category(), "cloud");
+        assert_eq!(
+            error.detail(),
+            Some("http-request: ESP_ERR_HTTP_CONNECT".to_string())
+        );
+        assert_eq!(
+            error.to_string(),
+            "cloud: http-request: ESP_ERR_HTTP_CONNECT"
+        );
     }
 }

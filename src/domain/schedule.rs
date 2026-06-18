@@ -1,5 +1,4 @@
 use crate::model::{LocalDate, Plan};
-use crate::state::PersistentDeviceState;
 
 pub fn select_plan_for_date(plans: &[Plan], date: LocalDate) -> Option<&Plan> {
     plans
@@ -12,10 +11,6 @@ pub fn select_plan_for_date(plans: &[Plan], date: LocalDate) -> Option<&Plan> {
                 .filter(|plan| plan.date > date)
                 .min_by_key(|plan| plan.date)
         })
-}
-
-pub fn display_needs_refresh(previous: &PersistentDeviceState, next: &Plan) -> bool {
-    !previous.matches_plan(next)
 }
 
 pub fn next_plan_change_date(plans: &[Plan], date: LocalDate) -> Option<LocalDate> {
@@ -82,27 +77,6 @@ mod tests {
         let selected = select_plan_for_date(&plans, date("2026-06-10")).unwrap();
 
         assert_eq!(selected.caption, "future-12");
-    }
-
-    #[test]
-    fn detects_when_display_content_changed() {
-        let next = plan("2026-06-06", "caption", "hash");
-        let previous = PersistentDeviceState {
-            date: Some(date("2026-06-05")),
-            image: Some("hash".to_string()),
-            caption: Some("caption".to_string()),
-            notice: None,
-        };
-
-        assert!(display_needs_refresh(&previous, &next));
-    }
-
-    #[test]
-    fn skips_refresh_when_display_content_is_unchanged() {
-        let next = plan("2026-06-06", "caption", "hash");
-        let previous = PersistentDeviceState::from_plan(&next, None);
-
-        assert!(!display_needs_refresh(&previous, &next));
     }
 
     #[test]
