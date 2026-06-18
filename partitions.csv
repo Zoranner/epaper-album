@@ -1,0 +1,5 @@
+# Name,   Type, SubType, Offset,  Size, Flags
+# ESP32-S3 module has 16MB flash; keep one large factory app and no OTA.
+nvs,      data, nvs,     ,        0x6000,
+phy_init, data, phy,     ,        0x1000,
+factory,  app,  factory, ,        4M,
