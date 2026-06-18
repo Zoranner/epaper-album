@@ -1,4 +1,4 @@
-import { ApiUnauthorizedError, authHeaders, readJsonEnvelope, request, tokenInit } from './client';
+import { ApiError, ApiUnauthorizedError, authHeaders, readJsonEnvelope, request, tokenInit } from './client';
 import type { AdminImage } from './types';
 
 export function listImages(token: string, keyword = ''): Promise<AdminImage[]> {
@@ -69,7 +69,7 @@ export async function getImageBlob(token: string, sha256: string): Promise<Blob>
     if (response.status === 401) {
       throw new ApiUnauthorizedError(envelope.message || undefined);
     }
-    throw new Error(envelope.message || `图片读取失败：${response.status}`);
+    throw new ApiError(envelope.message || `图片读取失败：${response.status}`, response.status, envelope.code);
   }
 
   return response.blob();

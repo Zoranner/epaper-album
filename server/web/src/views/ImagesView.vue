@@ -76,6 +76,7 @@ import {
   getImageBlob,
   listImages as listImagesRequest,
   reditherImage,
+  errorMessage,
   type AdminImage,
   type ImageStatus,
 } from '../api';
@@ -125,7 +126,7 @@ async function loadImages() {
     images.value = await listImagesRequest(auth.token.value, keyword.value);
     await loadReadyPreviews();
   } catch (loadError) {
-    error.value = loadError instanceof Error ? loadError.message : '图片加载失败';
+    error.value = errorMessage(loadError, '图片加载失败');
   }
 }
 
@@ -169,7 +170,7 @@ async function handleRedither(image: AdminImage) {
     revokePreview(image.sha256);
     upsertImage(updated);
   } catch (reditherError) {
-    error.value = reditherError instanceof Error ? reditherError.message : '图片重新抖动失败';
+    error.value = errorMessage(reditherError, '图片重新抖动失败');
   }
 }
 
@@ -196,7 +197,7 @@ async function confirmDelete() {
     revokePreview(sha256);
     deleteTarget.value = null;
   } catch (deleteError) {
-    error.value = deleteError instanceof Error ? deleteError.message : '图片删除失败';
+    error.value = errorMessage(deleteError, '图片删除失败');
   } finally {
     deleting.value = false;
   }
@@ -230,7 +231,7 @@ async function refreshPreview(sha256: string, showError = true) {
     };
   } catch (previewError) {
     if (showError) {
-      error.value = previewError instanceof Error ? previewError.message : '预览加载失败';
+      error.value = errorMessage(previewError, '预览加载失败');
     }
   }
 }

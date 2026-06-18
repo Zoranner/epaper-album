@@ -36,7 +36,7 @@
 
 <script setup lang="ts">
 import { reactive, ref, watch } from 'vue';
-import { createPlan, updatePlan, type AdminImage, type Plan } from '../../api';
+import { createPlan, errorMessage, updatePlan, type AdminImage, type Plan } from '../../api';
 import Button from '../base/Button.vue';
 import DatePicker from '../input/DatePicker.vue';
 import Input from '../input/Input.vue';
@@ -85,7 +85,7 @@ async function submit() {
     }
     emit('saved');
   } catch (saveError) {
-    error.value = saveError instanceof Error ? saveError.message : '计划保存失败';
+    error.value = errorMessage(saveError, '计划保存失败');
   } finally {
     saving.value = false;
   }

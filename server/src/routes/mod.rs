@@ -69,7 +69,6 @@ impl AdminSession {
 enum SpriteKind {
     Caption,
     Date,
-    Notice,
     Status,
 }
 
@@ -154,7 +153,6 @@ impl SpriteKind {
         match self {
             Self::Caption => "caption",
             Self::Date => "date",
-            Self::Notice => "notice",
             Self::Status => "status",
         }
     }
@@ -1111,7 +1109,6 @@ fn validate_sprite_payload(payload: &SpritePayload) -> Result<SpriteKind, AppErr
     let kind = match payload.kind.as_str() {
         "caption" => SpriteKind::Caption,
         "date" => SpriteKind::Date,
-        "notice" => SpriteKind::Notice,
         "status" => SpriteKind::Status,
         _ => return Err(AppError::BadRequest("精灵图类型不正确".to_string())),
     };

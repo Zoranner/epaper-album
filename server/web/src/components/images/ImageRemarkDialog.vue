@@ -20,7 +20,7 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import { updateImageRemark, type AdminImage } from '../../api';
+import { errorMessage, updateImageRemark, type AdminImage } from '../../api';
 import Button from '../base/Button.vue';
 import Input from '../input/Input.vue';
 import Dialog from '../overlay/Dialog.vue';
@@ -53,7 +53,7 @@ async function submit() {
     const image = await updateImageRemark(auth.token.value, props.image.sha256, remark.value);
     emit('saved', image);
   } catch (saveError) {
-    error.value = saveError instanceof Error ? saveError.message : '备注保存失败';
+    error.value = errorMessage(saveError, '备注保存失败');
   } finally {
     saving.value = false;
   }

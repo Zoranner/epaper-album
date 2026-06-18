@@ -28,7 +28,7 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import { uploadImage, type AdminImage } from '../../api';
+import { errorMessage, uploadImage, type AdminImage } from '../../api';
 import Button from '../base/Button.vue';
 import FileInput from '../input/FileInput.vue';
 import Input from '../input/Input.vue';
@@ -67,7 +67,7 @@ async function submit() {
     const image = await uploadImage(auth.token.value, selectedFile.value, remark.value);
     emit('uploaded', image);
   } catch (uploadError) {
-    error.value = uploadError instanceof Error ? uploadError.message : '图片上传失败';
+    error.value = errorMessage(uploadError, '图片上传失败');
   } finally {
     uploading.value = false;
   }

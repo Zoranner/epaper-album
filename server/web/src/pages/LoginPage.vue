@@ -33,6 +33,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
+import { errorMessage } from '../api';
 import { Button, Input } from '../components';
 import { useAuthStore } from '../composables/useAuthStore';
 
@@ -49,7 +50,7 @@ async function submit() {
     await auth.login(auth.loginForm.username, auth.loginForm.password);
     emit('loggedIn');
   } catch (loginError) {
-    error.value = loginError instanceof Error ? loginError.message : '登录失败';
+    error.value = errorMessage(loginError, '登录失败');
   }
 }
 </script>

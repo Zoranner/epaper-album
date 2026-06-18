@@ -1034,7 +1034,7 @@ async fn sprite_meta_returns_sha256_and_sprite_download_uses_data_cache() {
 }
 
 #[tokio::test]
-async fn sprite_accepts_notice_and_status_types() {
+async fn sprite_accepts_status_type() {
     if !sprite_font_assets_available() {
         eprintln!("skip sprite type test: fixed font files are not installed");
         return;
@@ -1042,28 +1042,44 @@ async fn sprite_accepts_notice_and_status_types() {
 
     let app = test_app().await;
 
-    for kind in ["notice", "status"] {
-        let response = app
-            .app
-            .clone()
-            .oneshot(
-                user_request(&format!("/api/sprites?type={kind}&text=OFFLINE"))
-                    .body(Body::empty())
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = response
-            .into_body()
-            .collect()
-            .await
-            .expect("collect body")
-            .to_bytes();
-        let value: Value = serde_json::from_slice(&bytes).expect("json sprite metadata");
-        let sha256 = value["data"]["sha256"].as_str().expect("sprite sha256");
-        assert_eq!(sha256.len(), 64);
-    }
+    let response = app
+        .app
+        .clone()
+        .oneshot(
+            user_request("/api/sprites?type=status&text=OFFLINE")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collect body")
+        .to_bytes();
+    let value: Value = serde_json::from_slice(&bytes).expect("json sprite metadata");
+    let sha256 = value["data"]["sha256"].as_str().expect("sprite sha256");
+    assert_eq!(sha256.len(), 64);
+}
+
+#[tokio::test]
+async fn sprite_rejects_notice_type() {
+    let app = test_app().await;
+
+    let response = app
+        .app
+        .clone()
+        .oneshot(
+            user_request("/api/sprites?type=notice&text=OFFLINE")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

@@ -58,6 +58,7 @@ import {
   getImageBlob,
   listImages,
   listPlans as listPlansRequest,
+  errorMessage,
   type AdminImage,
   type Plan,
 } from '../api';
@@ -109,7 +110,7 @@ async function loadPlans() {
     images.value = nextImages;
     await loadPreviews(plans.value, nextImages);
   } catch (loadError) {
-    error.value = loadError instanceof Error ? loadError.message : '计划加载失败';
+    error.value = errorMessage(loadError, '计划加载失败');
   }
 }
 
@@ -148,7 +149,7 @@ async function deleteSelectedPlan() {
     deletingPlan.value = null;
     await loadPlans();
   } catch (deleteError) {
-    error.value = deleteError instanceof Error ? deleteError.message : '计划删除失败';
+    error.value = errorMessage(deleteError, '计划删除失败');
   } finally {
     deleting.value = false;
   }

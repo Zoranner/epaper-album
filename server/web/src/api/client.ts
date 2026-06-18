@@ -4,10 +4,28 @@ const apiBase = '/api';
 const unauthorizedEventName = 'epaper-album:unauthorized';
 
 export class ApiUnauthorizedError extends Error {
+  readonly status = 401;
+  readonly code = 401;
+
   constructor(message = '登录信息已失效，请重新登录') {
     super(message);
     this.name = 'ApiUnauthorizedError';
   }
+}
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: number,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+export function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 export function onUnauthorized(listener: () => void): () => void {
@@ -36,7 +54,7 @@ export async function readJsonEnvelope<T>(response: Response): Promise<ApiEnvelo
     if (response.status === 401) {
       throw new ApiUnauthorizedError();
     }
-    throw new Error(text || `请求失败：${response.status}`);
+    throw new ApiError(text || `请求失败：${response.status}`, response.status);
   }
 
   return (await response.json()) as ApiEnvelope<T>;
@@ -56,7 +74,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiUnauthorizedError(envelope.message || undefined);
   }
   if (!response.ok || envelope.code !== 0) {
-    throw new Error(envelope.message || `请求失败：${response.status}`);
+    throw new ApiError(envelope.message || `请求失败：${response.status}`, response.status, envelope.code);
   }
 
   return envelope.data;
