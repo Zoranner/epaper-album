@@ -6,8 +6,9 @@
     </div>
     <div class="image-tile__body">
       <p>{{ image.remark || '未填写备注' }}</p>
-      <div v-if="image.tags.length > 0" class="tag-list">
-        <span v-for="tag in image.tags" :key="tag" class="tag-chip">{{ tag }}</span>
+      <div v-if="image.tags.length > 0" class="tag-list compact" :title="image.tags.join(' ')">
+        <span v-for="tag in visibleTags" :key="tag" class="tag-chip">{{ tag }}</span>
+        <span v-if="hiddenTagCount > 0" class="tag-chip muted">+{{ hiddenTagCount }}</span>
       </div>
       <code :title="image.sha256">{{ shortSha(image.sha256) }}</code>
     </div>
@@ -47,6 +48,8 @@ const statusText = computed(() => {
   }
   return '待处理';
 });
+const visibleTags = computed(() => props.image.tags.slice(0, 4));
+const hiddenTagCount = computed(() => Math.max(0, props.image.tags.length - visibleTags.value.length));
 const menuItems = computed<ActionMenuItem[]>(() => {
   const items: ActionMenuItem[] = [{ key: 'edit', label: '编辑信息', icon: 'edit' }];
   if (props.image.status === 'ready') {

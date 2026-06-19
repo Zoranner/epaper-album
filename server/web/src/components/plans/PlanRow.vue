@@ -20,8 +20,9 @@
       <div v-else class="plan-thumb empty">未选</div>
       <div class="plan-row__meta">
         <span>{{ plan.type === 'random' ? '随机标签' : '图片 SHA256' }}</span>
-        <div v-if="plan.type === 'random' && plan.tags?.length" class="tag-list">
-          <span v-for="tag in plan.tags" :key="tag" class="tag-chip">{{ tag }}</span>
+        <div v-if="plan.type === 'random' && plan.tags?.length" class="tag-list compact" :title="plan.tags.join(' ')">
+          <span v-for="tag in visibleTags" :key="tag" class="tag-chip">{{ tag }}</span>
+          <span v-if="hiddenTagCount > 0" class="tag-chip muted">+{{ hiddenTagCount }}</span>
         </div>
         <code v-else>{{ plan.image || '-' }}</code>
       </div>
@@ -46,6 +47,8 @@ const emit = defineEmits<{
 
 const planImage = computed(() => props.plan.imageRecord ?? null);
 const formattedDate = computed(() => formatDate(props.plan.date));
+const visibleTags = computed(() => props.plan.tags?.slice(0, 6) ?? []);
+const hiddenTagCount = computed(() => Math.max(0, (props.plan.tags?.length ?? 0) - visibleTags.value.length));
 const menuItems: ActionMenuItem[] = [
   { key: 'edit', label: '编辑', icon: 'edit' },
   { key: 'delete', label: '删除', icon: 'trash', danger: true },

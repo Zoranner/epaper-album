@@ -427,13 +427,19 @@
 }
 
 .tag-list {
+  min-width: 0;
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
 }
 
+.tag-list.compact {
+  max-height: 48px;
+  overflow: hidden;
+}
+
 .tag-chip {
-  max-width: 100%;
+  max-width: min(100%, 96px);
   padding: 2px 6px;
   border: 1px solid var(--color-line);
   border-radius: 999px;
@@ -444,6 +450,11 @@
   line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tag-chip.muted {
+  flex: 0 0 auto;
+  color: var(--color-text);
 }
 
 .image-tile__footer {
