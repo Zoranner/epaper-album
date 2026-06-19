@@ -114,13 +114,35 @@ async fn login(app: &TestApp, username: &str, password: &str) -> (StatusCode, Va
 }
 
 async fn seed_image(pool: &SqlitePool, sha256: &str, status: &str, remark: &str) {
-    sqlx::query("INSERT INTO images (sha256, status, remark) VALUES (?, ?, ?)")
-        .bind(sha256)
-        .bind(status)
-        .bind(remark)
-        .execute(pool)
-        .await
-        .expect("seed image");
+    let has_created_at = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM pragma_table_info('images') WHERE name = 'created_at'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("inspect images columns")
+        > 0;
+
+    if has_created_at {
+        sqlx::query(
+            "INSERT INTO images (sha256, status, remark, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        )
+            .bind(sha256)
+            .bind(status)
+            .bind(remark)
+            .bind("2026-06-20T00:00:00+00:00")
+            .bind("2026-06-20T00:00:00+00:00")
+            .execute(pool)
+            .await
+            .expect("seed image");
+    } else {
+        sqlx::query("INSERT INTO images (sha256, status, remark) VALUES (?, ?, ?)")
+            .bind(sha256)
+            .bind(status)
+            .bind(remark)
+            .execute(pool)
+            .await
+            .expect("seed image");
+    }
 }
 
 async fn seed_image_tags(pool: &SqlitePool, sha256: &str, tags: &[&str]) {
@@ -827,6 +849,8 @@ async fn image_list_requires_admin_and_remark_update_returns_updated_image() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(value["data"]["remark"], "新备注");
     assert_eq!(value["data"]["tags"], json!(["家庭", "旅行"]));
+    assert_eq!(value["data"]["createdAt"], "2026-06-20T00:00:00+00:00");
+    assert!(value["data"]["updatedAt"].as_str().is_some());
     assert_eq!(image_remark(&app.pool, &sha).await, "新备注");
 }
 
@@ -857,6 +881,8 @@ async fn image_upload_and_list_support_tags_filter() {
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(value["data"]["sha256"], expected_sha);
     assert_eq!(value["data"]["tags"], json!(["家庭", "旅行"]));
+    assert!(value["data"]["createdAt"].as_str().is_some());
+    assert!(value["data"]["updatedAt"].as_str().is_some());
 
     let other_sha = valid_sha(44);
     seed_image(&app.pool, &other_sha, "ready", "家庭").await;
@@ -986,7 +1012,8 @@ async fn upload_deduplicates_same_image_and_requeues_failed_image() {
         .join(format!("{expected_sha}.png"))
         .exists());
 
-    sqlx::query("UPDATE images SET status = 'failed' WHERE sha256 = ?")
+    sqlx::query("UPDATE images SET status = 'failed', updated_at = ? WHERE sha256 = ?")
+        .bind("2026-06-20T00:01:00+00:00")
         .bind(&expected_sha)
         .execute(&app.pool)
         .await

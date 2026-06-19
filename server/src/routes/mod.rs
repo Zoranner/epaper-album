@@ -35,7 +35,7 @@ use crate::{
         SpritePayload,
     },
 };
-use protocol::LocalDate;
+use protocol::{ImageStatus, LocalDate};
 
 const DISPLAY_WIDTH: u32 = 800;
 const DISPLAY_HEIGHT: u32 = 480;
@@ -267,11 +267,7 @@ async fn list_plans(
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
     let permission = require_any_permission(&headers, &state.app).await?;
-    let days = parse_days(params.get("days"));
-    let start = Local::now().date_naive();
-    let end = start + Duration::days((days - 1) as i64);
-    let start = local_date_from_chrono(start)?;
-    let end = local_date_from_chrono(end)?;
+    let (start, end) = parse_plan_range(&params)?;
 
     match permission {
         Permission::Admin => Ok(Json(ApiResponse::ok(
@@ -485,7 +481,7 @@ async fn download_image(
         .get_image(&sha256)
         .await?
         .ok_or_else(|| AppError::NotFound("图片不存在".to_string()))?;
-    if image.status != "ready" {
+    if image.status != ImageStatus::Ready {
         return Err(AppError::NotFound("图片不存在".to_string()));
     }
 
@@ -1079,6 +1075,24 @@ fn parse_days(value: Option<&String>) -> u32 {
         .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(3)
         .clamp(1, 7)
+}
+
+fn parse_plan_range(params: &HashMap<String, String>) -> Result<(LocalDate, LocalDate), AppError> {
+    if let (Some(start), Some(end)) = (params.get("start"), params.get("end")) {
+        let start = parse_plan_date(start)?;
+        let end = parse_plan_date(end)?;
+        if start > end {
+            return Err(AppError::BadRequest(
+                "计划结束日期不能早于开始日期".to_string(),
+            ));
+        }
+        return Ok((start, end));
+    }
+
+    let days = parse_days(params.get("days"));
+    let start = Local::now().date_naive();
+    let end = start + Duration::days((days - 1) as i64);
+    Ok((local_date_from_chrono(start)?, local_date_from_chrono(end)?))
 }
 
 fn validate_plan_payload(payload: &Plan) -> Result<(), AppError> {
