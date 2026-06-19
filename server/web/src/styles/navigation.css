@@ -1,0 +1,70 @@
+.action-menu {
+  position: relative;
+  display: inline-flex;
+  width: var(--item-action-size);
+  height: var(--item-action-size);
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 var(--item-action-size);
+}
+
+.action-menu__trigger {
+  display: inline-grid;
+  place-items: center;
+  width: var(--item-action-size);
+  height: var(--item-action-size);
+}
+
+.action-menu__items {
+  position: fixed;
+  z-index: 80;
+  width: 160px;
+  display: grid;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--color-surface);
+  box-shadow: 0 8px 18px rgb(32 36 33 / 0.12);
+}
+
+.action-menu__items button {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--color-line-soft);
+  padding: 0 var(--space-2);
+  background: transparent;
+  color: var(--color-text-body);
+  font-size: var(--text-sm);
+  line-height: 1;
+  text-align: left;
+  cursor: pointer;
+}
+
+.action-menu__items span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action-menu__items button:last-child {
+  border-bottom: 0;
+}
+
+.action-menu__items button:hover:not(:disabled) {
+  background: var(--color-surface-muted);
+}
+
+.action-menu__items button.danger {
+  color: var(--color-error-text);
+}
+
+.action-menu__items button:disabled,
+.action-menu__items button.disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}

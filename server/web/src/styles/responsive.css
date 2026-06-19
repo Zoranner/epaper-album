@@ -1,0 +1,241 @@
+@media (max-width: 760px) {
+  :root {
+    --item-action-size: 42px;
+  }
+
+  .button {
+    min-height: 42px;
+  }
+
+  .button.small {
+    min-height: 40px;
+    font-size: var(--text-sm);
+  }
+
+  .button.icon-only,
+  .button.icon-only.small {
+    width: 42px;
+    min-height: 42px;
+  }
+
+  .field.small .field__control,
+  .field__control {
+    min-height: 42px;
+    font-size: var(--text-sm);
+  }
+
+  .select {
+    min-width: 0;
+  }
+
+  .date-picker__panel {
+    position: fixed;
+    left: var(--space-3);
+    right: var(--space-3);
+    top: auto;
+    bottom: var(--space-3);
+    width: auto;
+    padding: var(--space-3);
+  }
+
+  .date-picker__days button {
+    min-height: 40px;
+  }
+
+  .action-menu__items {
+    width: 160px;
+  }
+
+  .action-menu__items button {
+    min-height: 44px;
+    padding: 0 var(--space-3);
+  }
+
+  .empty-state {
+    padding: var(--space-5) var(--space-3);
+  }
+
+  .dialog__backdrop {
+    align-items: end;
+    padding: 0;
+  }
+
+  .dialog {
+    width: 100%;
+    max-height: calc(100dvh - 24px);
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+    padding: var(--space-4) var(--space-3);
+  }
+
+  .dialog__header {
+    align-items: flex-start;
+  }
+
+  .dialog-actions {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .dialog-actions__meta {
+    margin-right: 0;
+  }
+
+  .dialog-actions__buttons {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2);
+  }
+
+  .dialog-actions__buttons .button {
+    width: 100%;
+  }
+
+  .image-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2);
+  }
+
+  .image-tile__preview {
+    font-size: var(--text-xs);
+  }
+
+  .image-tile__footer {
+    min-height: 42px;
+  }
+
+  .image-detail {
+    grid-template-columns: 1fr;
+    gap: var(--space-3);
+  }
+
+  .image-detail__preview {
+    min-height: 0;
+    aspect-ratio: 5 / 3;
+  }
+
+  .image-detail__panel {
+    gap: var(--space-3);
+  }
+
+  .image-detail__tags {
+    max-height: 96px;
+  }
+
+  .plan-dialog__fields {
+    grid-template-columns: 1fr;
+  }
+
+  .plan-mobile-agenda__nav {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: var(--item-action-size) minmax(0, 1fr) var(--item-action-size);
+    align-items: center;
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    background: var(--color-surface);
+  }
+
+  .plan-mobile-agenda__nav button {
+    min-height: var(--item-action-size);
+    display: grid;
+    place-items: center;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-muted);
+  }
+
+  .plan-mobile-agenda__nav strong {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text);
+    font-size: var(--text-md);
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .plan-mobile-agenda__days {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 1px;
+    background: var(--color-line);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+
+  .plan-mobile-day {
+    min-height: 38px;
+    border: 0;
+    background: var(--color-surface);
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+    cursor: pointer;
+  }
+
+  .plan-mobile-day.planned {
+    color: var(--color-text);
+    font-weight: 700;
+  }
+
+  .plan-mobile-day.today {
+    box-shadow: inset 0 0 0 2px var(--color-primary);
+  }
+
+  .plan-mobile-day.selected {
+    background: var(--color-primary);
+    color: #fff;
+  }
+
+  .plan-mobile-day.muted {
+    background: var(--color-surface-muted);
+  }
+
+  .plan-picker__toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .picker-grid {
+    max-height: min(42vh, 360px);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .picker-tile {
+    min-height: 72px;
+  }
+}
+
+@media (max-width: 900px) {
+  .plan-calendar {
+    grid-template-columns: 1fr;
+    overflow: visible;
+  }
+
+  .plan-month,
+  .plan-calendar__detail {
+    display: none;
+  }
+
+  .plan-mobile-agenda {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .plan-mobile-agenda .plan-detail-panel {
+    height: auto;
+  }
+}
+
+@media (max-width: 360px) {
+  .image-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .module-actions {
+    grid-template-columns: 1fr;
+  }
+}
