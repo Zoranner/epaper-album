@@ -68,6 +68,7 @@ import { useAuthStore } from '../../composables/useAuthStore';
 const props = defineProps<{
   open: boolean;
   plan: PlanView | null;
+  initialDate?: string;
   images: AdminImage[];
   previewUrls: Record<string, string>;
 }>();
@@ -141,7 +142,7 @@ function selectImage(sha256: string) {
 }
 
 function loadDraft(plan: PlanView | null) {
-  draft.date = plan?.date ?? todayDate();
+  draft.date = plan?.date ?? props.initialDate ?? todayDate();
   draft.caption = plan?.caption ?? '';
   draftType.value = plan?.type ?? 'fixed';
   selectedImage.value = plan?.image ?? '';

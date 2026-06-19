@@ -6,6 +6,11 @@ export function listPlans(token: string, days: number): Promise<Plan[]> {
   return request<Plan[]>(`/plans?${params.toString()}`, tokenInit(token));
 }
 
+export function listPlansByRange(token: string, start: string, end: string): Promise<Plan[]> {
+  const params = new URLSearchParams({ start, end });
+  return request<Plan[]>(`/plans?${params.toString()}`, tokenInit(token));
+}
+
 export function createPlan(token: string, payload: Plan): Promise<Plan> {
   return request<Plan>(
     '/plans',

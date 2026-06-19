@@ -7,9 +7,14 @@
             <h2 v-if="title" class="dialog__title">{{ title }}</h2>
             <p v-if="description" class="dialog__description">{{ description }}</p>
           </div>
-          <Button icon="close" icon-only label="关闭" variant="ghost" @click="$emit('close')" />
+          <div class="dialog__header-actions">
+            <slot name="actions"></slot>
+            <Button icon="close" icon-only label="关闭" variant="ghost" @click="$emit('close')" />
+          </div>
         </header>
-        <slot></slot>
+        <div class="dialog__body">
+          <slot></slot>
+        </div>
         <footer v-if="$slots.footer" class="dialog__footer">
           <slot name="footer"></slot>
         </footer>
@@ -19,9 +24,11 @@
 </template>
 
 <script setup lang="ts">
+import { onBeforeUnmount, watch } from 'vue';
 import Button from '../base/Button.vue';
+import { lockDialogScroll, unlockDialogScroll } from './dialogScrollLock';
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     open: boolean;
     title?: string;
@@ -36,4 +43,23 @@ withDefaults(
 defineEmits<{
   close: [];
 }>();
+
+watch(
+  () => props.open,
+  (open, wasOpen) => {
+    if (open && !wasOpen) {
+      lockDialogScroll();
+      return;
+    }
+    if (!open && wasOpen) {
+      unlockDialogScroll();
+    }
+  },
+);
+
+onBeforeUnmount(() => {
+  if (props.open) {
+    unlockDialogScroll();
+  }
+});
 </script>

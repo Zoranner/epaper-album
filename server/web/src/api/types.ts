@@ -5,6 +5,8 @@ export interface AdminImage {
   status: ImageStatus;
   remark: string;
   tags: string[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type PlanType = 'fixed' | 'random';

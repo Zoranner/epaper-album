@@ -23,7 +23,7 @@
         @click="$emit('select', image.sha256)"
       >
         <img v-if="previewUrls[image.sha256]" :src="previewUrls[image.sha256]" :alt="image.sha256" />
-        <span v-else>{{ statusText(image.status) }}</span>
+        <StatusBadge v-else :status="image.status" />
       </button>
     </div>
   </section>
@@ -31,7 +31,8 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import type { AdminImage, ImageStatus } from '../../api';
+import type { AdminImage } from '../../api';
+import StatusBadge from '../display/StatusBadge.vue';
 import EmptyState from '../feedback/EmptyState.vue';
 import Input from '../input/Input.vue';
 
@@ -60,13 +61,4 @@ const filteredImages = computed(() => {
   );
 });
 
-function statusText(status: ImageStatus) {
-  if (status === 'ready') {
-    return '可显示';
-  }
-  if (status === 'failed') {
-    return '失败';
-  }
-  return '处理中';
-}
 </script>

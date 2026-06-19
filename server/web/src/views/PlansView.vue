@@ -1,32 +1,25 @@
 <template>
   <section class="module-view">
-    <header class="module-toolbar">
-      <div>
-        <h2>计划管理</h2>
-        <p>维护设备显示计划记录</p>
-      </div>
-      <div class="module-actions">
-        <Select v-model="daysValue" small :options="dayOptions" />
-        <Button icon="search" small type="button" variant="secondary" @click="loadPlans">
-          查询
-        </Button>
-        <Button class="desktop-action" icon="plus" small type="button" variant="primary" @click="openCreate">
-          新增计划
-        </Button>
-      </div>
-    </header>
+    <ModuleToolbar title="计划管理" description="维护设备显示计划记录">
+      <Button icon="plus" small type="button" variant="primary" @click="openCreate">
+        新增计划
+      </Button>
+    </ModuleToolbar>
 
     <p v-if="error" class="form-error">{{ error }}</p>
-    <PlanTable
+    <PlanCalendar
       v-else
+      v-model:month="currentMonth"
       :plans="sortedPlans"
       :preview-urls="previewUrls"
+      @create-plan="openCreateForDate"
       @delete-plan="openDelete"
       @edit-plan="openEdit"
     />
 
     <PlanEditorDialog
       :images="images"
+      :initial-date="creatingDate"
       :open="editorOpen"
       :plan="editingPlan"
       :preview-urls="previewUrls"
@@ -45,37 +38,28 @@
         </DialogActions>
       </div>
     </Dialog>
-    <Button class="floating-action" icon="plus" type="button" variant="primary" @click="openCreate">
-      新增计划
-    </Button>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
   deletePlan,
   getImageBlob,
   listImages,
-  listPlans as listPlansRequest,
+  listPlansByRange,
   errorMessage,
   type AdminImage,
   type Plan,
 } from '../api';
-import { Button, Dialog, DialogActions, Select, type SelectOption } from '../components';
+import { Button, Dialog, DialogActions, ModuleToolbar } from '../components';
 import PlanEditorDialog from '../components/plans/PlanEditorDialog.vue';
-import PlanTable from '../components/plans/PlanTable.vue';
+import PlanCalendar from '../components/plans/PlanCalendar.vue';
 import type { PlanView } from '../components/plans/types';
 import { useAuthStore } from '../composables/useAuthStore';
 
 const auth = useAuthStore();
-const days = ref(3);
-const daysValue = computed({
-  get: () => String(days.value),
-  set: (value: string) => {
-    days.value = Number(value);
-  },
-});
+const currentMonth = ref(monthString(new Date()));
 const plans = ref<PlanView[]>([]);
 const images = ref<AdminImage[]>([]);
 const previewUrls = ref<Record<string, string>>({});
@@ -84,10 +68,7 @@ const editingPlan = ref<PlanView | null>(null);
 const deletingPlan = ref<PlanView | null>(null);
 const deleting = ref(false);
 const error = ref('');
-const dayOptions: SelectOption[] = Array.from({ length: 7 }, (_, index) => {
-  const value = String(index + 1);
-  return { label: `最近 ${value} 天`, value };
-});
+const creatingDate = ref('');
 const sortedPlans = computed(() =>
   [...plans.value].sort((left, right) => {
     const byDate = left.date.localeCompare(right.date);
@@ -102,8 +83,9 @@ async function loadPlans() {
 
   error.value = '';
   try {
+    const { start, end } = monthRange(currentMonth.value);
     const [nextPlans, nextImages] = await Promise.all([
-      listPlansRequest(auth.token.value, days.value),
+      listPlansByRange(auth.token.value, start, end),
       listImages(auth.token.value),
     ]);
     plans.value = withPlanImages(nextPlans, nextImages);
@@ -115,6 +97,13 @@ async function loadPlans() {
 }
 
 function openCreate() {
+  creatingDate.value = '';
+  editingPlan.value = null;
+  editorOpen.value = true;
+}
+
+function openCreateForDate(date: string) {
+  creatingDate.value = date;
   editingPlan.value = null;
   editorOpen.value = true;
 }
@@ -127,6 +116,7 @@ function openEdit(plan: PlanView) {
 function closeEditor() {
   editorOpen.value = false;
   editingPlan.value = null;
+  creatingDate.value = '';
 }
 
 async function handleSaved() {
@@ -225,4 +215,32 @@ onMounted(() => {
 });
 
 onBeforeUnmount(clearPreviews);
+
+watch(currentMonth, () => {
+  void loadPlans();
+});
+
+function parseMonth(month: string) {
+  const [year, monthNumber] = month.split('-').map(Number);
+  return new Date(year, monthNumber - 1, 1);
+}
+
+function monthString(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function dateString(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function monthRange(month: string) {
+  const startDate = parseMonth(month);
+  const endDate = new Date(startDate);
+  endDate.setMonth(startDate.getMonth() + 1);
+  endDate.setDate(0);
+  return {
+    start: dateString(startDate),
+    end: dateString(endDate),
+  };
+}
 </script>

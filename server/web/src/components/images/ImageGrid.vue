@@ -6,6 +6,7 @@
       :key="image.sha256"
       :image="image"
       :preview-url="previewUrls[image.sha256]"
+      @open-detail="$emit('openDetail', image)"
       @edit-remark="$emit('editRemark', image)"
       @refresh-preview="$emit('refreshPreview', image.sha256)"
       @redither-image="$emit('reditherImage', image)"
@@ -25,6 +26,7 @@ defineProps<{
 }>();
 
 defineEmits<{
+  openDetail: [image: AdminImage];
   editRemark: [image: AdminImage];
   refreshPreview: [sha256: string];
   reditherImage: [image: AdminImage];

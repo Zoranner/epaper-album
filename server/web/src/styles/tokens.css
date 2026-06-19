@@ -42,4 +42,7 @@
   --control-height: 40px;
   --button-height: 40px;
   --button-height-sm: 36px;
+  --toolbar-height: 48px;
+  --nav-height: 64px;
+  --item-action-size: 36px;
 }

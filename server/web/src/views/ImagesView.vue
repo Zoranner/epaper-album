@@ -1,35 +1,30 @@
 <template>
   <section class="module-view">
-    <header class="module-toolbar">
-      <div>
-        <h2>相册管理</h2>
-        <p>素材按电子相册显示比例管理</p>
-      </div>
-      <div class="module-actions">
-        <Input
-          class="module-search"
-          label=""
-          placeholder="搜索备注或 sha256"
-          small
-          type="search"
-          :model-value="keyword"
-          @update:model-value="keyword = $event"
-        />
-        <Select v-model="statusFilter" small :options="statusOptions" />
-        <Button icon="search" small type="button" variant="secondary" @click="loadImages">
-          查询
-        </Button>
-        <Button class="desktop-action" icon="upload" small type="button" variant="primary" @click="openUpload">
-          上传图片
-        </Button>
-      </div>
-    </header>
+    <ModuleToolbar title="相册管理" description="素材按电子相册显示比例管理">
+      <Input
+        class="module-search"
+        label=""
+        placeholder="搜索备注或 sha256"
+        small
+        type="search"
+        :model-value="keyword"
+        @update:model-value="keyword = $event"
+      />
+      <Select v-model="statusFilter" small :options="statusOptions" />
+      <Button icon="search" small type="button" variant="secondary" @click="loadImages">
+        查询
+      </Button>
+      <Button icon="upload" small type="button" variant="primary" @click="openUpload">
+        上传图片
+      </Button>
+    </ModuleToolbar>
 
     <p v-if="error" class="form-error">{{ error }}</p>
     <ImageGrid
       v-else
       :images="filteredImages"
       :preview-urls="previewUrls"
+      @open-detail="openDetail"
       @edit-remark="openRemark"
       @refresh-preview="refreshPreview"
       @redither-image="handleRedither"
@@ -40,6 +35,16 @@
       :open="uploadOpen"
       @close="uploadOpen = false"
       @uploaded="handleUploaded"
+    />
+    <ImageDetailDialog
+      :image="detailImage"
+      :open="Boolean(detailImage)"
+      :preview-url="detailImage ? previewUrls[detailImage.sha256] : undefined"
+      @close="detailImage = null"
+      @edit-image="detailImage && openRemarkFromDetail(detailImage)"
+      @refresh-preview="detailImage && refreshPreview(detailImage.sha256)"
+      @redither-image="detailImage && handleRedither(detailImage)"
+      @delete-image="detailImage && openDelete(detailImage)"
     />
     <ImageRemarkDialog
       :image="remarkImage"
@@ -63,9 +68,6 @@
         </DialogActions>
       </div>
     </Dialog>
-    <Button class="floating-action" icon="upload" type="button" variant="primary" @click="openUpload">
-      上传图片
-    </Button>
   </section>
 </template>
 
@@ -80,7 +82,8 @@ import {
   type AdminImage,
   type ImageStatus,
 } from '../api';
-import { Button, Dialog, DialogActions, Input, Select, type SelectOption } from '../components';
+import { Button, Dialog, DialogActions, Input, ModuleToolbar, Select, type SelectOption } from '../components';
+import ImageDetailDialog from '../components/images/ImageDetailDialog.vue';
 import ImageGrid from '../components/images/ImageGrid.vue';
 import ImageRemarkDialog from '../components/images/ImageRemarkDialog.vue';
 import ImageUploadDialog from '../components/images/ImageUploadDialog.vue';
@@ -92,16 +95,17 @@ const keyword = ref('');
 const statusFilter = ref<ImageStatus | 'all'>('all');
 const previewUrls = ref<Record<string, string>>({});
 const uploadOpen = ref(false);
+const detailImage = ref<AdminImage | null>(null);
 const remarkImage = ref<AdminImage | null>(null);
 const deleteTarget = ref<AdminImage | null>(null);
 const deleting = ref(false);
 const error = ref('');
 const statusOptions: SelectOption[] = [
   { label: '全部状态', value: 'all' },
-  { label: '可显示', value: 'ready' },
+  { label: '已处理', value: 'ready' },
   { label: '待处理', value: 'pending' },
   { label: '处理中', value: 'processing' },
-  { label: '处理失败', value: 'failed' },
+  { label: '失败', value: 'failed' },
 ];
 
 const filteredImages = computed(() => {
@@ -139,8 +143,18 @@ function openRemark(image: AdminImage) {
   remarkImage.value = image;
 }
 
+function openRemarkFromDetail(image: AdminImage) {
+  detailImage.value = null;
+  remarkImage.value = image;
+}
+
+function openDetail(image: AdminImage) {
+  detailImage.value = image;
+}
+
 function openDelete(image: AdminImage) {
   deleteTarget.value = image;
+  detailImage.value = null;
 }
 
 function closeDelete() {
@@ -158,6 +172,9 @@ async function handleUploaded(image: AdminImage) {
 async function handleRemarkSaved(image: AdminImage) {
   remarkImage.value = null;
   upsertImage(image);
+  if (detailImage.value?.sha256 === image.sha256) {
+    detailImage.value = image;
+  }
 }
 
 async function handleRedither(image: AdminImage) {
@@ -170,6 +187,9 @@ async function handleRedither(image: AdminImage) {
     const updated = await reditherImage(auth.token.value, image.sha256);
     revokePreview(image.sha256);
     upsertImage(updated);
+    if (detailImage.value?.sha256 === updated.sha256) {
+      detailImage.value = updated;
+    }
   } catch (reditherError) {
     error.value = errorMessage(reditherError, '图片重新抖动失败');
   }
@@ -196,6 +216,9 @@ async function confirmDelete() {
     await deleteImage(auth.token.value, sha256);
     images.value = images.value.filter((image) => image.sha256 !== sha256);
     revokePreview(sha256);
+    if (detailImage.value?.sha256 === sha256) {
+      detailImage.value = null;
+    }
     deleteTarget.value = null;
   } catch (deleteError) {
     error.value = errorMessage(deleteError, '图片删除失败');

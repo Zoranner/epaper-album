@@ -1,19 +1,19 @@
 <template>
   <article class="image-tile" :class="image.status">
-    <div class="image-tile__preview">
+    <button class="image-tile__preview" type="button" @click="$emit('openDetail')">
       <img v-if="previewUrl" :src="previewUrl" :alt="image.sha256" />
-      <span v-else>{{ statusText }}</span>
-    </div>
-    <div class="image-tile__body">
+      <span v-else>{{ image.status === 'ready' ? '无预览' : '' }}</span>
+      <StatusBadge :status="image.status" />
+    </button>
+    <button class="image-tile__body" type="button" @click="$emit('openDetail')">
       <p>{{ image.remark || '未填写备注' }}</p>
-      <div v-if="image.tags.length > 0" class="tag-list compact" :title="image.tags.join(' ')">
-        <span v-for="tag in visibleTags" :key="tag" class="tag-chip">{{ tag }}</span>
-        <span v-if="hiddenTagCount > 0" class="tag-chip muted">+{{ hiddenTagCount }}</span>
+      <div class="image-tile__meta">
+        <span>{{ updatedTime }}</span>
+        <span>{{ tagCountText }}</span>
       </div>
-      <code :title="image.sha256">{{ shortSha(image.sha256) }}</code>
-    </div>
+    </button>
     <div class="image-tile__footer">
-      <span>{{ statusText }}</span>
+      <span class="image-tile__sha">{{ shortSha }}</span>
       <ActionMenu :items="menuItems" @select="selectAction" />
     </div>
   </article>
@@ -22,7 +22,9 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { AdminImage } from '../../api';
+import StatusBadge from '../display/StatusBadge.vue';
 import ActionMenu, { type ActionMenuItem } from '../navigation/ActionMenu.vue';
+import { formatImageTime } from './imageDisplay';
 
 const props = defineProps<{
   image: AdminImage;
@@ -30,26 +32,18 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
+  openDetail: [];
   editRemark: [];
   refreshPreview: [];
   reditherImage: [];
   deleteImage: [];
 }>();
 
-const statusText = computed(() => {
-  if (props.image.status === 'ready') {
-    return '可显示';
-  }
-  if (props.image.status === 'failed') {
-    return '处理失败';
-  }
-  if (props.image.status === 'processing') {
-    return '处理中';
-  }
-  return '待处理';
-});
-const visibleTags = computed(() => props.image.tags.slice(0, 4));
-const hiddenTagCount = computed(() => Math.max(0, props.image.tags.length - visibleTags.value.length));
+const tagCountText = computed(() => (props.image.tags.length > 0 ? `${props.image.tags.length} 个标签` : '无标签'));
+const updatedTime = computed(() => formatImageTime(props.image.updatedAt));
+const shortSha = computed(() =>
+  props.image.sha256.length > 14 ? `${props.image.sha256.slice(0, 8)}...${props.image.sha256.slice(-4)}` : props.image.sha256,
+);
 const menuItems = computed<ActionMenuItem[]>(() => {
   const items: ActionMenuItem[] = [{ key: 'edit', label: '编辑信息', icon: 'edit' }];
   if (props.image.status === 'ready') {
@@ -75,9 +69,5 @@ function selectAction(key: string) {
   if (key === 'delete') {
     emit('deleteImage');
   }
-}
-
-function shortSha(sha256: string) {
-  return sha256.length > 16 ? `${sha256.slice(0, 8)}...${sha256.slice(-6)}` : sha256;
 }
 </script>
