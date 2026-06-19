@@ -365,9 +365,9 @@ fn render_builtin_error_page_into_frame(frame: &mut [u8], input: &BuiltinErrorPa
     );
     fill_packed_frame_rect(
         frame,
-        68,
+        ERROR_TITLE_BOX_X,
         34,
-        SCREEN_WIDTH.saturating_sub(136),
+        SCREEN_WIDTH.saturating_sub(112),
         4,
         Color::Black,
     );
@@ -1086,6 +1086,18 @@ mod tests {
     }
 
     #[test]
+    fn builtin_error_page_title_rules_align_with_title_box() {
+        let frame = render_builtin_error_page_packed_frame(
+            &BuiltinErrorPageInput::new("SYNC ERROR", "PLAN SYNC FAILED")
+                .with_hint("CHECK WIFI BASE URL AND SERVER"),
+        );
+
+        assert_eq!(black_row_bounds(&frame, 34), Some(56..744));
+        assert_eq!(black_row_bounds(&frame, 42), Some(56..744));
+        assert_eq!(black_row_bounds(&frame, 138), Some(56..744));
+    }
+
+    #[test]
     fn builtin_error_page_centers_text_blocks_in_their_pixel_regions() {
         let frame = render_builtin_error_page_packed_frame(
             &BuiltinErrorPageInput::new("SYNC ERROR", "PLAN SYNC FAILED")
@@ -1179,6 +1191,13 @@ mod tests {
             top_padding.abs_diff(bottom_padding) <= tolerance,
             "ink is not centered: top_padding={top_padding} bottom_padding={bottom_padding}"
         );
+    }
+
+    fn black_row_bounds(frame: &[u8], y: usize) -> Option<std::ops::Range<usize>> {
+        let xs = (0..EPD_WIDTH)
+            .filter(|x| logical_frame_color(frame, *x, y) == Color::Black)
+            .collect::<Vec<_>>();
+        Some(*xs.first()?..xs.last()?.saturating_add(1))
     }
 
     fn text_row_runs(
