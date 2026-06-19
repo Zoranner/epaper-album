@@ -7,6 +7,8 @@ pub struct ImageRecord {
     pub sha256: String,
     pub status: String,
     pub remark: String,
+    #[sqlx(skip)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -24,8 +26,10 @@ pub struct LoginResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct ImageRemarkPayload {
+pub struct ImagePayload {
     pub remark: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

@@ -554,11 +554,7 @@ where
             image,
             caption,
         } => {
-            let plan = Plan {
-                date,
-                image,
-                caption,
-            };
+            let plan = Plan::fixed(date, caption, image);
             let request = photo_refresh_request(
                 plan,
                 date,
@@ -707,11 +703,7 @@ mod tests {
     }
 
     fn plan(image: &str) -> Plan {
-        Plan {
-            date: date("2026-06-08"),
-            caption: "caption".to_string(),
-            image: image.to_string(),
-        }
+        Plan::fixed(date("2026-06-08"), "caption", image)
     }
 
     fn input(plans: Option<Vec<Plan>>) -> DeviceCycleInput {
@@ -934,11 +926,7 @@ mod tests {
 
     #[test]
     fn missing_today_plan_keeps_latest_past_plan_without_sync_error() {
-        let plans = vec![Plan {
-            date: date("2026-06-16"),
-            caption: "past".to_string(),
-            image: "a".to_string(),
-        }];
+        let plans = vec![Plan::fixed(date("2026-06-16"), "past", "a")];
         let mut input = input(Some(plans.clone()));
         input.date = date("2026-06-18");
         input.sync_state.date = Some(date("2026-06-18"));

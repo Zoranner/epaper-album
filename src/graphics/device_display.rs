@@ -386,11 +386,7 @@ mod tests {
 
     fn request() -> DisplayRefreshRequest {
         DisplayRefreshRequest {
-            plan: Plan {
-                date: LocalDate::parse("2026-06-08").unwrap(),
-                image: "photo".to_string(),
-                caption: "caption".to_string(),
-            },
+            plan: Plan::fixed(LocalDate::parse("2026-06-08").unwrap(), "caption", "photo"),
             date: LocalDate::parse("2026-06-08").unwrap(),
             reason: RefreshReason::FirstBoot,
             sprites: crate::device_runtime::SpriteSet {

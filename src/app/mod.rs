@@ -32,11 +32,7 @@ mod tests {
     }
 
     fn plan(date: &str, caption: &str, image: &str) -> Plan {
-        Plan {
-            date: self::date(date),
-            caption: caption.to_string(),
-            image: image.to_string(),
-        }
+        Plan::fixed(self::date(date), caption, image)
     }
 
     fn context(plans: Option<Vec<Plan>>) -> RunContext {

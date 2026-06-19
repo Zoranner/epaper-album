@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use anyhow::{anyhow, Result};
-use protocol::{LocalDate, Plan};
+use protocol::{LocalDate, Plan, PlanType};
 use sqlx::SqlitePool;
 
 use crate::models::ImageRecord;
@@ -15,7 +15,9 @@ pub struct Store {
 struct PlanRow {
     date: String,
     caption: String,
+    plan_type: String,
     image: String,
+    tags: String,
 }
 
 impl Store {
@@ -37,13 +39,27 @@ impl Store {
         let mut plans = Vec::with_capacity(rows.len());
 
         for row in rows {
-            let status: Option<String> =
-                sqlx::query_scalar("SELECT status FROM images WHERE sha256 = ?")
-                    .bind(&row.image)
-                    .fetch_optional(&self.pool)
-                    .await?;
-            if status.as_deref() == Some("ready") {
-                plans.push(plan_from_row(row)?);
+            let mut plan = plan_from_row(row)?;
+            match plan.plan_type {
+                PlanType::Fixed => {
+                    let status: Option<String> =
+                        sqlx::query_scalar("SELECT status FROM images WHERE sha256 = ?")
+                            .bind(&plan.image)
+                            .fetch_optional(&self.pool)
+                            .await?;
+                    if status.as_deref() == Some("ready") {
+                        plan.tags.clear();
+                        plans.push(plan);
+                    }
+                }
+                PlanType::Random => {
+                    if let Some(image) = self.random_ready_image_for_tags(&plan.tags).await? {
+                        plan.image = image;
+                        plan.tags.clear();
+                        plan.plan_type = PlanType::Fixed;
+                        plans.push(plan);
+                    }
+                }
             }
         }
 
@@ -51,13 +67,18 @@ impl Store {
     }
 
     pub async fn create_plan(&self, payload: Plan) -> Result<Plan> {
-        self.validate_image(&payload.image).await?;
-        let result = sqlx::query("INSERT INTO plans (date, caption, image) VALUES (?, ?, ?)")
-            .bind(payload.date.to_string())
-            .bind(payload.caption.trim())
-            .bind(&payload.image)
-            .execute(&self.pool)
-            .await?;
+        let payload = normalize_plan(payload);
+        self.validate_plan_selection(&payload).await?;
+        let result = sqlx::query(
+            "INSERT INTO plans (date, caption, type, image, tags) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(payload.date.to_string())
+        .bind(payload.caption.trim())
+        .bind(plan_type_str(&payload.plan_type))
+        .bind(&payload.image)
+        .bind(serde_json::to_string(&payload.tags)?)
+        .execute(&self.pool)
+        .await?;
 
         if result.rows_affected() == 0 {
             return Err(anyhow!("Plan date already exists: {}", payload.date));
@@ -69,15 +90,19 @@ impl Store {
     }
 
     pub async fn update_plan(&self, date: LocalDate, payload: Plan) -> Result<Option<Plan>> {
-        self.validate_image(&payload.image).await?;
-        let result =
-            sqlx::query("UPDATE plans SET date = ?, caption = ?, image = ? WHERE date = ?")
-                .bind(payload.date.to_string())
-                .bind(payload.caption.trim())
-                .bind(&payload.image)
-                .bind(date.to_string())
-                .execute(&self.pool)
-                .await?;
+        let payload = normalize_plan(payload);
+        self.validate_plan_selection(&payload).await?;
+        let result = sqlx::query(
+            "UPDATE plans SET date = ?, caption = ?, type = ?, image = ?, tags = ? WHERE date = ?",
+        )
+        .bind(payload.date.to_string())
+        .bind(payload.caption.trim())
+        .bind(plan_type_str(&payload.plan_type))
+        .bind(&payload.image)
+        .bind(serde_json::to_string(&payload.tags)?)
+        .bind(date.to_string())
+        .execute(&self.pool)
+        .await?;
 
         if result.rows_affected() == 0 {
             return Ok(None);
@@ -94,8 +119,12 @@ impl Store {
         Ok(result.rows_affected() > 0)
     }
 
-    pub async fn list_images(&self, keyword: Option<&str>) -> Result<Vec<ImageRecord>> {
-        let images = if let Some(keyword) = keyword.filter(|value| !value.is_empty()) {
+    pub async fn list_images(
+        &self,
+        keyword: Option<&str>,
+        tags: &[String],
+    ) -> Result<Vec<ImageRecord>> {
+        let mut images = if let Some(keyword) = keyword.filter(|value| !value.is_empty()) {
             sqlx::query_as::<_, ImageRecord>(
                 "SELECT sha256, status, remark FROM images
                  WHERE remark LIKE '%' || ? || '%'
@@ -112,6 +141,10 @@ impl Store {
             .await?
         };
 
+        self.attach_image_tags(&mut images).await?;
+        if !tags.is_empty() {
+            images.retain(|image| tags.iter().all(|tag| image.tags.contains(tag)));
+        }
         Ok(images)
     }
 
@@ -123,13 +156,19 @@ impl Store {
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(image)
+        if let Some(mut image) = image {
+            image.tags = self.image_tags(sha256).await?;
+            Ok(Some(image))
+        } else {
+            Ok(None)
+        }
     }
 
     pub async fn upsert_uploaded_image(
         &self,
         sha256: &str,
         remark: Option<&str>,
+        tags: Option<&[String]>,
     ) -> Result<(ImageRecord, bool)> {
         let existing = self.get_image(sha256).await?;
 
@@ -156,6 +195,9 @@ impl Store {
                         .execute(&self.pool)
                         .await?;
                 }
+                if let Some(tags) = tags {
+                    self.replace_image_tags(sha256, tags).await?;
+                }
 
                 let updated = self
                     .get_image(sha256)
@@ -170,6 +212,9 @@ impl Store {
                     .bind(remark)
                     .execute(&self.pool)
                     .await?;
+                if let Some(tags) = tags {
+                    self.replace_image_tags(sha256, tags).await?;
+                }
                 let image = self
                     .get_image(sha256)
                     .await?
@@ -179,10 +224,11 @@ impl Store {
         }
     }
 
-    pub async fn update_image_remark(
+    pub async fn update_image(
         &self,
         sha256: &str,
         remark: &str,
+        tags: &[String],
     ) -> Result<Option<ImageRecord>> {
         let result = sqlx::query("UPDATE images SET remark = ? WHERE sha256 = ?")
             .bind(remark)
@@ -192,6 +238,7 @@ impl Store {
         if result.rows_affected() == 0 {
             return Ok(None);
         }
+        self.replace_image_tags(sha256, tags).await?;
         self.get_image(sha256).await
     }
 
@@ -288,9 +335,70 @@ impl Store {
         Ok(())
     }
 
+    async fn attach_image_tags(&self, images: &mut [ImageRecord]) -> Result<()> {
+        for image in images {
+            image.tags = self.image_tags(&image.sha256).await?;
+        }
+        Ok(())
+    }
+
+    async fn image_tags(&self, sha256: &str) -> Result<Vec<String>> {
+        let tags = sqlx::query_scalar::<_, String>(
+            "SELECT tag FROM image_tags WHERE image = ? ORDER BY tag ASC",
+        )
+        .bind(sha256)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(tags)
+    }
+
+    async fn replace_image_tags(&self, sha256: &str, tags: &[String]) -> Result<()> {
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("DELETE FROM image_tags WHERE image = ?")
+            .bind(sha256)
+            .execute(&mut *transaction)
+            .await?;
+        for tag in normalized_tags(tags) {
+            sqlx::query("INSERT INTO image_tags (image, tag) VALUES (?, ?)")
+                .bind(sha256)
+                .bind(tag)
+                .execute(&mut *transaction)
+                .await?;
+        }
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    async fn random_ready_image_for_tags(&self, tags: &[String]) -> Result<Option<String>> {
+        let tags = normalized_tags(tags);
+        if tags.is_empty() {
+            return Ok(None);
+        }
+
+        let placeholders = std::iter::repeat_n("?", tags.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT i.sha256
+             FROM images AS i
+             JOIN image_tags AS it ON it.image = i.sha256
+             WHERE i.status = 'ready' AND it.tag IN ({placeholders})
+             GROUP BY i.sha256
+             HAVING COUNT(DISTINCT it.tag) = ?
+             ORDER BY RANDOM()
+             LIMIT 1"
+        );
+        let mut query = sqlx::query_scalar::<_, String>(&sql);
+        for tag in &tags {
+            query = query.bind(tag);
+        }
+        query = query.bind(tags.len() as i64);
+        Ok(query.fetch_optional(&self.pool).await?)
+    }
+
     async fn load_plan_rows(&self, start: LocalDate, end: LocalDate) -> Result<Vec<PlanRow>> {
         let rows = sqlx::query_as::<_, PlanRow>(
-            "SELECT date, caption, image
+            "SELECT date, caption, type AS plan_type, image, tags
              FROM plans
              WHERE (date >= ? AND date <= ?)
                 OR date = (SELECT MAX(date) FROM plans WHERE date < ?)
@@ -306,20 +414,33 @@ impl Store {
     }
 
     async fn get_admin_plan(&self, date: LocalDate) -> Result<Option<Plan>> {
-        let row =
-            sqlx::query_as::<_, PlanRow>("SELECT date, caption, image FROM plans WHERE date = ?")
-                .bind(date.to_string())
-                .fetch_optional(&self.pool)
-                .await?;
+        let row = sqlx::query_as::<_, PlanRow>(
+            "SELECT date, caption, type AS plan_type, image, tags FROM plans WHERE date = ?",
+        )
+        .bind(date.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
 
         row.map(plan_from_row).transpose()
     }
 
-    async fn validate_image(&self, sha256: &str) -> Result<()> {
-        if sha256.is_empty() {
-            return Ok(());
+    async fn validate_plan_selection(&self, payload: &Plan) -> Result<()> {
+        match payload.plan_type {
+            PlanType::Fixed => {
+                if !payload.image.is_empty() {
+                    self.validate_image(&payload.image).await?;
+                }
+            }
+            PlanType::Random => {
+                if normalized_tags(&payload.tags).is_empty() {
+                    return Err(anyhow!("Random plan tags are empty"));
+                }
+            }
         }
+        Ok(())
+    }
 
+    async fn validate_image(&self, sha256: &str) -> Result<()> {
         let exists: Option<i64> =
             sqlx::query_scalar("SELECT 1 FROM images WHERE sha256 = ? LIMIT 1")
                 .bind(sha256)
@@ -344,12 +465,17 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
                 date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
             ),
             caption       TEXT NOT NULL,
-            image         TEXT NOT NULL DEFAULT ''
+            type          TEXT NOT NULL DEFAULT 'fixed' CHECK (type IN ('fixed', 'random')),
+            image         TEXT NOT NULL DEFAULT '',
+            tags          TEXT NOT NULL DEFAULT '[]'
         )
         "#,
     )
     .execute(pool)
     .await?;
+
+    ensure_column(pool, "plans", "type", "TEXT NOT NULL DEFAULT 'fixed'").await?;
+    ensure_column(pool, "plans", "tags", "TEXT NOT NULL DEFAULT '[]'").await?;
 
     sqlx::query(
         r#"
@@ -362,6 +488,23 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     )
     .execute(pool)
     .await?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS image_tags (
+            image TEXT NOT NULL,
+            tag   TEXT NOT NULL CHECK (length(trim(tag)) > 0),
+            PRIMARY KEY (image, tag),
+            FOREIGN KEY (image) REFERENCES images(sha256) ON DELETE CASCADE
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_image_tags_tag ON image_tags(tag)")
+        .execute(pool)
+        .await?;
 
     Ok(())
 }
@@ -385,8 +528,32 @@ fn plan_from_row(row: PlanRow) -> Result<Plan> {
         date: LocalDate::parse(&row.date)
             .map_err(|_| anyhow!("Stored plan date is invalid: {}", row.date))?,
         caption: row.caption,
+        plan_type: match row.plan_type.as_str() {
+            "fixed" => PlanType::Fixed,
+            "random" => PlanType::Random,
+            _ => return Err(anyhow!("Stored plan type is invalid: {}", row.plan_type)),
+        },
         image: row.image,
+        tags: serde_json::from_str(&row.tags)
+            .map_err(|_| anyhow!("Stored plan tags are invalid: {}", row.tags))?,
     })
+}
+
+fn plan_type_str(plan_type: &PlanType) -> &'static str {
+    match plan_type {
+        PlanType::Fixed => "fixed",
+        PlanType::Random => "random",
+    }
+}
+
+fn normalize_plan(mut plan: Plan) -> Plan {
+    plan.caption = plan.caption.trim().to_string();
+    plan.tags = normalized_tags(&plan.tags);
+    match plan.plan_type {
+        PlanType::Fixed => plan.tags.clear(),
+        PlanType::Random => plan.image.clear(),
+    }
+    plan
 }
 
 async fn drop_incompatible_table(
@@ -418,4 +585,36 @@ async fn drop_incompatible_table(
 #[derive(Debug, sqlx::FromRow)]
 struct TableColumn {
     name: String,
+}
+
+async fn ensure_column(
+    pool: &SqlitePool,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<()> {
+    let rows = sqlx::query_as::<_, TableColumn>(&format!("PRAGMA table_info({table})"))
+        .fetch_all(pool)
+        .await?;
+    if rows.into_iter().any(|row| row.name == column) {
+        return Ok(());
+    }
+
+    sqlx::query(&format!(
+        "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+    ))
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+fn normalized_tags(tags: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for tag in tags {
+        let tag = tag.trim();
+        if !tag.is_empty() && !normalized.iter().any(|item| item == tag) {
+            normalized.push(tag.to_string());
+        }
+    }
+    normalized
 }

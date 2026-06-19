@@ -123,6 +123,17 @@ async fn seed_image(pool: &SqlitePool, sha256: &str, status: &str, remark: &str)
         .expect("seed image");
 }
 
+async fn seed_image_tags(pool: &SqlitePool, sha256: &str, tags: &[&str]) {
+    for tag in tags {
+        sqlx::query("INSERT INTO image_tags (image, tag) VALUES (?, ?)")
+            .bind(sha256)
+            .bind(tag)
+            .execute(pool)
+            .await
+            .expect("seed image tag");
+    }
+}
+
 async fn image_status(pool: &SqlitePool, sha256: &str) -> String {
     sqlx::query_scalar("SELECT status FROM images WHERE sha256 = ?")
         .bind(sha256)
@@ -174,6 +185,15 @@ fn tiny_png() -> Vec<u8> {
 }
 
 fn multipart_body(boundary: &str, image: &[u8], remark: Option<&str>) -> Vec<u8> {
+    multipart_body_with_tags(boundary, image, remark, None)
+}
+
+fn multipart_body_with_tags(
+    boundary: &str,
+    image: &[u8],
+    remark: Option<&str>,
+    tags: Option<&[&str]>,
+) -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
     body.extend_from_slice(
@@ -187,6 +207,13 @@ fn multipart_body(boundary: &str, image: &[u8], remark: Option<&str>) -> Vec<u8>
         body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
         body.extend_from_slice(b"Content-Disposition: form-data; name=\"remark\"\r\n\r\n");
         body.extend_from_slice(remark.as_bytes());
+        body.extend_from_slice(b"\r\n");
+    }
+
+    if let Some(tags) = tags {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(b"Content-Disposition: form-data; name=\"tags\"\r\n\r\n");
+        body.extend_from_slice(serde_json::to_string(tags).expect("tags json").as_bytes());
         body.extend_from_slice(b"\r\n");
     }
 
@@ -545,7 +572,9 @@ async fn plan_rows_with_invalid_dates_return_errors_without_panicking() {
         CREATE TABLE plans (
             date TEXT PRIMARY KEY,
             caption TEXT NOT NULL,
-            image TEXT NOT NULL
+            type TEXT NOT NULL DEFAULT 'fixed',
+            image TEXT NOT NULL,
+            tags TEXT NOT NULL DEFAULT '[]'
         )
         "#,
     )
@@ -679,6 +708,56 @@ async fn plan_update_accepts_empty_image_and_can_select_image_again() {
 }
 
 #[tokio::test]
+async fn random_plan_returns_ready_image_matching_all_tags_for_users() {
+    let app = test_app().await;
+    let family_trip = valid_sha(41);
+    let family_only = valid_sha(42);
+    let pending_match = valid_sha(43);
+    seed_image(&app.pool, &family_trip, "ready", "家庭旅行").await;
+    seed_image(&app.pool, &family_only, "ready", "家庭").await;
+    seed_image(&app.pool, &pending_match, "pending", "待处理家庭旅行").await;
+    seed_image_tags(&app.pool, &family_trip, &["家庭", "旅行"]).await;
+    seed_image_tags(&app.pool, &family_only, &["家庭"]).await;
+    seed_image_tags(&app.pool, &pending_match, &["家庭", "旅行"]).await;
+
+    let today = chrono::Local::now()
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    let body = json!({
+        "date": today,
+        "caption": "随机家庭旅行",
+        "type": "random",
+        "image": "",
+        "tags": ["家庭", "旅行"]
+    });
+    let (status, value) = request_json(
+        app.app.clone(),
+        admin_request(&app, "/api/plans")
+            .method("POST")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(value["data"]["type"], "random");
+    assert_eq!(value["data"]["tags"], json!(["家庭", "旅行"]));
+
+    let (_, user_value) = request_json(
+        app.app.clone(),
+        user_request("/api/plans")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(
+        user_value["data"],
+        json!([{ "date": today, "caption": "随机家庭旅行", "image": family_trip }])
+    );
+}
+
+#[tokio::test]
 async fn plans_return_ready_dates_for_users_and_all_dates_for_admins() {
     let app = test_app().await;
     let ready_sha = valid_sha(1);
@@ -723,6 +802,7 @@ async fn image_list_requires_admin_and_remark_update_returns_updated_image() {
     let app = test_app().await;
     let sha = valid_sha(17);
     seed_image(&app.pool, &sha, "ready", "旧备注").await;
+    seed_image_tags(&app.pool, &sha, &["旧标签"]).await;
 
     let (status, value) = request_json(
         app.app.clone(),
@@ -734,7 +814,7 @@ async fn image_list_requires_admin_and_remark_update_returns_updated_image() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(value["code"], 401);
 
-    let body = json!({ "remark": "新备注" });
+    let body = json!({ "remark": "新备注", "tags": ["家庭", "旅行", "家庭"] });
     let (status, value) = request_json(
         app.app.clone(),
         admin_request(&app, &format!("/api/images/{sha}"))
@@ -746,7 +826,55 @@ async fn image_list_requires_admin_and_remark_update_returns_updated_image() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(value["data"]["remark"], "新备注");
+    assert_eq!(value["data"]["tags"], json!(["家庭", "旅行"]));
     assert_eq!(image_remark(&app.pool, &sha).await, "新备注");
+}
+
+#[tokio::test]
+async fn image_upload_and_list_support_tags_filter() {
+    let app = test_app().await;
+    let boundary = "X-BOUNDARY";
+    let png = tiny_png();
+    let expected_sha = hex::encode(sha2::Sha256::digest(&png));
+
+    let (status, value) = request_json(
+        app.app.clone(),
+        admin_request(&app, "/api/images")
+            .method("POST")
+            .header(
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(multipart_body_with_tags(
+                boundary,
+                &png,
+                Some("带标签"),
+                Some(&["家庭", "旅行", "家庭"]),
+            )))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(value["data"]["sha256"], expected_sha);
+    assert_eq!(value["data"]["tags"], json!(["家庭", "旅行"]));
+
+    let other_sha = valid_sha(44);
+    seed_image(&app.pool, &other_sha, "ready", "家庭").await;
+    seed_image_tags(&app.pool, &other_sha, &["家庭"]).await;
+
+    let (_, filtered_value) = request_json(
+        app.app.clone(),
+        admin_request(
+            &app,
+            "/api/images?tags=%E5%AE%B6%E5%BA%AD,%E6%97%85%E8%A1%8C",
+        )
+        .body(Body::empty())
+        .expect("request"),
+    )
+    .await;
+    let images = filtered_value["data"].as_array().expect("images");
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0]["sha256"], expected_sha);
 }
 
 #[tokio::test]

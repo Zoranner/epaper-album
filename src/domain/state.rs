@@ -117,11 +117,7 @@ mod tests {
     use super::*;
 
     fn plan() -> Plan {
-        Plan {
-            date: LocalDate::parse("2026-06-08").unwrap(),
-            image: "abc".to_string(),
-            caption: "caption".to_string(),
-        }
+        Plan::fixed(LocalDate::parse("2026-06-08").unwrap(), "caption", "abc")
     }
 
     #[test]

@@ -142,11 +142,7 @@ mod tests {
     }
 
     fn plan(image: &str) -> Plan {
-        Plan {
-            caption: "caption".to_string(),
-            date: date("2026-06-08"),
-            image: image.to_string(),
-        }
+        Plan::fixed(date("2026-06-08"), "caption", image)
     }
 
     #[test]

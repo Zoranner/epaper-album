@@ -83,11 +83,11 @@ mod tests {
     use super::*;
 
     fn plan(image: &str) -> Plan {
-        Plan {
-            date: crate::model::LocalDate::new(2026, 6, 6).unwrap(),
-            caption: "caption".to_string(),
-            image: image.to_string(),
-        }
+        Plan::fixed(
+            crate::model::LocalDate::new(2026, 6, 6).unwrap(),
+            "caption",
+            image,
+        )
     }
 
     fn file(sha256: &str, byte_size: u64, modified_at_unix_secs: u64) -> CacheFile {

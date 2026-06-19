@@ -31,7 +31,7 @@ use crate::{
     db::Store,
     error::AppError,
     models::{
-        null_data, ApiResponse, ImageRemarkPayload, LoginRequest, LoginResponse, Plan, SpriteMeta,
+        null_data, ApiResponse, ImagePayload, LoginRequest, LoginResponse, Plan, SpriteMeta,
         SpritePayload,
     },
 };
@@ -345,7 +345,10 @@ async fn list_images(
     let images = state
         .app
         .store
-        .list_images(params.get("keyword").map(String::as_str))
+        .list_images(
+            params.get("keyword").map(String::as_str),
+            &parse_tags_param(params.get("tags").map(String::as_str)),
+        )
         .await?;
     Ok(Json(ApiResponse::ok(images)))
 }
@@ -359,6 +362,7 @@ async fn upload_image(
 
     let mut image: Option<Bytes> = None;
     let mut remark: Option<String> = None;
+    let mut tags: Option<Vec<String>> = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -379,6 +383,13 @@ async fn upload_image(
                     .await
                     .map_err(|_| AppError::BadRequest("备注字段读取失败".to_string()))?;
                 remark = Some(value);
+            }
+            Some("tags") => {
+                let value = field
+                    .text()
+                    .await
+                    .map_err(|_| AppError::BadRequest("标签字段读取失败".to_string()))?;
+                tags = Some(parse_tags_json(&value)?);
             }
             _ => {}
         }
@@ -401,7 +412,7 @@ async fn upload_image(
     let (image, should_enqueue) = state
         .app
         .store
-        .upsert_uploaded_image(&sha256, remark.as_deref())
+        .upsert_uploaded_image(&sha256, remark.as_deref(), tags.as_deref())
         .await?;
     if should_enqueue {
         enqueue_image(&state, sha256).await;
@@ -414,14 +425,14 @@ async fn update_image(
     State(state): State<RuntimeState>,
     headers: HeaderMap,
     Path(sha256): Path<String>,
-    Json(payload): Json<ImageRemarkPayload>,
+    Json(payload): Json<ImagePayload>,
 ) -> Result<impl IntoResponse, AppError> {
     require_admin(&headers, &state.app).await?;
     validate_sha256(&sha256)?;
     let image = state
         .app
         .store
-        .update_image_remark(&sha256, &payload.remark)
+        .update_image(&sha256, &payload.remark, &payload.tags)
         .await?
         .ok_or_else(|| AppError::NotFound("图片不存在".to_string()))?;
     Ok(Json(ApiResponse::ok(image)))
@@ -1074,10 +1085,48 @@ fn validate_plan_payload(payload: &Plan) -> Result<(), AppError> {
     if payload.caption.trim().is_empty() {
         return Err(AppError::BadRequest("计划标题不能为空".to_string()));
     }
-    if !payload.image.is_empty() {
-        validate_sha256(&payload.image)?;
+    match payload.plan_type {
+        protocol::PlanType::Fixed => {
+            if !payload.image.is_empty() {
+                validate_sha256(&payload.image)?;
+            }
+        }
+        protocol::PlanType::Random => {
+            if normalized_tags(&payload.tags).is_empty() {
+                return Err(AppError::BadRequest("随机计划标签不能为空".to_string()));
+            }
+        }
     }
     Ok(())
+}
+
+fn parse_tags_json(value: &str) -> Result<Vec<String>, AppError> {
+    let tags: Vec<String> = serde_json::from_str(value)
+        .map_err(|_| AppError::BadRequest("标签字段格式不正确".to_string()))?;
+    Ok(normalized_tags(&tags))
+}
+
+fn parse_tags_param(value: Option<&str>) -> Vec<String> {
+    let Some(value) = value else {
+        return Vec::new();
+    };
+    normalized_tags(
+        &value
+            .split(',')
+            .map(str::to_string)
+            .collect::<Vec<String>>(),
+    )
+}
+
+fn normalized_tags(tags: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for tag in tags {
+        let tag = tag.trim();
+        if !tag.is_empty() && !normalized.iter().any(|item| item == tag) {
+            normalized.push(tag.to_string());
+        }
+    }
+    normalized
 }
 
 fn parse_plan_date(value: &str) -> Result<LocalDate, AppError> {

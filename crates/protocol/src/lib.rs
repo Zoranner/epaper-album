@@ -167,13 +167,49 @@ impl fmt::Display for DateParseError {
 
 impl std::error::Error for DateParseError {}
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PlanType {
+    #[default]
+    Fixed,
+    Random,
+}
+
+fn is_default_plan_type(plan_type: &PlanType) -> bool {
+    matches!(plan_type, PlanType::Fixed)
+}
+
+fn is_empty_tags(tags: &[String]) -> bool {
+    tags.is_empty()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Plan {
     pub date: LocalDate,
     #[serde(default)]
     pub caption: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "is_default_plan_type")]
+    #[serde(rename = "type")]
+    pub plan_type: PlanType,
+    #[serde(default)]
     pub image: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "is_empty_tags")]
+    pub tags: Vec<String>,
+}
+
+impl Plan {
+    pub fn fixed(date: LocalDate, caption: impl Into<String>, image: impl Into<String>) -> Self {
+        Self {
+            date,
+            caption: caption.into(),
+            plan_type: PlanType::Fixed,
+            image: image.into(),
+            tags: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,7 +254,9 @@ mod tests {
         let response = ApiResponse::ok(vec![Plan {
             date: LocalDate::parse("2026-06-06").unwrap(),
             caption: "caption".to_string(),
+            plan_type: PlanType::Fixed,
             image: "hash".to_string(),
+            tags: Vec::new(),
         }]);
         let json = serde_json::to_string(&response).unwrap();
 
@@ -232,5 +270,15 @@ mod tests {
         let json = r#"{"date":"2026-06-06","caption":"caption","image":"hash","extra":1}"#;
 
         assert!(serde_json::from_str::<Plan>(json).is_err());
+    }
+
+    #[test]
+    fn plan_defaults_to_fixed_type_and_empty_tags() {
+        let json = r#"{"date":"2026-06-06","caption":"caption","image":"hash"}"#;
+
+        let plan: Plan = serde_json::from_str(json).unwrap();
+
+        assert_eq!(plan.plan_type, PlanType::Fixed);
+        assert!(plan.tags.is_empty());
     }
 }
