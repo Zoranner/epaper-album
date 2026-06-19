@@ -534,6 +534,62 @@ async fn init_schema_replaces_legacy_plan_foreign_key_table() {
 }
 
 #[tokio::test]
+async fn plan_rows_with_invalid_dates_return_errors_without_panicking() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("connect in-memory sqlite");
+    sqlx::query(
+        r#"
+        CREATE TABLE plans (
+            date TEXT PRIMARY KEY,
+            caption TEXT NOT NULL,
+            image TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("create legacy plans");
+    sqlx::query(
+        r#"
+        CREATE TABLE images (
+            sha256 TEXT PRIMARY KEY,
+            status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'ready', 'failed')),
+            remark TEXT NOT NULL DEFAULT ''
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("create images");
+    let sha = valid_sha(61);
+    seed_image(&pool, &sha, "ready", "").await;
+    sqlx::query("INSERT INTO plans (date, caption, image) VALUES (?, ?, ?)")
+        .bind("2026-06-99")
+        .bind("bad date")
+        .bind(&sha)
+        .execute(&pool)
+        .await
+        .expect("insert dirty plan");
+
+    let store = Store::new(pool);
+    let result = store
+        .list_admin_plans(
+            protocol::LocalDate::parse("2026-01-01").expect("start"),
+            protocol::LocalDate::parse("2026-12-31").expect("end"),
+        )
+        .await;
+
+    assert!(result.is_err());
+    assert!(result
+        .expect_err("dirty date should return an error")
+        .to_string()
+        .contains("Stored plan date is invalid"));
+}
+
+#[tokio::test]
 async fn plan_update_by_date_and_returns_404_for_missing_plan() {
     let app = test_app().await;
     let sha_a = valid_sha(15);

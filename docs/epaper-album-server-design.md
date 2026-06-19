@@ -12,15 +12,17 @@
 
 | 变量 | 默认值 | 用途 |
 | --- | --- | --- |
+| `EPAPER_ALBUM_PRODUCTION` | `false` | 生产模式开关，容器运行时设为 `true` |
+| `LISTEN_HOST` | 开发为 `127.0.0.1`，生产为 `0.0.0.0` | HTTP 服务监听地址 |
 | `LISTEN_PORT` | `3000` | HTTP 服务监听端口 |
 | `DATABASE_URL` | `sqlite:data/epaper-album.db?mode=rwc` | SQLite 数据库连接地址 |
-| `SECRET_KEY` | `local-secret-key` | 设备和用户权限请求接口时使用的密钥 |
-| `ADMIN_USERNAME` | `admin` | 管理员账号 |
-| `ADMIN_PASSWORD` | `admin` | 管理员密码 |
+| `SECRET_KEY` | 开发为 `local-secret-key`，生产必填 | 设备和用户权限请求接口时使用的密钥 |
+| `ADMIN_USERNAME` | 开发为 `admin`，生产必填 | 管理员账号 |
+| `ADMIN_PASSWORD` | 开发为 `admin`，生产必填 | 管理员密码 |
 
 `SECRET_KEY` 用于设备同步计划和下载显示图片。管理员账号密码用于管理台登录和管理接口权限。服务端启动时创建 `data/`、`data/images/original/`、`data/images/display/` 和 `data/sprites/` 目录，初始化 SQLite 表结构，并挂载 API 路由和管理台静态文件。
 
-`server/.env.example` 提供本地和容器部署的环境变量示例。实际部署时复制为 `server/.env` 并调整密钥和管理员密码；`server/.env` 不纳入版本管理。
+`server/.env.example` 提供本地和容器部署的环境变量示例。实际部署时复制为 `server/.env` 并调整密钥和管理员密码；生产模式拒绝缺失值、开发默认值和 `change-me` 占位值。`server/.env` 不纳入版本管理。
 
 sprite 生成接口读取 `server/assets/fonts.toml` 和 `server/assets/fonts/` 下的字体资源，并用字体 rasterize 方式生成小尺寸黑白 BMP。`fonts.toml` 配置字体 fallback 顺序、字号和 padding；仓库只提供 `server/assets/fonts.example.toml`，部署或本地运行前复制为 `fonts.toml` 并把字体文件放入固定目录。真实配置和字体文件不纳入版本管理。
 
@@ -60,17 +62,13 @@ secret-key: local-secret-key
 
 ### 计划
 
-计划描述某个日期范围内设备应显示的标题和图片。计划表直接保存图片 `sha256` 列表。原图保存为 `data/images/original/{sha256}`，显示 BMP 保存为 `data/images/display/{sha256}`。管理台按图片 `status` 显示处理状态；设备接口只返回 `status = 'ready'` 的图片 `sha256`。
+计划描述某个日期设备应显示的标题和单张图片。计划表直接保存图片 `sha256`。原图保存为 `data/images/original/{sha256}`，显示 BMP 保存为 `data/images/display/{sha256}`。管理台按图片 `status` 显示处理状态；设备接口只返回图片状态为 `ready` 的计划。
 
 ```json
 {
-  "id": 1,
-  "start": "2026-06-06",
-  "end": "2026-06-06",
+  "date": "2026-06-06",
   "caption": "晚风和海",
-  "images": [
-    "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15..."
-  ]
+  "image": "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15..."
 }
 ```
 
@@ -78,11 +76,9 @@ secret-key: local-secret-key
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `id` | integer | 计划主键 |
-| `start` | string | 计划开始日期，格式为 `YYYY-MM-DD` |
-| `end` | string | 计划结束日期，包含当天 |
+| `date` | string | 计划日期，格式为 `YYYY-MM-DD` |
 | `caption` | string | 设备左下角标题 |
-| `images` | string[] | 图片 `sha256` 列表 |
+| `image` | string | 图片 `sha256`，为空字符串表示当天暂未选择图片 |
 
 ### 图片
 
@@ -184,19 +180,15 @@ Authorization: Bearer <admin-token>
   "message": "ok",
   "data": [
     {
-      "id": 1,
-      "start": "2026-06-06",
-      "end": "2026-06-06",
+      "date": "2026-06-06",
       "caption": "晚风和海",
-      "images": [
-        "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15..."
-      ]
+      "image": "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15..."
     }
   ]
 }
 ```
 
-管理员权限响应：
+管理员权限响应使用同一计划结构，包含所有计划记录；用户权限只返回图片状态为 `ready` 的计划：
 
 ```json
 {
@@ -204,25 +196,15 @@ Authorization: Bearer <admin-token>
   "message": "ok",
   "data": [
     {
-      "id": 1,
-      "start": "2026-06-06",
-      "end": "2026-06-06",
+      "date": "2026-06-06",
       "caption": "晚风和海",
-      "images": [
-        {
-          "sha256": "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15...",
-          "status": "pending",
-          "remark": "海边晚风"
-        }
-      ]
+      "image": "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15..."
     }
   ]
 }
 ```
 
-同一个计划接口根据权限返回不同图片结构。用户权限下，`images` 只包含已经生成显示 BMP 的 `sha256`。管理员权限下，`images` 包含 `sha256`、`status` 和 `remark`，用于计划管理页面展示和选择图片。
-
-计划接口用 SQLite `json_each(plans.images)` 展开图片摘要数组，并通过 `images.sha256` 主键关联图片状态和备注。管理员权限下保留全部图片；用户权限下只返回 `status = 'ready'` 的图片。
+同一个计划接口根据权限控制可见记录。用户权限下，计划图片必须已经生成显示 BMP；管理员权限下返回计划表中的记录，用于管理台维护。
 
 ### 获取图片
 
@@ -279,16 +261,13 @@ Content-Type: application/json
 
 ```json
 {
-  "start": "2026-06-06",
-  "end": "2026-06-06",
+  "date": "2026-06-06",
   "caption": "晚风和海",
-  "images": [
-    "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15..."
-  ]
+  "image": "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15..."
 }
 ```
 
-`images` 填写已有图片的 `sha256` 列表。计划管理不上传图片，只从图片管理页已经上传的图片中选择。服务端把这些摘要写入 `plans.images`。计划创建不依赖图片是否已经生成显示 BMP，也允许 `images` 为空数组，便于先维护日期和标题。
+`image` 填写已有图片的 `sha256`。计划管理不上传图片，只从图片管理页已经上传的图片中选择。服务端把该摘要写入 `plans.image`。计划创建不依赖图片是否已经生成显示 BMP，也允许 `image` 为空字符串，便于先维护日期和标题。
 
 成功响应返回创建后的管理台计划视图：
 
@@ -297,27 +276,19 @@ Content-Type: application/json
   "code": 0,
   "message": "ok",
   "data": {
-    "id": 1,
-    "start": "2026-06-06",
-    "end": "2026-06-06",
+    "date": "2026-06-06",
     "caption": "晚风和海",
-    "images": [
-      {
-        "sha256": "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15...",
-        "status": "pending",
-        "remark": "海边晚风"
-      }
-    ]
+    "image": "f1d2d2f924e986ac86fdf7b36c94bcdf32beec15..."
   }
 }
 ```
 
-服务端校验 `images` 中的每个 `sha256` 已存在于 `images` 表。存在未知图片时返回 `400 Bad Request`。`images` 可以为空数组。服务端按提交顺序自动去重，重复的 `sha256` 只保留第一次出现的位置。
+服务端校验 `image` 对应的 `sha256` 已存在于 `images` 表。存在未知图片时返回 `400 Bad Request`。`image` 可以为空字符串。
 
 ### 更新计划
 
 ```http
-PUT /api/plans/:id
+PUT /api/plans/:date
 ```
 
 用途：修改单条计划。该接口需要管理员权限。
@@ -329,12 +300,12 @@ Authorization: Bearer <admin-token>
 Content-Type: application/json
 ```
 
-请求体与新增计划一致。服务端校验 `images` 中的每个 `sha256` 已存在于 `images` 表。成功响应返回更新后的计划。计划不存在返回 `404 Not Found`，存在未知图片时返回 `400 Bad Request`。`images` 可以为空数组。服务端按提交顺序自动去重，重复的 `sha256` 只保留第一次出现的位置。
+请求体与新增计划一致。路径中的 `date` 表示原计划日期，请求体中的 `date` 表示保存后的计划日期。服务端校验 `image` 对应的 `sha256` 已存在于 `images` 表。成功响应返回更新后的计划。计划不存在返回 `404 Not Found`，存在未知图片时返回 `400 Bad Request`。`image` 可以为空字符串。
 
 ### 删除计划
 
 ```http
-DELETE /api/plans/:id
+DELETE /api/plans/:date
 ```
 
 用途：删除单条计划。该接口需要管理员权限。
@@ -405,10 +376,10 @@ Content-Type: multipart/form-data
 ### 生成 Sprite
 
 ```http
-GET /api/sprite?type=caption&text=晚风和海
+GET /api/sprites?type=caption&text=晚风和海
 ```
 
-用途：根据短文本和类型即时生成设备叠加文字使用的 BMP 小图块，供调用方预览、保存或合成显示资源时使用。该接口支持管理员权限和 `secret-key` 权限。
+用途：根据短文本和类型生成设备叠加文字使用的 BMP 小图块，并返回 sprite 文件的 `sha256`。该接口支持管理员权限和 `secret-key` 权限。
 
 用户权限请求头：
 
@@ -431,7 +402,19 @@ Authorization: Bearer <admin-token>
 | `type` | string | sprite 类型，取值为 `caption`、`date` 或 `status` |
 | `text` | string | 需要生成的小图块文字，URL 编码后传入 |
 
-服务端按 GET 语义处理该接口，请求不会写入数据库、不会创建图片记录。成功响应返回 BMP 二进制内容，`Content-Type` 固定为 `image/bmp`。失败响应使用统一 JSON 结构。
+服务端按 GET 语义处理该接口，请求不会写入数据库、不会创建图片记录。成功响应返回统一 JSON 结构：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "sha256": "sprite-sha256"
+  }
+}
+```
+
+设备和管理台再调用 `GET /sprites/:sha256` 下载 BMP 二进制内容。失败响应使用统一 JSON 结构。
 
 参数规则：
 
@@ -499,6 +482,34 @@ Content-Type: application/json
   }
 }
 ```
+
+### 下载 Sprite
+
+```http
+GET /sprites/:sha256
+```
+
+用途：设备端和管理台按 sprite 文件键下载 BMP 文件。
+
+用户权限请求头：
+
+```http
+secret-key: local-secret-key
+```
+
+管理员权限请求头：
+
+```http
+Authorization: Bearer <admin-token>
+```
+
+路径参数：
+
+| 参数 | 说明 |
+| --- | --- |
+| `sha256` | sprite 内容摘要，也是 `data/sprites/{sha256}.bmp` 的文件键 |
+
+下载成功时返回 BMP 二进制内容，`Content-Type` 固定为 `image/bmp`。资源不存在或 `sha256` 格式不正确时返回统一 JSON 错误。
 
 ### 下载显示图片
 
@@ -570,11 +581,11 @@ Authorization: Bearer <admin-token>
 
 ```sql
 CREATE TABLE IF NOT EXISTS plans (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    start_date TEXT NOT NULL,
-    end_date   TEXT NOT NULL,
-    caption    TEXT NOT NULL,
-    images     TEXT NOT NULL
+    date    TEXT PRIMARY KEY CHECK (
+        date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+    ),
+    caption TEXT NOT NULL,
+    image   TEXT NOT NULL DEFAULT ''
 );
 ```
 
@@ -582,11 +593,9 @@ CREATE TABLE IF NOT EXISTS plans (
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `id` | INTEGER | 自增主键 |
-| `start_date` | TEXT | 计划开始日期，对应接口字段 `start` |
-| `end_date` | TEXT | 计划结束日期，对应接口字段 `end` |
+| `date` | TEXT | 计划日期，对应接口字段 `date` |
 | `caption` | TEXT | 标题，对应接口字段 `caption` |
-| `images` | TEXT | 原始图片摘要数组的 JSON 字符串 |
+| `image` | TEXT | 图片 `sha256`，对应接口字段 `image` |
 
 ### `images`
 
@@ -614,37 +623,28 @@ CREATE TABLE IF NOT EXISTS images (
 
 ### 设备读取计划
 
-设备调用 `GET /api/plans`。服务端返回从当前日期开始的计划，默认三天，最多七天。返回给设备的 `images` 使用 `status = 'ready'` 的图片 `sha256`。
+设备调用 `GET /api/plans`。服务端返回从当前日期开始的计划，默认三天，最多七天。返回给设备的计划需要对应图片处于 `status = 'ready'`。
 
-如果计划关联的图片仍在处理中，服务端在设备响应中跳过该图片。某条计划下全部图片都未处理完成时，该计划可以保留在响应中并返回空 `images`，设备端按本地缓存和异常策略处理。
+如果计划关联的图片仍在处理中或处理失败，服务端在设备响应中跳过该计划。管理员权限仍可读取这些计划并在管理台看到图片处理状态。
 
-查询时使用 `json_each(plans.images)` 展开计划内的图片摘要，并通过 `images.sha256` 关联状态和备注：
+查询计划时读取日期范围内记录，并额外包含最近一条早于查询起始日的计划，便于设备在当天没有计划时继续使用最近历史计划：
 
 ```sql
 SELECT
-    p.id,
-    p.start_date,
-    p.end_date,
-    p.caption,
-    image_item.key AS image_index,
-    i.sha256,
-    i.status,
-    i.remark
+    date,
+    caption,
+    image
 FROM plans AS p
-JOIN json_each(p.images) AS image_item
-LEFT JOIN images AS i ON i.sha256 = image_item.value
-WHERE p.start_date <= :end_date
-  AND p.end_date >= :start_date
-ORDER BY p.start_date ASC, p.id ASC, image_item.key ASC;
+WHERE (date >= :start_date AND date <= :end_date)
+   OR date = (SELECT MAX(date) FROM plans WHERE date < :start_date)
+ORDER BY date ASC;
 ```
 
-设备响应只收集 `status = 'ready'` 的图片。
-
-用户权限查询在关联图片后增加 `i.status = 'ready'` 过滤。管理员权限不加该过滤，保留计划中的全部图片并返回图片状态。
+用户权限查询会按 `plans.image` 查 `images.status`，只返回 `ready` 图片对应计划。管理员权限不加该过滤，保留计划中的全部记录。
 
 ### 管理台读取计划
 
-管理台调用 `GET /api/plans`，并使用管理员权限。该接口返回每张图片的 `sha256`、`status` 和 `remark`。管理台按 `status` 显示“处理中”“处理失败”或最终图片。
+管理台调用 `GET /api/plans`，并使用管理员权限。计划列表使用 `image` 字段关联图片管理数据，按图片 `status` 显示“处理中”“处理失败”或最终图片。
 
 ## 前端管理台
 
@@ -659,7 +659,7 @@ ORDER BY p.start_date ASC, p.id ASC, image_item.key ASC;
 
 ## 工程构建与部署
 
-服务端工程借鉴 `provider-relay` 的独立服务结构，所有后端、管理台和部署文件都收敛在 `server/` 目录中：
+服务端是独立 Cargo 工程，所有后端、管理台和部署文件都收敛在 `server/` 目录中。服务端通过 path dependency 引用 `../crates/protocol` 共享协议 crate，不纳入设备端根 Cargo workspace：
 
 ```text
 server/
@@ -678,7 +678,7 @@ server/
 `server/build.rs` 负责在 Cargo 构建服务端时自动编译管理台。默认流程为：
 
 - 监听 `server/web/src`、`index.html`、`package.json`、`bun.lock`、`tsconfig` 和 `vite.config.ts`。
-- 如果 `server/web/node_modules` 不存在，执行 `bun install`。
+- 如果 `server/web/node_modules` 不存在，执行 `bun install --frozen-lockfile`。
 - 执行 `bun run build`，把管理台产物输出到 `server/web/dist`。
 
 构建后端依赖时可以设置 `SKIP_FRONTEND_BUILD=1` 跳过管理台编译，避免 Docker 的 Rust 依赖缓存阶段重复构建前端。
@@ -690,7 +690,7 @@ Docker 镜像采用多阶段构建：
 - Rust release 阶段设置 `SKIP_FRONTEND_BUILD=1` 编译后端二进制。
 - runtime 阶段只拷贝 `epaper-album-server` 二进制和 `web/dist`，运行目录为 `/app`。
 
-容器运行时使用 `/app/data` 作为持久数据目录，保存 SQLite 数据库、原图、显示 BMP 和 sprite 缓存。`server/docker/docker-compose.yml` 提供基础部署配置，服务名和镜像名均为 `epaper-album-server`，部署时通过 `server/.env` 设置 `SECRET_KEY`、`ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。
+Docker 构建命令从 `server/` 发起，构建上下文使用仓库根目录，Dockerfile 只复制 `server/` 与 `crates/protocol/`。容器运行时使用 `/app/data` 作为持久数据目录，保存 SQLite 数据库、原图、显示 BMP 和 sprite 缓存。`server/docker/docker-compose.yml` 提供基础部署配置，服务名和镜像名均为 `epaper-album-server`，部署时通过 `server/.env` 设置 `SECRET_KEY`、`ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。
 
 ## 建议验证
 
@@ -698,10 +698,10 @@ Docker 镜像采用多阶段构建：
 
 ```powershell
 cd server
-cargo build
-cargo fmt --all
-cargo test --all-targets --all-features
+$env:SKIP_FRONTEND_BUILD = "1"
+cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features
 
 cd web
 bun run build

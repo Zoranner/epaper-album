@@ -16,7 +16,7 @@ fn main() {
 
     if !Path::new("web/node_modules").exists() {
         progress("Installing dependencies...");
-        run("bun", &["install"], "web");
+        run("bun", &["install", "--frozen-lockfile"], "web");
     }
 
     progress("Building frontend...");

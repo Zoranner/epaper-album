@@ -29,7 +29,7 @@ impl Store {
 
     pub async fn list_admin_plans(&self, start: LocalDate, end: LocalDate) -> Result<Vec<Plan>> {
         let rows = self.load_plan_rows(start, end).await?;
-        Ok(rows.into_iter().map(plan_from_row).collect())
+        rows.into_iter().map(plan_from_row).collect()
     }
 
     pub async fn list_user_plans(&self, start: LocalDate, end: LocalDate) -> Result<Vec<Plan>> {
@@ -43,7 +43,7 @@ impl Store {
                     .fetch_optional(&self.pool)
                     .await?;
             if status.as_deref() == Some("ready") {
-                plans.push(plan_from_row(row));
+                plans.push(plan_from_row(row)?);
             }
         }
 
@@ -312,7 +312,7 @@ impl Store {
                 .fetch_optional(&self.pool)
                 .await?;
 
-        Ok(row.map(plan_from_row))
+        row.map(plan_from_row).transpose()
     }
 
     async fn validate_image(&self, sha256: &str) -> Result<()> {
@@ -340,7 +340,9 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS plans (
-            date          TEXT PRIMARY KEY,
+            date          TEXT PRIMARY KEY CHECK (
+                date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+            ),
             caption       TEXT NOT NULL,
             image         TEXT NOT NULL DEFAULT ''
         )
@@ -378,12 +380,13 @@ async fn drop_table_with_foreign_keys(pool: &SqlitePool, table: &str) -> Result<
     Ok(())
 }
 
-fn plan_from_row(row: PlanRow) -> Plan {
-    Plan {
-        date: LocalDate::parse(&row.date).expect("stored plan date must be valid"),
+fn plan_from_row(row: PlanRow) -> Result<Plan> {
+    Ok(Plan {
+        date: LocalDate::parse(&row.date)
+            .map_err(|_| anyhow!("Stored plan date is invalid: {}", row.date))?,
         caption: row.caption,
         image: row.image,
-    }
+    })
 }
 
 async fn drop_incompatible_table(

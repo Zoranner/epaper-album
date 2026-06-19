@@ -1,0 +1,11 @@
+.git/
+.refs/
+.embuild/
+target/
+data/
+server/target/
+server/data/
+server/.env
+server/web/dist/
+server/web/node_modules/
+server/web/.vite/
