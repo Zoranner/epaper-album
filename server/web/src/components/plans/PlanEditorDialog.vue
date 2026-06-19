@@ -15,18 +15,28 @@
           :model-value="draft.date"
           @update:model-value="draft.date = $event"
         />
+        <Select v-model="draftType" label="类型" required :options="typeOptions" />
       </div>
 
       <PlanImagePicker
+        v-if="draftType === 'fixed'"
         :images="images"
         :preview-urls="previewUrls"
         :selected="selectedImage"
         @select="selectImage"
       />
+      <Input
+        v-else
+        label="随机标签"
+        :maxlength="120"
+        placeholder="例如：家庭 旅行"
+        :model-value="tagInput"
+        @update:model-value="tagInput = $event"
+      />
 
       <p v-if="error" class="form-error">{{ error }}</p>
       <DialogActions>
-        <template #meta>{{ selectedImage ? '已选 1 张' : '未选图片' }}</template>
+        <template #meta>{{ metaText }}</template>
         <Button type="button" variant="secondary" @click="$emit('close')">取消</Button>
         <Button :loading="saving" type="submit" variant="primary">保存</Button>
       </DialogActions>
@@ -35,11 +45,20 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue';
-import { createPlan, errorMessage, updatePlan, type AdminImage, type Plan } from '../../api';
+import { computed, reactive, ref, watch } from 'vue';
+import {
+  createPlan,
+  errorMessage,
+  parseTagInput,
+  updatePlan,
+  type AdminImage,
+  type Plan,
+  type PlanType,
+} from '../../api';
 import Button from '../base/Button.vue';
 import DatePicker from '../input/DatePicker.vue';
 import Input from '../input/Input.vue';
+import Select, { type SelectOption } from '../input/Select.vue';
 import Dialog from '../overlay/Dialog.vue';
 import DialogActions from '../overlay/DialogActions.vue';
 import PlanImagePicker from './PlanImagePicker.vue';
@@ -64,7 +83,23 @@ const error = ref('');
 const draft = reactive<Plan>({
   date: '',
   caption: '',
+  type: 'fixed',
   image: '',
+  tags: [],
+});
+const typeOptions: SelectOption[] = [
+  { label: '固定', value: 'fixed' },
+  { label: '随机', value: 'random' },
+];
+const draftType = ref<PlanType>('fixed');
+const tagInput = ref('');
+
+const metaText = computed(() => {
+  if (draftType.value === 'random') {
+    const count = parseTagInput(tagInput.value).length;
+    return count > 0 ? `已选 ${count} 个标签` : '未选标签';
+  }
+  return selectedImage.value ? '已选 1 张' : '未选图片';
 });
 
 async function submit() {
@@ -78,10 +113,17 @@ async function submit() {
     if (!draft.date) {
       throw new Error('请选择日期');
     }
+    const payload: Plan = {
+      date: draft.date,
+      caption: draft.caption,
+      type: draftType.value,
+      image: draftType.value === 'fixed' ? selectedImage.value : '',
+      tags: draftType.value === 'random' ? parseTagInput(tagInput.value) : [],
+    };
     if (props.plan) {
-      await updatePlan(auth.token.value, props.plan.date, draft);
+      await updatePlan(auth.token.value, props.plan.date, payload);
     } else {
-      await createPlan(auth.token.value, draft);
+      await createPlan(auth.token.value, payload);
     }
     emit('saved');
   } catch (saveError) {
@@ -101,8 +143,10 @@ function selectImage(sha256: string) {
 function loadDraft(plan: PlanView | null) {
   draft.date = plan?.date ?? todayDate();
   draft.caption = plan?.caption ?? '';
+  draftType.value = plan?.type ?? 'fixed';
   selectedImage.value = plan?.image ?? '';
   draft.image = selectedImage.value;
+  tagInput.value = plan?.tags?.join(' ') ?? '';
   error.value = '';
 }
 

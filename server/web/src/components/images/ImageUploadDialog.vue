@@ -15,6 +15,13 @@
         :model-value="remark"
         @update:model-value="remark = $event"
       />
+      <Input
+        label="标签"
+        :maxlength="120"
+        placeholder="例如：家庭 旅行"
+        :model-value="tagInput"
+        @update:model-value="tagInput = $event"
+      />
       <p v-if="error" class="form-error">{{ error }}</p>
       <DialogActions>
         <Button type="button" variant="secondary" @click="$emit('close')">取消</Button>
@@ -28,7 +35,7 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import { errorMessage, uploadImage, type AdminImage } from '../../api';
+import { errorMessage, parseTagInput, uploadImage, type AdminImage } from '../../api';
 import Button from '../base/Button.vue';
 import FileInput from '../input/FileInput.vue';
 import Input from '../input/Input.vue';
@@ -48,6 +55,7 @@ const emit = defineEmits<{
 const auth = useAuthStore();
 const selectedFile = ref<File | null>(null);
 const remark = ref('');
+const tagInput = ref('');
 const error = ref('');
 const uploading = ref(false);
 
@@ -64,7 +72,12 @@ async function submit() {
   error.value = '';
   uploading.value = true;
   try {
-    const image = await uploadImage(auth.token.value, selectedFile.value, remark.value);
+    const image = await uploadImage(
+      auth.token.value,
+      selectedFile.value,
+      remark.value,
+      parseTagInput(tagInput.value),
+    );
     emit('uploaded', image);
   } catch (uploadError) {
     error.value = errorMessage(uploadError, '图片上传失败');
@@ -79,6 +92,7 @@ watch(
     if (!open) {
       selectedFile.value = null;
       remark.value = '';
+      tagInput.value = '';
       error.value = '';
     }
   },

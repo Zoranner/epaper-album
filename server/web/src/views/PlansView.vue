@@ -185,6 +185,8 @@ function withPlanImages(nextPlans: Plan[], nextImages: AdminImage[]): PlanView[]
   const imageBySha = new Map(nextImages.map((image) => [image.sha256, image]));
   return nextPlans.map((plan) => ({
     ...plan,
+    type: plan.type ?? 'fixed',
+    tags: plan.tags ?? [],
     imageRecord: imageBySha.get(plan.image) ?? null,
   }));
 }

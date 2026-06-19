@@ -6,6 +6,9 @@
     </div>
     <div class="image-tile__body">
       <p>{{ image.remark || '未填写备注' }}</p>
+      <div v-if="image.tags.length > 0" class="tag-list">
+        <span v-for="tag in image.tags" :key="tag" class="tag-chip">{{ tag }}</span>
+      </div>
       <code :title="image.sha256">{{ shortSha(image.sha256) }}</code>
     </div>
     <div class="image-tile__footer">
@@ -45,7 +48,7 @@ const statusText = computed(() => {
   return '待处理';
 });
 const menuItems = computed<ActionMenuItem[]>(() => {
-  const items: ActionMenuItem[] = [{ key: 'edit', label: '编辑备注', icon: 'edit' }];
+  const items: ActionMenuItem[] = [{ key: 'edit', label: '编辑信息', icon: 'edit' }];
   if (props.image.status === 'ready') {
     items.push({ key: 'refresh', label: '刷新预览', icon: 'refresh' });
   }

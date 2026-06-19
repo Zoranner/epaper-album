@@ -111,7 +111,8 @@ const filteredImages = computed(() => {
     const matchTerm =
       !term ||
       image.sha256.toLowerCase().includes(term) ||
-      image.remark.toLowerCase().includes(term);
+      image.remark.toLowerCase().includes(term) ||
+      image.tags.some((tag) => tag.toLowerCase().includes(term));
     return matchStatus && matchTerm;
   });
 });

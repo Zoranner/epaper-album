@@ -53,7 +53,10 @@ const filteredImages = computed(() => {
     return props.images;
   }
   return props.images.filter(
-    (image) => image.sha256.toLowerCase().includes(term) || image.remark.toLowerCase().includes(term),
+    (image) =>
+      image.sha256.toLowerCase().includes(term) ||
+      image.remark.toLowerCase().includes(term) ||
+      image.tags.some((tag) => tag.toLowerCase().includes(term)),
   );
 });
 

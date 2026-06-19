@@ -12,14 +12,18 @@
       </div>
     </div>
     <div class="plan-row__content">
-      <div v-if="planImage" class="plan-thumb" :class="planImage.status">
+      <div v-if="plan.type === 'random'" class="plan-thumb random">随机</div>
+      <div v-else-if="planImage" class="plan-thumb" :class="planImage.status">
         <img v-if="previewUrls[planImage.sha256]" :src="previewUrls[planImage.sha256]" :alt="planImage.sha256" />
         <span v-else>{{ planImage.status === 'failed' ? '失败' : '处理中' }}</span>
       </div>
       <div v-else class="plan-thumb empty">未选</div>
       <div class="plan-row__meta">
-        <span>图片 SHA256</span>
-        <code>{{ plan.image || '-' }}</code>
+        <span>{{ plan.type === 'random' ? '随机标签' : '图片 SHA256' }}</span>
+        <div v-if="plan.type === 'random' && plan.tags?.length" class="tag-list">
+          <span v-for="tag in plan.tags" :key="tag" class="tag-chip">{{ tag }}</span>
+        </div>
+        <code v-else>{{ plan.image || '-' }}</code>
       </div>
     </div>
   </article>

@@ -426,6 +426,26 @@
   font-size: var(--text-xs);
 }
 
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.tag-chip {
+  max-width: 100%;
+  padding: 2px 6px;
+  border: 1px solid var(--color-line);
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .image-tile__footer {
   min-height: 30px;
   display: flex;
@@ -505,6 +525,10 @@
 
 .plan-thumb {
   width: 96px;
+}
+
+.plan-thumb.random {
+  color: var(--color-text);
 }
 
 .plan-thumb.failed,

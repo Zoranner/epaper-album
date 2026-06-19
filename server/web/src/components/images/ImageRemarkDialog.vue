@@ -1,5 +1,5 @@
 <template>
-  <Dialog :open="open" title="编辑备注" @close="$emit('close')">
+  <Dialog :open="open" title="编辑图片信息" @close="$emit('close')">
     <form v-if="image" class="dialog-form" @submit.prevent="submit">
       <code class="dialog-sha">{{ image.sha256 }}</code>
       <Input
@@ -8,6 +8,13 @@
         placeholder="未填写备注"
         :model-value="remark"
         @update:model-value="remark = $event"
+      />
+      <Input
+        label="标签"
+        :maxlength="120"
+        placeholder="例如：家庭 旅行"
+        :model-value="tagInput"
+        @update:model-value="tagInput = $event"
       />
       <p v-if="error" class="form-error">{{ error }}</p>
       <DialogActions>
@@ -20,7 +27,7 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import { errorMessage, updateImageRemark, type AdminImage } from '../../api';
+import { errorMessage, parseTagInput, updateImage, type AdminImage } from '../../api';
 import Button from '../base/Button.vue';
 import Input from '../input/Input.vue';
 import Dialog from '../overlay/Dialog.vue';
@@ -39,6 +46,7 @@ const emit = defineEmits<{
 
 const auth = useAuthStore();
 const remark = ref('');
+const tagInput = ref('');
 const error = ref('');
 const saving = ref(false);
 
@@ -50,7 +58,12 @@ async function submit() {
   error.value = '';
   saving.value = true;
   try {
-    const image = await updateImageRemark(auth.token.value, props.image.sha256, remark.value);
+    const image = await updateImage(
+      auth.token.value,
+      props.image.sha256,
+      remark.value,
+      parseTagInput(tagInput.value),
+    );
     emit('saved', image);
   } catch (saveError) {
     error.value = errorMessage(saveError, '备注保存失败');
@@ -63,6 +76,7 @@ watch(
   () => props.image,
   (image) => {
     remark.value = image?.remark ?? '';
+    tagInput.value = image?.tags.join(' ') ?? '';
     error.value = '';
   },
   { immediate: true },

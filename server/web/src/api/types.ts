@@ -4,12 +4,17 @@ export interface AdminImage {
   sha256: string;
   status: ImageStatus;
   remark: string;
+  tags: string[];
 }
+
+export type PlanType = 'fixed' | 'random';
 
 export interface Plan {
   date: string;
   caption: string;
+  type?: PlanType;
   image: string;
+  tags?: string[];
 }
 
 export interface LoginResponse {
