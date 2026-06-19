@@ -10,8 +10,8 @@
 - 自动业务周期固定对齐到北京时间下一个整点。
 - 外部供电状态下，每个整点同步照片计划和显示资源。
 - 电池状态下，每个整点运行一次；当天未成功同步照片计划时继续尝试同步。
-- 有效低电状态先保证屏幕显示低电通知；低电通知已经显示时保留屏幕。
-- 外部供电恢复后，同步最新照片计划，清除低电通知，刷新正常照片页。
+- 有效低电状态停止云端同步，并刷新低电状态页。
+- 外部供电恢复后，同步最新照片计划，按正常照片页规则刷新屏幕。
 - 屏幕显示状态只保存在 `/sdcard/data/state.json`。
 - 照片计划同步成功日期只保存在 `/sdcard/data/sync.json`。
 
@@ -37,7 +37,7 @@
 电源状态只影响：
 
 - 本轮是否允许联网同步。
-- 本轮是否显示或清除低电通知。
+- 本轮是否刷新低电状态页。
 - 业务周期结束后使用外部供电等待重启，还是电池 deep sleep。
 
 ## 入口分流
@@ -180,12 +180,10 @@ date + image + caption
 
 - 目标四字段与 `state.json` 一致时保留屏幕。
 - `date`、`image`、`caption` 任一字段变化时刷新。
-- 有效低电且当前照片可显示时，用当前照片叠加 `LowBattery` 通知刷新。
 - 有效低电时刷新低电全屏错误页。
 - 有效低电但没有当前可显示照片时，刷新低电状态页。
 - 外部供电恢复后按正常照片计划判断是否刷新。
-- 同步失败但选中照片可显示时，刷新选中照片并叠加 `SyncFailed` 通知。
-- 同步失败且只有当前照片可显示时，刷新当前照片并叠加 `SyncFailed` 通知。
+- 同步失败时刷新同步错误状态页。
 - 配置缺失、无可用照片时通过显示决策刷新对应状态页。TF 卡挂载失败时由平台层刷新存储错误页。
 
 状态页用于无法生成正常照片页的情况。业务周期内可以访问 TF 卡时，状态页刷新成功后写入 `date` 并清空照片字段，让后续恢复判断有依据。TF 卡挂载失败时只能刷新存储错误页，不能写入 `state.json`。
@@ -402,14 +400,7 @@ pub enum DisplayCause {
     Refresh(Page(MissingConfig))
 
 否则如果 effective_low_battery:
-    Keep
-
-否则如果 effective_low_battery 且 state.image 可显示:
     Refresh(Page(date=today, title=LOW BATTERY))
-
-否则如果 effective_low_battery:
-    Refresh(Page(LowBattery))
-
 
 否则如果 sync failed 且 selected 可显示:
     Refresh(Page(date=today, title=SYNC ERROR))
@@ -443,11 +434,10 @@ pub enum DisplayCause {
 | 外部供电后转为电池 | 下一个整点识别为电池；当天已同步成功时不重复联网 |
 | 电池运行 | 每个整点唤醒检测；当天未成功同步时尝试同步 |
 | 电池同步失败 | 本轮记录失败，下个整点继续尝试 |
-| 电池有效低电 | 停止云端同步，刷新低电通知或低电状态页 |
-| 低电通知已显示 | 保留屏幕，减少刷新 |
-| 外部供电恢复 | 下一个整点同步最新计划，清除低电通知，刷新正常照片页 |
+| 电池有效低电 | 停止云端同步，刷新低电状态页 |
+| 外部供电恢复 | 下一个整点同步最新计划，按正常照片页规则刷新屏幕 |
 | 图片缓存坏文件 | 视为资源缺失；允许联网时重新下载 |
-| 同步失败但有可显示照片 | 叠加同步失败通知 |
+| 同步失败但有可显示照片 | 刷新同步错误状态页 |
 | 配置缺失 | 显示配置状态页 |
 | TF 卡不可用 | 平台层显示存储错误页 |
 
@@ -492,10 +482,11 @@ pub enum DisplayCause {
 
 ```powershell
 cargo fmt --all
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features
+
 $env:IDF_TOOLS_PATH='C:\Espressif'
 . .\scripts\activate-esp-idf.ps1
-cargo test
-cargo clippy --all-targets --all-features -- -D warnings
 cargo +esp build --target xtensa-esp32s3-espidf
 ```
 
@@ -508,9 +499,8 @@ cargo +esp build --target xtensa-esp32s3-espidf
 - 转为电池后下一个整点日志显示电池状态。
 - 电池当天已同步成功后整点不重复联网。
 - 电池当天未同步成功时整点继续尝试。
-- 低电状态刷新低电通知或低电状态页。
-- 低电通知已显示时不重复刷新。
-- 外部供电恢复后清除低电通知并刷新正常照片。
+- 低电状态刷新低电状态页。
+- 外部供电恢复后按正常照片页规则刷新。
 - 串口日志记录 PMIC、power profile、sync decision、display decision、sync result、refresh result、next run。
 
 ## 迁移步骤
@@ -541,4 +531,4 @@ deep sleep 只由电池侧结束方式触发。外部供电状态使用整点重
 
 设备最终运行模型是：启动后先做入口分流；存在自检请求时进入硬件自检；其他启动来源都进入完整业务周期。业务周期采集硬件和本地状态，先做同步决策，再做显示决策，最后安排北京时间下一个整点运行。
 
-外部供电状态每个整点重启运行并允许同步；电池状态每个整点 deep sleep 唤醒，当天未成功同步时继续尝试；有效低电状态先保证屏幕显示低电通知。显示正确性由 `state.json` 四个屏幕字段保证，同步可靠性由 `sync.json.date` 保证。
+外部供电状态每个整点重启运行并允许同步；电池状态每个整点 deep sleep 唤醒，当天未成功同步时继续尝试；有效低电状态停止同步并显示低电状态页。显示正确性由 `state.json` 三个屏幕字段保证，同步可靠性由 `sync.json.date` 保证。

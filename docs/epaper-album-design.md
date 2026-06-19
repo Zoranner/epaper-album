@@ -70,13 +70,9 @@ secret-key: local-secret-key
   "message": "ok",
   "data": [
     {
-      "id": 1,
-      "start": "2026-06-06",
-      "end": "2026-06-06",
+      "date": "2026-06-06",
       "caption": "晚风和海",
-      "images": [
-        "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
-      ]
+      "image": "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
     }
   ]
 }
@@ -87,13 +83,11 @@ secret-key: local-secret-key
 - `code`：接口状态码，`0` 表示成功。
 - `message`：接口状态说明。
 - `data[]`：设备可读取的计划列表。
-- `data[].id`：计划 ID。
-- `data[].start`：计划开始日期。
-- `data[].end`：计划结束日期，包含当天。
+- `data[].date`：计划日期，格式为 `YYYY-MM-DD`。
 - `data[].caption`：左下角标题。
-- `data[].images`：已经处理完成的显示图片 `sha256` 列表。
+- `data[].image`：已经处理完成的显示图片 `sha256`。
 
-设备按服务端返回结果覆盖本地计划文件。显示刷新判断使用当前日期、计划 ID、图片 `sha256`、图片序号和标题共同确定。
+设备按服务端返回结果覆盖本地计划文件。显示刷新判断使用当前日期、图片 `sha256` 和标题共同确定。
 
 图片下载接口：
 
@@ -107,11 +101,30 @@ secret-key: local-secret-key
 文字 sprite 接口：
 
 ```http
-GET {base_url}/api/sprite?type=caption&text=晚风和海
+GET {base_url}/api/sprites?type=caption&text=晚风和海
 secret-key: local-secret-key
 ```
 
-`type` 取值为 `caption`、`date` 或 `status`。服务端根据 `server/assets/fonts.toml` 和字体目录生成白底黑字 BMP 小图块，字体、字号、fallback 顺序、内边距和字形栅格化规则由服务端统一管理。设备当前使用 `caption` 和 `date`，分别用于左下角标题和右下角日期合成；`status` 作为右上角扩展类型保留。
+成功响应：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "sha256": "sprite-sha256"
+  }
+}
+```
+
+设备再按 `sha256` 下载 sprite BMP：
+
+```http
+GET {base_url}/sprites/{sha256}
+secret-key: local-secret-key
+```
+
+`type` 取值为 `caption`、`date` 或 `status`。服务端根据 `server/assets/fonts.toml` 和字体目录生成白底黑字 BMP 小图块，字体、字号、fallback 顺序、内边距和字形栅格化规则由服务端统一管理。设备当前使用 `caption` 和 `date`，分别用于左下角标题和右下角日期合成；`status` 作为右上角扩展类型保留。设备以元数据接口返回的 `sha256` 作为缓存键和下载路径参数。
 
 设备端和服务端按同一组 sprite 术语处理：`caption` 是左下角标题，`date` 是右下角日期，`status` 是右上角扩展。服务端图片处理状态使用 `images.status` 字段表达。
 

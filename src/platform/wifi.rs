@@ -184,6 +184,8 @@ pub mod espidf {
     }
 
     fn disable_wifi_power_save() {
+        // SAFETY: Wi-Fi has been started, connected, and brought netif up by EspWifi before this
+        // platform-layer call. Failure only disables the power-save optimization and is logged.
         match esp_idf_sys::esp!(unsafe { esp_idf_sys::esp_wifi_set_ps(0) }) {
             Ok(()) => log::info!(target: "epaper_album", "wifi power save disabled"),
             Err(error) => {

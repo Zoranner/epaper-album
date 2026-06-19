@@ -79,9 +79,9 @@ I (...) epaper_album: next wake: Some(...), sleep seconds: Some(...)
 
 `device outcome` 表示 ESP-IDF 适配层结果，常见值包括 `completed`、`storage-mount-error`、`epd-init-error` 和 `state-write-error`。`cycle outcome` 表示业务周期结果，常见值包括 `SyncRequested`、`RefreshOnly`、`SleepOnly`、`LowBatterySkipSync`、`SyncFailed`、`RefreshFailed` 和 `NoUsablePhoto`。`next wake` 和 `sleep seconds` 来自调度计算，当前开发入口输出计划值，深度睡眠执行保持手动接入。
 
-TF 卡根目录放置 `/sdcard/config.toml`，设备即可读取 Wi-Fi、云端地址和 `secret-key`。设备运行数据写入 `/sdcard/data/`：当前计划保存为 `plan.json`，运行状态保存为 `state.json`，图片缓存保存到 `images/{sha256}.bmp`，标题、日期和通知 sprite 缓存保存到 `sprites/{sha256}.bmp`。
+TF 卡根目录放置 `/sdcard/config.toml`，设备即可读取 Wi-Fi、云端地址和 `secret-key`。设备运行数据写入 `/sdcard/data/`：当前计划保存为 `plan.json`，运行状态保存为 `state.json`，图片缓存保存到 `images/{sha256}.bmp`，标题和日期 sprite 缓存保存到 `sprites/{sha256}.bmp`。
 
-设备遇到影响运行流程的硬错误时，会刷新内置英文错误页，覆盖 TF 卡不可用、配置缺失、同步失败和无可用图片等状态。低电量、同步失败但仍可显示缓存照片等弱状态继续使用照片页左上角通知。
+设备遇到影响运行流程的硬错误时，会刷新内置英文错误页，覆盖 TF 卡不可用、配置缺失、低电量、同步失败和无可用图片等状态。
 
 仓库提供 TF 卡配置示例：
 
@@ -127,9 +127,27 @@ target/xtensa-esp32s3-espidf/release/
 
 `libespidf.bin` 属于 ESP-IDF 侧支撑产物，主固件烧录入口使用应用 ELF。
 
+## 设备端验证
+
+设备端位于仓库根目录，依赖共享协议 crate `crates/protocol`。常用验证命令在仓库根目录执行，不覆盖 `server/` 服务端工程：
+
+```powershell
+cargo fmt --all
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features
+```
+
+需要验证 ESP32-S3 目标构建时，先激活 ESP-IDF 环境，再执行目标构建：
+
+```powershell
+$env:IDF_TOOLS_PATH='C:\Espressif'
+. .\scripts\activate-esp-idf.ps1
+cargo +esp build --target xtensa-esp32s3-espidf
+```
+
 ## 服务端构建
 
-服务端位于 `server/`，是独立的 Rust 后端和 Vue 管理台工程。服务端 Cargo 构建会自动检查并编译 `server/web` 前端，前端依赖和构建统一使用 `bun`。
+服务端位于 `server/`，是独立的 Rust 后端和 Vue 管理台工程。服务端通过 path dependency 引用 `../crates/protocol` 共享协议 crate，不纳入设备端 Cargo workspace。服务端 Cargo 构建会自动检查并编译 `server/web` 前端，前端依赖和构建统一使用 `bun`。
 
 ```powershell
 cd server
@@ -148,9 +166,10 @@ cargo build --release
 
 ```powershell
 cd server
-cargo fmt --all
-cargo test --all-targets --all-features
+$env:SKIP_FRONTEND_BUILD = "1"
+cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features
 
 cd web
 bun run build
@@ -178,7 +197,7 @@ cd server
 cp .env.example .env
 ```
 
-然后编辑 `server/.env` 中的 `SECRET_KEY`、`ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。`server/.env` 只用于本地或部署环境，不纳入版本管理。
+然后编辑 `server/.env` 中的 `SECRET_KEY`、`ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。服务端生产模式会拒绝缺失值、开发默认值和 `change-me` 占位值。`server/.env` 只用于本地或部署环境，不纳入版本管理。
 
 sprite 生成接口需要配置 `TEXT_FONT_PATH`，指向服务端可读取的 TTF、OTF 或 TTC 字体文件。容器部署时先把字体文件挂载到容器内，再在 `server/.env` 中写入对应路径：
 

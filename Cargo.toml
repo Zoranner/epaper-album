@@ -6,7 +6,7 @@ license = "MIT"
 publish = false
 
 [workspace]
-members = ["crates/protocol", "server"]
+members = ["crates/protocol"]
 
 [dependencies]
 anyhow = "1.0"

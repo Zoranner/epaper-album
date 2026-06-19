@@ -529,14 +529,18 @@ pub mod espidf {
             intr_type: gpio_int_type_t_GPIO_INTR_DISABLE,
         };
 
+        // SAFETY: This configures the fixed KEY input after ESP-IDF initialization in the
+        // platform layer. The pin mask is derived from the board GPIO constant.
         unsafe { esp!(gpio_config(&config)) }
     }
 
     fn self_test_key_pressed() -> bool {
+        // SAFETY: The fixed KEY GPIO is configured as an input by configure_self_test_key.
         unsafe { gpio_get_level(SELF_TEST_KEY_GPIO) == 0 }
     }
 
     pub fn restart_now() -> ! {
+        // SAFETY: Restart is an intentional terminal hardware-control path for KEY/self-test flow.
         unsafe { esp_restart() }
     }
 
@@ -545,6 +549,7 @@ pub mod espidf {
     ) -> Result<(), esp_idf_sys::EspError> {
         let seconds = seconds_until(next_run_epoch_seconds);
         if seconds == 0 {
+            // SAFETY: Restart is used instead of returning when the requested wake time is due.
             unsafe { esp_restart() }
         }
 
@@ -559,15 +564,18 @@ pub mod espidf {
 
     pub fn restart_at_with_poll(next_run_epoch_seconds: u64, mut poll: impl FnMut() -> bool) -> ! {
         if seconds_until(next_run_epoch_seconds) == 0 {
+            // SAFETY: Restart is used instead of returning when the requested wake time is due.
             unsafe { esp_restart() }
         }
 
         loop {
             for _ in 0..2_000 {
                 if seconds_until(next_run_epoch_seconds) == 0 {
+                    // SAFETY: Restart is used instead of returning when the requested wake time is due.
                     unsafe { esp_restart() }
                 }
                 if poll() {
+                    // SAFETY: Restart is an intentional terminal path after a platform poll request.
                     unsafe { esp_restart() }
                 }
                 esp_idf_hal::delay::FreeRtos::delay_ms(30);
@@ -594,10 +602,13 @@ pub mod espidf {
             intr_type: gpio_int_type_t_GPIO_INTR_DISABLE,
         };
 
+        // SAFETY: This configures the fixed PMIC IRQ RTC-capable input for deep-sleep wake.
+        // The mask is derived from the board GPIO constant.
         unsafe { esp!(gpio_config(&config)) }
     }
 
     fn external_wakeup_gpio_mask() -> u64 {
+        // SAFETY: Reading the ESP-IDF wakeup status is side-effect free and scoped to wake probing.
         unsafe { esp_sleep_get_ext1_wakeup_status() }
     }
 
