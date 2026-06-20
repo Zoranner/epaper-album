@@ -29,19 +29,19 @@ impl AdminSession {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct RuntimeState {
+pub(crate) struct RuntimeState {
     pub app: AppState,
     pub queue: Option<ProcessingQueue>,
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct ProcessingQueue {
+pub(crate) struct ProcessingQueue {
     pub sender: mpsc::UnboundedSender<String>,
     pub queued: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Permission {
+pub(crate) enum Permission {
     User,
     Admin,
 }

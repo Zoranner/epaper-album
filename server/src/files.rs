@@ -2,7 +2,7 @@ use std::{path::Path, path::PathBuf};
 
 use crate::error::AppError;
 
-pub(super) async fn remove_image_files(data_dir: &Path, sha256: &str) -> Result<(), AppError> {
+pub(crate) async fn remove_image_files(data_dir: &Path, sha256: &str) -> Result<(), AppError> {
     remove_file_if_exists(display_image_path(data_dir, sha256)).await?;
     for extension in ["jpg", "png", "bmp", "jpeg"] {
         remove_file_if_exists(original_image_dir(data_dir).join(format!("{sha256}.{extension}")))
@@ -11,7 +11,7 @@ pub(super) async fn remove_image_files(data_dir: &Path, sha256: &str) -> Result<
     Ok(())
 }
 
-pub(super) async fn remove_file_if_exists(path: PathBuf) -> Result<(), AppError> {
+pub(crate) async fn remove_file_if_exists(path: PathBuf) -> Result<(), AppError> {
     match tokio::fs::remove_file(path).await {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -19,11 +19,11 @@ pub(super) async fn remove_file_if_exists(path: PathBuf) -> Result<(), AppError>
     }
 }
 
-pub(super) fn original_image_path(data_dir: &Path, sha256: &str, extension: &str) -> PathBuf {
+pub(crate) fn original_image_path(data_dir: &Path, sha256: &str, extension: &str) -> PathBuf {
     original_image_dir(data_dir).join(format!("{sha256}.{extension}"))
 }
 
-pub(super) fn find_original_image_path(data_dir: &Path, sha256: &str) -> anyhow::Result<PathBuf> {
+pub(crate) fn find_original_image_path(data_dir: &Path, sha256: &str) -> anyhow::Result<PathBuf> {
     let directory = original_image_dir(data_dir);
     for extension in ["jpg", "png", "bmp", "jpeg"] {
         let path = directory.join(format!("{sha256}.{extension}"));
@@ -44,21 +44,21 @@ fn original_image_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("images").join("original")
 }
 
-pub(super) fn display_image_path(data_dir: &Path, sha256: &str) -> PathBuf {
+pub(crate) fn display_image_path(data_dir: &Path, sha256: &str) -> PathBuf {
     data_dir
         .join("images")
         .join("display")
         .join(format!("{sha256}.bmp"))
 }
 
-pub(super) fn display_image_temp_path(data_dir: &Path, sha256: &str) -> PathBuf {
+pub(crate) fn display_image_temp_path(data_dir: &Path, sha256: &str) -> PathBuf {
     data_dir
         .join("images")
         .join("display")
         .join(format!("{sha256}.tmp"))
 }
 
-pub(super) fn sprite_cache_path(data_dir: &Path, sha256: &str) -> PathBuf {
+pub(crate) fn sprite_cache_path(data_dir: &Path, sha256: &str) -> PathBuf {
     data_dir.join("sprites").join(format!("{sha256}.bmp"))
 }
 

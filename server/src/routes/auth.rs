@@ -1,44 +1,30 @@
-use axum::http::{header, HeaderMap};
-use chrono::Utc;
+use axum::{extract::State, response::IntoResponse, Json};
+use chrono::{Duration, Utc};
 
-use crate::error::AppError;
+use crate::{
+    error::AppError,
+    models::{ApiResponse, LoginRequest, LoginResponse},
+    state::{AdminSession, RuntimeState},
+};
 
-use super::state::{AppState, Permission};
-
-pub(super) async fn require_any_permission(
-    headers: &HeaderMap,
-    state: &AppState,
-) -> Result<Permission, AppError> {
-    if is_admin(headers, state).await {
-        return Ok(Permission::Admin);
-    }
-    if headers
-        .get("secret-key")
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value == state.secret_key)
-    {
-        return Ok(Permission::User);
-    }
-    Err(AppError::Unauthorized)
+pub(super) async fn healthz() -> &'static str {
+    "ok"
 }
 
-pub(super) async fn require_admin(headers: &HeaderMap, state: &AppState) -> Result<(), AppError> {
-    if is_admin(headers, state).await {
-        Ok(())
+pub(super) async fn login(
+    State(state): State<RuntimeState>,
+    Json(payload): Json<LoginRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    if payload.username == state.app.admin_username && payload.password == state.app.admin_password
+    {
+        let mut session = state.app.admin_session.lock().await;
+        let expires_at = Utc::now() + Duration::hours(24);
+        *session = AdminSession::new(uuid::Uuid::new_v4().to_string(), expires_at);
+        Ok(Json(ApiResponse::ok(LoginResponse {
+            jwt_token: session.token.clone(),
+            expires_at: session.expires_at.to_rfc3339(),
+        })))
     } else {
         Err(AppError::Unauthorized)
     }
-}
-
-async fn is_admin(headers: &HeaderMap, state: &AppState) -> bool {
-    let session = state.admin_session.lock().await;
-    if Utc::now() >= session.expires_at {
-        return false;
-    }
-
-    headers
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .is_some_and(|token| token == session.token)
 }

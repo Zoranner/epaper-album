@@ -10,7 +10,8 @@ use axum::{
 };
 use epaper_album_server::{
     db::{self, Store},
-    routes::{self, AdminSession, AppState},
+    routes,
+    state::{AdminSession, AppState},
 };
 use http_body_util::BodyExt;
 use serde_json::{json, Value};

@@ -1,24 +1,21 @@
-use std::io::Cursor;
-
-use image::{
-    codecs::bmp::BmpEncoder, imageops::FilterType, DynamicImage, ExtendedColorType, GenericImage,
-    GenericImageView, ImageEncoder, Rgba,
-};
+use image::{imageops::FilterType, DynamicImage, GenericImage, GenericImageView, Rgba};
 
 use crate::error::AppError;
 
-pub(super) const DISPLAY_WIDTH: u32 = 800;
-pub(super) const DISPLAY_HEIGHT: u32 = 480;
+use super::bmp::encode_rgb_bmp;
+
+pub(crate) const DISPLAY_WIDTH: u32 = 800;
+pub(crate) const DISPLAY_HEIGHT: u32 = 480;
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum UploadedImageFormat {
+pub(crate) enum UploadedImageFormat {
     Bmp,
     Jpeg,
     Png,
 }
 
 impl UploadedImageFormat {
-    pub(super) const fn extension(self) -> &'static str {
+    pub(crate) const fn extension(self) -> &'static str {
         match self {
             Self::Bmp => "bmp",
             Self::Jpeg => "jpg",
@@ -27,26 +24,14 @@ impl UploadedImageFormat {
     }
 }
 
-pub(super) fn render_display_bmp(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+pub(crate) fn render_display_bmp(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     let image = image::load_from_memory(bytes)?;
     let fitted = fit_to_display(image);
     let paletted = quantize_six_color(fitted);
     encode_rgb_bmp(&paletted.to_rgb8())
 }
 
-pub(super) fn encode_rgb_bmp(image: &image::RgbImage) -> anyhow::Result<Vec<u8>> {
-    let mut output = Cursor::new(Vec::new());
-    let encoder = BmpEncoder::new(&mut output);
-    encoder.write_image(
-        image.as_raw(),
-        image.width(),
-        image.height(),
-        ExtendedColorType::Rgb8,
-    )?;
-    Ok(output.into_inner())
-}
-
-pub(super) fn detect_uploaded_image_format(bytes: &[u8]) -> Result<UploadedImageFormat, AppError> {
+pub(crate) fn detect_uploaded_image_format(bytes: &[u8]) -> Result<UploadedImageFormat, AppError> {
     if bytes.starts_with(b"BM") {
         return Ok(UploadedImageFormat::Bmp);
     }
@@ -144,6 +129,7 @@ fn color_distance(left: Rgba<u8>, right: Rgba<u8>) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     #[test]
     fn render_display_bmp_outputs_device_compatible_bmp() {
