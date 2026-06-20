@@ -1,3 +1,4 @@
+pub mod audio;
 #[cfg(target_os = "espidf")]
 pub mod button;
 #[cfg(target_os = "espidf")]

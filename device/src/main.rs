@@ -22,6 +22,8 @@ fn run_device() {
         inkframe_device::hardware_selftest::print_hardware_self_test_report(&report);
         loop {
             if inkframe_device::power::espidf::self_test_key_clicked() {
+                log::info!(target: "inkframe_device", "self-test key: exit");
+                play_self_test_key_tone();
                 match inkframe_device::button::espidf::clear_self_test_request() {
                     Ok(()) => {
                         log::info!(target: "inkframe_device", "self-test request: cleared");
@@ -124,6 +126,7 @@ fn run_device() {
                             return false;
                         }
                         log::info!(target: "inkframe_device", "self-test key: request");
+                        play_self_test_key_tone();
                         if let Err(error) = inkframe_device::button::espidf::request_self_test() {
                             log::warn!(
                                 target: "inkframe_device",
@@ -155,6 +158,16 @@ fn run_device() {
                 }
             }
         }
+    }
+}
+
+#[cfg(target_os = "espidf")]
+fn play_self_test_key_tone() {
+    if let Err(error) = inkframe_device::audio::espidf::play_self_test_request_tone() {
+        log::warn!(
+            target: "inkframe_device",
+            "self-test key: tone error: {error:?}"
+        );
     }
 }
 

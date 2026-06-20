@@ -18,6 +18,10 @@ pub mod app_storage {
     pub use crate::storage::app_files::*;
 }
 
+pub mod audio {
+    pub use crate::platform::audio::*;
+}
+
 pub mod bmp {
     pub use crate::graphics::bmp::*;
 }
