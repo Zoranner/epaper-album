@@ -206,3 +206,25 @@ TEXT_FONT_PATH=/app/fonts/NotoSansCJK-Regular.ttc
 ```
 
 该配置只影响 sprite 生成接口；未配置字体文件时，照片计划、图片上传、图片处理和设备同步等服务端功能仍可运行。
+
+## 标签发布
+
+推送 `v*` 标签会触发 GitHub Actions 发布流程：
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+发布流程按两个工程分别处理：
+
+- 设备端根工程使用 `cargo +esp build --release --target xtensa-esp32s3-espidf` 构建 ESP32-S3 固件，并在 GitHub Release 中上传 ELF、合并烧录镜像、bootloader、分区表和 sha256 校验文件。
+- 服务端工程使用 `server/Dockerfile` 构建容器镜像，并推送到 GitHub Container Registry，镜像名为 `ghcr.io/<owner>/epaper-album-server:<tag>`，同时更新 `latest` 标签。
+
+Release 页面中的合并烧录镜像文件名形如：
+
+```text
+epaper-album-v0.1.0-esp32s3-merged.bin
+```
+
+服务端镜像运行时仍需按部署环境提供 `SECRET_KEY`、`ADMIN_USERNAME`、`ADMIN_PASSWORD`、`DATABASE_URL` 和字体路径等配置。
