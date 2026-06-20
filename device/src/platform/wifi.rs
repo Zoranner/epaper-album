@@ -114,7 +114,7 @@ pub mod espidf {
 
         let wifi_probe = match connected.ip_info() {
             Ok(ip_info) => {
-                log::info!(target: "epaper_album", "wifi ip: {:?}", ip_info);
+                log::info!(target: "inkframe_device", "wifi ip: {:?}", ip_info);
                 WifiProbe::Connected
             }
             Err(_) => return network_probe(WifiProbe::NetifError, HttpProbe::Skipped),
@@ -161,7 +161,7 @@ pub mod espidf {
         match find_test_access_point(&mut wifi, wifi_ssid) {
             Ok(Some(ap)) => {
                 log::info!(
-                    target: "epaper_album",
+                    target: "inkframe_device",
                     "wifi target: found channel={} rssi={} auth={:?}",
                     ap.channel,
                     ap.signal_strength,
@@ -169,7 +169,7 @@ pub mod espidf {
                 );
             }
             Ok(None) => {
-                log::warn!(target: "epaper_album", "wifi target: not-found");
+                log::warn!(target: "inkframe_device", "wifi target: not-found");
                 return Err(WifiConnectError::TargetNotFound);
             }
             Err(_) => return Err(WifiConnectError::ScanError),
@@ -187,9 +187,9 @@ pub mod espidf {
         // SAFETY: Wi-Fi has been started, connected, and brought netif up by EspWifi before this
         // platform-layer call. Failure only disables the power-save optimization and is logged.
         match esp_idf_sys::esp!(unsafe { esp_idf_sys::esp_wifi_set_ps(0) }) {
-            Ok(()) => log::info!(target: "epaper_album", "wifi power save disabled"),
+            Ok(()) => log::info!(target: "inkframe_device", "wifi power save disabled"),
             Err(error) => {
-                log::warn!(target: "epaper_album", "wifi power save disable failed: {error:?}")
+                log::warn!(target: "inkframe_device", "wifi power save disable failed: {error:?}")
             }
         }
     }
@@ -212,7 +212,7 @@ pub mod espidf {
     ) -> Result<Option<AccessPointInfo>, esp_idf_svc::sys::EspError> {
         let access_points = wifi.scan()?;
         log::info!(
-            target: "epaper_album",
+            target: "inkframe_device",
             "wifi scan: {} access points",
             access_points.len()
         );
@@ -264,14 +264,14 @@ pub mod espidf {
         }
 
         log::info!(
-            target: "epaper_album",
+            target: "inkframe_device",
             "http get: status={} bytes={} url={}",
             status,
             total_bytes,
             TEST_HTTP_URL
         );
         log::info!(
-            target: "epaper_album",
+            target: "inkframe_device",
             "http preview: {}",
             core::str::from_utf8(&preview[..preview_len]).unwrap_or("<non-utf8>")
         );

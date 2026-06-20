@@ -372,7 +372,7 @@ fn temp_path_for(path: &Path) -> PathBuf {
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("epaper-album");
+        .unwrap_or("inkframe-device");
     path.with_file_name(format!("{file_name}.tmp"))
 }
 

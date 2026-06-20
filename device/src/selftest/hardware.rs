@@ -103,7 +103,7 @@ pub fn run_espidf_hardware_self_test(wake: WakeProbe) -> HardwareSelfTestReport 
     match init_axp2101_for_photo_painter(peripherals.i2c0, pins.gpio47, pins.gpio48) {
         Ok(probe) => {
             log::info!(
-                target: "epaper_album",
+                target: "inkframe_device",
                 "pmic: chip=0x{:02x} axp2101={} dc=0x{:02x} ldo=0x{:02x} battery={:?} percent={:?} low={}",
                 probe.chip_id,
                 chip_id_is_axp2101(probe),
@@ -115,7 +115,7 @@ pub fn run_espidf_hardware_self_test(wake: WakeProbe) -> HardwareSelfTestReport 
             );
         }
         Err(_) => {
-            log::warn!(target: "epaper_album", "pmic: init-error");
+            log::warn!(target: "inkframe_device", "pmic: init-error");
         }
     }
 
@@ -357,37 +357,37 @@ fn epd_error_probe(error: crate::epd::EpdError) -> EpdProbe {
 }
 
 pub fn print_hardware_self_test_report(report: &HardwareSelfTestReport) {
-    log::info!(target: "epaper_album", "epaper-album self-test");
-    log::info!(target: "epaper_album", "wake: {}", report.wake.label());
-    log::info!(target: "epaper_album", "storage: {}", report.base.storage.label());
-    log::info!(target: "epaper_album", "config: {}", report.base.config.label());
+    log::info!(target: "inkframe_device", "Inkframe self-test");
+    log::info!(target: "inkframe_device", "wake: {}", report.wake.label());
+    log::info!(target: "inkframe_device", "storage: {}", report.base.storage.label());
+    log::info!(target: "inkframe_device", "config: {}", report.base.config.label());
     log::info!(
-        target: "epaper_album",
+        target: "inkframe_device",
         "epd: {}",
         report.epd.label()
     );
     log::info!(
-        target: "epaper_album",
+        target: "inkframe_device",
         "wifi: {}",
         report.wifi.label()
     );
     log::info!(
-        target: "epaper_album",
+        target: "inkframe_device",
         "http: {}",
         report.http.label()
     );
     log::info!(
-        target: "epaper_album",
+        target: "inkframe_device",
         "wake marker: {}",
         report.wake_marker.label()
     );
     log::info!(
-        target: "epaper_album",
+        target: "inkframe_device",
         "render refresh count: {}",
         report.base.render.refresh_count
     );
     log::info!(
-        target: "epaper_album",
+        target: "inkframe_device",
         "render sleep: {}",
         report.base.render.slept
     );

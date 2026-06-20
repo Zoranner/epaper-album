@@ -3,7 +3,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-IMAGE_NAME="epaper-album-server"
+IMAGE_NAME="inkframe-server"
 IMAGE_TAG="${1:-latest}"
 
 echo "[docker-build] Building image: ${IMAGE_NAME}:${IMAGE_TAG}"

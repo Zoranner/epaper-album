@@ -3,8 +3,8 @@ use axum::{
     http::{header, Request, StatusCode},
     response::IntoResponse,
 };
-use epaper_album_server::error::AppError;
 use http_body_util::BodyExt;
+use inkframe_server::error::AppError;
 use serde_json::{json, Value};
 
 use super::common::*;

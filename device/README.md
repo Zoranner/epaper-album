@@ -1,4 +1,4 @@
-# Epaper Album Device
+# Inkframe Device
 
 设备端是 ESP32-S3-PhotoPainter 固件工程，独立位于 `device/`。服务端位于 `../server/`，共享协议 crate 位于 `../crates/protocol/`。
 

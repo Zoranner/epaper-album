@@ -5,31 +5,31 @@ fn main() {
 
 #[cfg(target_os = "espidf")]
 fn run_device() {
-    let wake = epaper_album::power::espidf::wake_probe();
-    log::info!(target: "epaper_album", "wake: {}", wake.label());
+    let wake = inkframe_device::power::espidf::wake_probe();
+    log::info!(target: "inkframe_device", "wake: {}", wake.label());
 
-    let self_test_requested = match epaper_album::button::espidf::self_test_requested() {
+    let self_test_requested = match inkframe_device::button::espidf::self_test_requested() {
         Ok(requested) => requested,
         Err(error) => {
-            log::warn!(target: "epaper_album", "self-test request: read error: {error:?}");
+            log::warn!(target: "inkframe_device", "self-test request: read error: {error:?}");
             false
         }
     };
 
     if self_test_requested {
-        log::info!(target: "epaper_album", "self-test request: entered");
-        let report = epaper_album::hardware_selftest::run_espidf_hardware_self_test(wake);
-        epaper_album::hardware_selftest::print_hardware_self_test_report(&report);
+        log::info!(target: "inkframe_device", "self-test request: entered");
+        let report = inkframe_device::hardware_selftest::run_espidf_hardware_self_test(wake);
+        inkframe_device::hardware_selftest::print_hardware_self_test_report(&report);
         loop {
-            if epaper_album::power::espidf::self_test_key_clicked() {
-                match epaper_album::button::espidf::clear_self_test_request() {
+            if inkframe_device::power::espidf::self_test_key_clicked() {
+                match inkframe_device::button::espidf::clear_self_test_request() {
                     Ok(()) => {
-                        log::info!(target: "epaper_album", "self-test request: cleared");
-                        epaper_album::power::espidf::restart_now();
+                        log::info!(target: "inkframe_device", "self-test request: cleared");
+                        inkframe_device::power::espidf::restart_now();
                     }
                     Err(error) => {
                         log::warn!(
-                            target: "epaper_album",
+                            target: "inkframe_device",
                             "self-test request: clear error: {error:?}"
                         );
                     }
@@ -40,46 +40,48 @@ fn run_device() {
     }
 
     let trigger = match wake {
-        epaper_album::power::espidf::WakeProbe::Timer => {
-            epaper_album::app::RunTrigger::Wake(epaper_album::state::WakeReason::Timer)
+        inkframe_device::power::espidf::WakeProbe::Timer => {
+            inkframe_device::app::RunTrigger::Wake(inkframe_device::state::WakeReason::Timer)
         }
-        epaper_album::power::espidf::WakeProbe::Button => {
-            epaper_album::app::RunTrigger::Wake(epaper_album::state::WakeReason::Button)
+        inkframe_device::power::espidf::WakeProbe::Button => {
+            inkframe_device::app::RunTrigger::Wake(inkframe_device::state::WakeReason::Button)
         }
-        epaper_album::power::espidf::WakeProbe::External => {
-            epaper_album::app::RunTrigger::Wake(epaper_album::state::WakeReason::External)
+        inkframe_device::power::espidf::WakeProbe::External => {
+            inkframe_device::app::RunTrigger::Wake(inkframe_device::state::WakeReason::External)
         }
-        epaper_album::power::espidf::WakeProbe::Unknown => epaper_album::app::RunTrigger::Startup,
-        epaper_album::power::espidf::WakeProbe::Ulp
-        | epaper_album::power::espidf::WakeProbe::Other(_) => {
-            epaper_album::app::RunTrigger::Wake(epaper_album::state::WakeReason::External)
+        inkframe_device::power::espidf::WakeProbe::Unknown => {
+            inkframe_device::app::RunTrigger::Startup
+        }
+        inkframe_device::power::espidf::WakeProbe::Ulp
+        | inkframe_device::power::espidf::WakeProbe::Other(_) => {
+            inkframe_device::app::RunTrigger::Wake(inkframe_device::state::WakeReason::External)
         }
     };
-    log::info!(target: "epaper_album", "trigger: {:?}", trigger);
+    log::info!(target: "inkframe_device", "trigger: {:?}", trigger);
 
-    let report = epaper_album::device_espidf::run_espidf_device_cycle(trigger);
+    let report = inkframe_device::device_espidf::run_espidf_device_cycle(trigger);
     log::info!(
-        target: "epaper_album",
+        target: "inkframe_device",
         "device outcome: {}",
         report.outcome.label()
     );
 
     if let Some(cycle) = &report.cycle {
-        log::info!(target: "epaper_album", "cycle outcome: {:?}", cycle.outcome);
+        log::info!(target: "inkframe_device", "cycle outcome: {:?}", cycle.outcome);
         log::info!(
-            target: "epaper_album",
+            target: "inkframe_device",
             "sync decision: action={:?} cause={:?}",
             cycle.sync_decision.action,
             cycle.sync_decision.cause
         );
-        log::info!(target: "epaper_album", "sync attempted: {}", cycle.sync_attempted);
-        log::info!(target: "epaper_album", "sync succeeded: {}", cycle.sync_succeeded);
+        log::info!(target: "inkframe_device", "sync attempted: {}", cycle.sync_attempted);
+        log::info!(target: "inkframe_device", "sync succeeded: {}", cycle.sync_succeeded);
         if let Some(error) = &cycle.sync_error {
-            log::warn!(target: "epaper_album", "sync error: {error}");
+            log::warn!(target: "inkframe_device", "sync error: {error}");
         }
         if let Some(report) = &cycle.sync_error_report {
             log::warn!(
-                target: "epaper_album",
+                target: "inkframe_device",
                 "sync error report: code={} category={} stage={} message={} detail={}",
                 report.code,
                 report.category,
@@ -89,13 +91,13 @@ fn run_device() {
             );
         }
         log_display_decision(&cycle.display_decision);
-        log::info!(target: "epaper_album", "refresh attempted: {}", cycle.refresh_attempted);
-        log::info!(target: "epaper_album", "refresh succeeded: {}", cycle.refresh_succeeded);
+        log::info!(target: "inkframe_device", "refresh attempted: {}", cycle.refresh_attempted);
+        log::info!(target: "inkframe_device", "refresh succeeded: {}", cycle.refresh_succeeded);
     }
 
     if let Some(next_run_plan) = report.next_run_plan {
         log::info!(
-            target: "epaper_album",
+            target: "inkframe_device",
             "next run: {}, wait seconds: {}",
             next_run_plan.next_run_epoch_seconds,
             next_run_plan.wait_seconds
@@ -112,19 +114,19 @@ fn run_device() {
                 .is_some_and(|cycle| cycle.display_available);
             if externally_powered && display_available {
                 log::info!(
-                    target: "epaper_album",
+                    target: "inkframe_device",
                     "next run: external power detected; waiting until absolute restart time"
                 );
-                epaper_album::power::espidf::restart_at_with_poll(
+                inkframe_device::power::espidf::restart_at_with_poll(
                     next_run_plan.next_run_epoch_seconds,
                     || {
-                        if !epaper_album::power::espidf::self_test_key_long_pressed() {
+                        if !inkframe_device::power::espidf::self_test_key_long_pressed() {
                             return false;
                         }
-                        log::info!(target: "epaper_album", "self-test key: request");
-                        if let Err(error) = epaper_album::button::espidf::request_self_test() {
+                        log::info!(target: "inkframe_device", "self-test key: request");
+                        if let Err(error) = inkframe_device::button::espidf::request_self_test() {
                             log::warn!(
-                                target: "epaper_album",
+                                target: "inkframe_device",
                                 "self-test request: write error: {error:?}"
                             );
                             return false;
@@ -134,22 +136,22 @@ fn run_device() {
                 );
             } else if externally_powered {
                 log::info!(
-                    target: "epaper_album",
+                    target: "inkframe_device",
                     "next run: external power detected; waiting without key listener"
                 );
-                epaper_album::power::espidf::restart_at_with_poll(
+                inkframe_device::power::espidf::restart_at_with_poll(
                     next_run_plan.next_run_epoch_seconds,
                     || false,
                 );
             } else {
                 log::info!(
-                    target: "epaper_album",
+                    target: "inkframe_device",
                     "next run: battery power detected; entering deep sleep"
                 );
-                if let Err(error) = epaper_album::power::espidf::enter_deep_sleep_until(
+                if let Err(error) = inkframe_device::power::espidf::enter_deep_sleep_until(
                     next_run_plan.next_run_epoch_seconds,
                 ) {
-                    log::warn!(target: "epaper_album", "next run: deep sleep error: {error:?}");
+                    log::warn!(target: "inkframe_device", "next run: deep sleep error: {error:?}");
                 }
             }
         }
@@ -158,20 +160,20 @@ fn run_device() {
 
 #[cfg(not(target_os = "espidf"))]
 fn run_device() {
-    use epaper_album::config::CONFIG_PATH;
-    use epaper_album::selftest::{print_self_test_report, run_self_test as run_host_self_test};
+    use inkframe_device::config::CONFIG_PATH;
+    use inkframe_device::selftest::{print_self_test_report, run_self_test as run_host_self_test};
     let report = run_host_self_test(CONFIG_PATH);
     print_self_test_report(&report);
 }
 
 #[cfg(target_os = "espidf")]
-fn log_display_decision(decision: &epaper_album::device_runtime::DisplayDecision) {
-    use epaper_album::device_runtime::{DisplayAction, DisplayTarget};
+fn log_display_decision(decision: &inkframe_device::device_runtime::DisplayDecision) {
+    use inkframe_device::device_runtime::{DisplayAction, DisplayTarget};
 
     match &decision.action {
         DisplayAction::Keep => {
             log::info!(
-                target: "epaper_album",
+                target: "inkframe_device",
                 "display decision: action=keep cause={:?}",
                 decision.cause
             );
@@ -182,7 +184,7 @@ fn log_display_decision(decision: &epaper_album::device_runtime::DisplayDecision
             caption,
         }) => {
             log::info!(
-                target: "epaper_album",
+                target: "inkframe_device",
                 "display decision: action=refresh-photo cause={:?} date={} image={} caption={}",
                 decision.cause,
                 date,
@@ -192,7 +194,7 @@ fn log_display_decision(decision: &epaper_album::device_runtime::DisplayDecision
         }
         DisplayAction::Refresh(DisplayTarget::Page { date, title, .. }) => {
             log::info!(
-                target: "epaper_album",
+                target: "inkframe_device",
                 "display decision: action=refresh-page cause={:?} date={} title={}",
                 decision.cause,
                 date,

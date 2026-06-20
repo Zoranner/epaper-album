@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "epaper-album-web",
+      "name": "inkframe-web",
       "dependencies": {
         "lucide-vue-next": "^1.0.0",
         "vue": "^3.4.31",

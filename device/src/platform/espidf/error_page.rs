@@ -13,6 +13,6 @@ where
     });
 
     if let Err(error) = result {
-        log::warn!(target: "epaper_album", "storage error page: {error}");
+        log::warn!(target: "inkframe_device", "storage error page: {error}");
     }
 }

@@ -1,4 +1,4 @@
-# Epaper Album 服务端设计文档
+# Inkframe 服务端设计文档
 
 ## 服务端职责
 
@@ -12,10 +12,10 @@
 
 | 变量 | 默认值 | 用途 |
 | --- | --- | --- |
-| `EPAPER_ALBUM_PRODUCTION` | `false` | 生产模式开关，容器运行时设为 `true` |
+| `INKFRAME_PRODUCTION` | `false` | 生产模式开关，容器运行时设为 `true` |
 | `LISTEN_HOST` | 开发为 `127.0.0.1`，生产为 `0.0.0.0` | HTTP 服务监听地址 |
 | `LISTEN_PORT` | `3000` | HTTP 服务监听端口 |
-| `DATABASE_URL` | `sqlite:data/epaper-album.db?mode=rwc` | SQLite 数据库连接地址 |
+| `DATABASE_URL` | `sqlite:data/inkframe.db?mode=rwc` | SQLite 数据库连接地址 |
 | `SECRET_KEY` | 开发为 `local-secret-key`，生产必填 | 设备和用户权限请求接口时使用的密钥 |
 | `ADMIN_USERNAME` | 开发为 `admin`，生产必填 | 管理员账号 |
 | `ADMIN_PASSWORD` | 开发为 `admin`，生产必填 | 管理员密码 |
@@ -573,7 +573,7 @@ Authorization: Bearer <admin-token>
 
 ## 数据库设计
 
-当前数据库使用 SQLite，由 `server/src/db.rs` 在启动时自动创建表结构。数据库默认路径为 `server/data/epaper-album.db`。
+当前数据库使用 SQLite，由 `server/src/db.rs` 在启动时自动创建表结构。数据库默认路径为 `server/data/inkframe.db`。
 
 ### `plans`
 
@@ -688,9 +688,9 @@ Docker 镜像采用多阶段构建：
 - `oven/bun` 阶段安装前端依赖并执行 `bun run build`。
 - `cargo-chef` 阶段缓存 Rust 依赖。
 - Rust release 阶段设置 `SKIP_FRONTEND_BUILD=1` 编译后端二进制。
-- runtime 阶段只拷贝 `epaper-album-server` 二进制和 `web/dist`，运行目录为 `/app`。
+- runtime 阶段只拷贝 `inkframe-server` 二进制和 `web/dist`，运行目录为 `/app`。
 
-Docker 构建命令从 `server/` 发起，构建上下文使用仓库根目录，Dockerfile 只复制 `server/` 与 `crates/protocol/`。容器运行时使用 `/app/data` 作为持久数据目录，保存 SQLite 数据库、原图、显示 BMP 和 sprite 缓存。`server/docker/docker-compose.yml` 提供基础部署配置，服务名和镜像名均为 `epaper-album-server`，部署时通过 `server/.env` 设置 `SECRET_KEY`、`ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。
+Docker 构建命令从 `server/` 发起，构建上下文使用仓库根目录，Dockerfile 只复制 `server/` 与 `crates/protocol/`。容器运行时使用 `/app/data` 作为持久数据目录，保存 SQLite 数据库、原图、显示 BMP 和 sprite 缓存。`server/docker/docker-compose.yml` 提供基础部署配置，服务名和镜像名均为 `inkframe-server`，部署时通过 `server/.env` 设置 `SECRET_KEY`、`ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。
 
 ## 建议验证
 

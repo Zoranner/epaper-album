@@ -1,9 +1,9 @@
-# ESP32-S3 电子墨水相册
+# Inkframe
 
 本仓库采用单仓库双工程结构：设备端固件位于 `device/`，服务端位于 `server/`，共享协议 crate 位于 `crates/protocol/`。
 
 ```text
-epaper-album/
+inkframe/
   device/            # ESP32-S3 固件工程
   server/            # Rust 服务端和 Vue 管理台工程
   crates/protocol/   # 设备端和服务端共享协议契约
@@ -52,7 +52,7 @@ cargo +esp espflash flash --release --target xtensa-esp32s3-espidf --monitor --p
 设备端产物位于 `device/target/xtensa-esp32s3-espidf/`。常见 release 产物包括：
 
 ```text
-device/target/xtensa-esp32s3-espidf/release/epaper-album
+device/target/xtensa-esp32s3-espidf/release/inkframe-device
 device/target/xtensa-esp32s3-espidf/release/bootloader.bin
 device/target/xtensa-esp32s3-espidf/release/partition-table.bin
 ```
@@ -103,7 +103,7 @@ cd server
 ./docker-build.sh
 ```
 
-默认镜像名为 `epaper-album-server:latest`，也可以传入 tag：
+默认镜像名为 `inkframe-server:latest`，也可以传入 tag：
 
 ```bash
 ./docker-build.sh 0.1.0
@@ -138,12 +138,12 @@ git push origin v0.1.0
 发布流程按两个工程分别处理：
 
 - 设备端工程进入 `device/`，使用 `cargo +esp build --release --target xtensa-esp32s3-espidf` 构建 ESP32-S3 固件，并在 GitHub Release 中上传 ELF、合并烧录镜像、bootloader、分区表和 sha256 校验文件。
-- 服务端工程使用 `server/Dockerfile` 构建容器镜像，并推送到 GitHub Container Registry，镜像名为 `ghcr.io/<owner>/epaper-album-server:<tag>`，同时更新 `latest` 标签。
+- 服务端工程使用 `server/Dockerfile` 构建容器镜像，并推送到 GitHub Container Registry，镜像名为 `ghcr.io/<owner>/inkframe-server:<tag>`，同时更新 `latest` 标签。
 
 Release 页面中的合并烧录镜像文件名形如：
 
 ```text
-epaper-album-v0.1.0-esp32s3-merged.bin
+inkframe-device-v0.1.0-esp32s3-merged.bin
 ```
 
 服务端镜像运行时仍需按部署环境提供 `SECRET_KEY`、`ADMIN_USERNAME`、`ADMIN_PASSWORD`、`DATABASE_URL` 和字体路径等配置。

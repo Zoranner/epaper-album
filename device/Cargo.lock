@@ -561,26 +561,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "epaper-album"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "embuild",
- "esp-idf-hal",
- "esp-idf-svc",
- "esp-idf-sys",
- "log",
- "protocol",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 2.0.18",
- "toml",
-]
-
-[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -922,6 +902,26 @@ dependencies = [
  "hashbrown 0.17.1",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "inkframe-device"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "embuild",
+ "esp-idf-hal",
+ "esp-idf-svc",
+ "esp-idf-sys",
+ "log",
+ "protocol",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml",
 ]
 
 [[package]]

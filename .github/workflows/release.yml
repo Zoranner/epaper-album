@@ -12,8 +12,8 @@ permissions:
 env:
   FIRMWARE_TARGET: xtensa-esp32s3-espidf
   FIRMWARE_CHIP: esp32s3
-  FIRMWARE_NAME: epaper-album
-  SERVER_IMAGE_NAME: epaper-album-server
+  FIRMWARE_NAME: inkframe-device
+  SERVER_IMAGE_NAME: inkframe-server
 
 jobs:
   firmware:

@@ -2,8 +2,8 @@ import { computed, reactive, ref } from 'vue';
 import { login as loginRequest } from '../api';
 import { onUnauthorized } from '../api/client';
 
-const tokenStorageKey = 'epaper-album-admin-token';
-const tokenExpiresAtStorageKey = 'epaper-album-admin-token-expires-at';
+const tokenStorageKey = 'inkframe-admin-token';
+const tokenExpiresAtStorageKey = 'inkframe-admin-token-expires-at';
 
 function loadStoredToken() {
   const storedToken = localStorage.getItem(tokenStorageKey) || '';

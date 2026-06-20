@@ -34,7 +34,7 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
         Ok(probe) => {
             let pmic_status = status_summary(probe.status1, probe.status2);
             log::info!(
-                target: "epaper_album",
+                target: "inkframe_device",
                 "pmic: chip=0x{:02x} status1=0x{:02x} status2=0x{:02x} vbus={} battery-present={} current-dir={} charge-step={} battery={:?} percent={:?} low={}",
                 probe.chip_id,
                 probe.status1,
@@ -50,7 +50,7 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
             Some(probe)
         }
         Err(error) => {
-            log::warn!(target: "epaper_album", "pmic: init-error: {error:?}");
+            log::warn!(target: "inkframe_device", "pmic: init-error: {error:?}");
             None
         }
     };
@@ -117,7 +117,7 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
                         now_epoch_seconds = current_epoch_seconds();
                         date = today();
                         log::info!(
-                            target: "epaper_album",
+                            target: "inkframe_device",
                             "time: unix={} date={}",
                             now_epoch_seconds,
                             date
@@ -134,7 +134,7 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
 
             let power_profile = PowerProfile::from(&battery);
             log::info!(
-                target: "epaper_album",
+                target: "inkframe_device",
                 "power: profile={:?} run-interval={:?} battery={:?} percent={:?} low={}",
                 power_profile,
                 power_profile.run_interval_seconds(),

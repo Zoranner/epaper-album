@@ -248,7 +248,7 @@ pub mod espidf {
         secret_key: &str,
         max_bytes: usize,
     ) -> Result<Vec<u8>, CloudSyncError> {
-        log::info!(target: "epaper_album", "http request: url={url} max-bytes={max_bytes}");
+        log::info!(target: "inkframe_device", "http request: url={url} max-bytes={max_bytes}");
         let mut connection = EspHttpConnection::new(&HttpConfiguration {
             timeout: Some(Duration::from_secs(HTTP_TIMEOUT_SECONDS)),
             follow_redirects_policy: FollowRedirectsPolicy::FollowAll,
@@ -256,22 +256,22 @@ pub mod espidf {
             ..Default::default()
         })
         .map_err(|error| {
-            log::warn!(target: "epaper_album", "http client: {error:?}");
+            log::warn!(target: "inkframe_device", "http client: {error:?}");
             CloudSyncError::HttpClient(format!("{error:?}"))
         })?;
         connection
             .initiate_request(Method::Get, url, &[("secret-key", secret_key)])
             .map_err(|error| {
-                log::warn!(target: "epaper_album", "http request failed: url={url} error={error:?}");
+                log::warn!(target: "inkframe_device", "http request failed: url={url} error={error:?}");
                 CloudSyncError::HttpRequest(format!("{error:?}"))
             })?;
         connection.initiate_response().map_err(|error| {
-            log::warn!(target: "epaper_album", "http response failed: url={url} error={error:?}");
+            log::warn!(target: "inkframe_device", "http response failed: url={url} error={error:?}");
             CloudSyncError::HttpResponse(format!("{error:?}"))
         })?;
 
         let status = connection.status();
-        log::info!(target: "epaper_album", "http response: url={url} status={status}");
+        log::info!(target: "inkframe_device", "http response: url={url} status={status}");
         if status != 200 {
             return Err(CloudSyncError::HttpStatus(status));
         }
@@ -280,7 +280,7 @@ pub mod espidf {
         let mut buffer = [0u8; 512];
         loop {
             let read_len = connection.read(&mut buffer).map_err(|error| {
-                log::warn!(target: "epaper_album", "http read failed: url={url} error={error:?}");
+                log::warn!(target: "inkframe_device", "http read failed: url={url} error={error:?}");
                 CloudSyncError::HttpRead(format!("{error:?}"))
             })?;
             if read_len == 0 {
@@ -288,7 +288,7 @@ pub mod espidf {
             }
             if body.len().saturating_add(read_len) > max_bytes {
                 log::warn!(
-                    target: "epaper_album",
+                    target: "inkframe_device",
                     "http read exceeded limit: url={url} bytes={} read={} max={max_bytes}",
                     body.len(),
                     read_len
@@ -301,7 +301,7 @@ pub mod espidf {
             body.extend_from_slice(&buffer[..read_len]);
         }
 
-        log::info!(target: "epaper_album", "http read complete: url={url} bytes={}", body.len());
+        log::info!(target: "inkframe_device", "http read complete: url={url} bytes={}", body.len());
         Ok(body)
     }
 }

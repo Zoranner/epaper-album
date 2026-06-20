@@ -1,7 +1,7 @@
 import type { ApiEnvelope } from './types';
 
 const apiBase = '/api';
-const unauthorizedEventName = 'epaper-album:unauthorized';
+const unauthorizedEventName = 'inkframe:unauthorized';
 
 export class ApiUnauthorizedError extends Error {
   readonly status = 401;

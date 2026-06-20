@@ -4,12 +4,12 @@ use axum::{
     body::Body,
     http::{header, StatusCode},
 };
-use epaper_album_server::{
+use http_body_util::BodyExt;
+use inkframe_server::{
     db::Store,
     routes,
     state::{AdminSession, AppState},
 };
-use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use sha2::Digest;
 use tokio::sync::Mutex;

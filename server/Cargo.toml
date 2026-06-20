@@ -1,5 +1,5 @@
 [package]
-name = "epaper-album-server"
+name = "inkframe-server"
 version = "0.1.0"
 edition = "2021"
 

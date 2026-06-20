@@ -155,7 +155,7 @@ where
         match result {
             Ok(()) => refresh_succeeded = true,
             Err(error) => {
-                log::warn!(target: "epaper_album", "refresh: {error}");
+                log::warn!(target: "inkframe_device", "refresh: {error}");
                 sync_error = Some(error.to_string());
                 sync_error_report = Some(SyncErrorReport::new(
                     "display.refresh",

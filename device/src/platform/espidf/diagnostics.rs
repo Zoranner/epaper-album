@@ -116,7 +116,7 @@ impl MountedDiagnosticLog {
         match append_event_to_file(&self.path, &event) {
             DiagnosticLogWrite::Written => {}
             error => {
-                log::warn!(target: "epaper_album", "diagnostic log write failed: {error:?}");
+                log::warn!(target: "inkframe_device", "diagnostic log write failed: {error:?}");
             }
         }
     }

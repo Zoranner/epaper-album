@@ -32,7 +32,7 @@ impl EspDeviceCloudSync {
     pub fn prepare_network(&mut self, config: &Config) {
         if self.wifi.is_none() {
             let Some(modem) = self.modem.take() else {
-                log::warn!(target: "epaper_album", "wifi: modem-unavailable");
+                log::warn!(target: "inkframe_device", "wifi: modem-unavailable");
                 return;
             };
 
@@ -41,7 +41,7 @@ impl EspDeviceCloudSync {
                     self.wifi = Some(wifi);
                 }
                 Err(error) => {
-                    log::warn!(target: "epaper_album", "wifi: {error:?}");
+                    log::warn!(target: "inkframe_device", "wifi: {error:?}");
                     return;
                 }
             }
@@ -59,10 +59,10 @@ impl EspDeviceCloudSync {
             match esp_idf_svc::sntp::EspSntp::new_default() {
                 Ok(sntp) => {
                     self.sntp = Some(sntp);
-                    log::info!(target: "epaper_album", "sntp: started");
+                    log::info!(target: "inkframe_device", "sntp: started");
                 }
                 Err(error) => {
-                    log::warn!(target: "epaper_album", "sntp: init-error: {error:?}");
+                    log::warn!(target: "inkframe_device", "sntp: init-error: {error:?}");
                     return;
                 }
             }
@@ -74,7 +74,7 @@ impl EspDeviceCloudSync {
 
         for _ in 0..20 {
             if sntp.get_sync_status() == esp_idf_svc::sntp::SyncStatus::Completed {
-                log::info!(target: "epaper_album", "sntp: completed");
+                log::info!(target: "inkframe_device", "sntp: completed");
                 self.time_synced = true;
                 return;
             }
@@ -82,7 +82,7 @@ impl EspDeviceCloudSync {
         }
 
         log::warn!(
-            target: "epaper_album",
+            target: "inkframe_device",
             "sntp: timeout status={:?}",
             sntp.get_sync_status()
         );
@@ -162,21 +162,23 @@ impl DeviceCloudSync for EspDeviceCloudSync {
             return Err(EspDeviceSyncError::Wifi(WifiConnectError::InitError));
         }
         log::info!(
-            target: "epaper_album",
+            target: "inkframe_device",
             "sync: network ready date={}",
             request.date
         );
         if let Some(wifi) = self.wifi.as_ref() {
             match wifi.ip_info() {
                 Ok(ip_info) => log::info!(
-                    target: "epaper_album",
+                    target: "inkframe_device",
                     "sync: ip={} netmask={} dns={:?} secondary-dns={:?}",
                     ip_info.ip,
                     ip_info.subnet.mask,
                     ip_info.dns,
                     ip_info.secondary_dns
                 ),
-                Err(error) => log::warn!(target: "epaper_album", "sync: ip-info error: {error:?}"),
+                Err(error) => {
+                    log::warn!(target: "inkframe_device", "sync: ip-info error: {error:?}")
+                }
             }
         }
 

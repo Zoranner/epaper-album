@@ -73,7 +73,7 @@ pub fn run_self_test(config_path: impl AsRef<Path>) -> SelfTestReport {
 }
 
 pub fn print_self_test_report(report: &SelfTestReport) {
-    print_report_line(format_args!("epaper-album self-test"));
+    print_report_line(format_args!("Inkframe self-test"));
     print_report_line(format_args!("storage: {}", report.storage.label()));
     print_report_line(format_args!("config: {}", report.config.label()));
     print_report_line(format_args!(
@@ -85,7 +85,7 @@ pub fn print_self_test_report(report: &SelfTestReport) {
 
 #[cfg(target_os = "espidf")]
 fn print_report_line(args: Arguments<'_>) {
-    log::info!(target: "epaper_album", "{}", args);
+    log::info!(target: "inkframe_device", "{}", args);
 }
 
 #[cfg(not(target_os = "espidf"))]

@@ -365,32 +365,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "epaper-album-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "chrono",
- "fontdue",
- "hex",
- "http-body-util",
- "image",
- "protocol",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "thiserror 1.0.69",
- "tokio",
- "toml",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -893,6 +867,32 @@ dependencies = [
  "hashbrown 0.17.1",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "inkframe-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "fontdue",
+ "hex",
+ "http-body-util",
+ "image",
+ "protocol",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "thiserror 1.0.69",
+ "tokio",
+ "toml",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

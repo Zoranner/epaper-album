@@ -8,12 +8,12 @@ use axum::{
     body::Body,
     http::{header, request::Builder, Request, StatusCode},
 };
-use epaper_album_server::{
+use http_body_util::BodyExt;
+use inkframe_server::{
     db::{self, Store},
     routes,
     state::{AdminSession, AppState},
 };
-use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use tokio::sync::Mutex;
@@ -36,10 +36,8 @@ pub async fn test_app_with_options(
     admin_token_expires_at: chrono::DateTime<chrono::Utc>,
 ) -> TestApp {
     let id = TEST_ID.fetch_add(1, Ordering::Relaxed);
-    let data_dir = std::env::temp_dir().join(format!(
-        "epaper-album-server-test-{}-{id}",
-        std::process::id()
-    ));
+    let data_dir =
+        std::env::temp_dir().join(format!("inkframe-server-test-{}-{id}", std::process::id()));
     std::fs::create_dir_all(data_dir.join("images").join("original")).expect("create original dir");
     std::fs::create_dir_all(data_dir.join("images").join("display")).expect("create display dir");
     std::fs::create_dir_all(data_dir.join("sprites")).expect("create sprites dir");

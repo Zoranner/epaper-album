@@ -21,7 +21,7 @@ impl AppConfig {
     fn from_vars(
         mut var: impl FnMut(&str) -> Result<String, std::env::VarError>,
     ) -> anyhow::Result<Self> {
-        let production = env_bool("EPAPER_ALBUM_PRODUCTION", &mut var)?;
+        let production = env_bool("INKFRAME_PRODUCTION", &mut var)?;
         let host = match var("LISTEN_HOST") {
             Ok(value) if !value.trim().is_empty() => value,
             Ok(_) | Err(std::env::VarError::NotPresent) => {
@@ -43,7 +43,7 @@ impl AppConfig {
         let database_url = match var("DATABASE_URL") {
             Ok(value) if !value.trim().is_empty() => value,
             Ok(_) | Err(std::env::VarError::NotPresent) => {
-                "sqlite:data/epaper-album.db?mode=rwc".to_string()
+                "sqlite:data/inkframe.db?mode=rwc".to_string()
             }
             Err(error) => return Err(error).context("failed to read DATABASE_URL"),
         };
@@ -154,7 +154,7 @@ mod tests {
 
     #[test]
     fn production_requires_credentials() {
-        let error = config_from(&[("EPAPER_ALBUM_PRODUCTION", "true")])
+        let error = config_from(&[("INKFRAME_PRODUCTION", "true")])
             .expect_err("production credentials should be required");
 
         assert!(error.to_string().contains("SECRET_KEY must be set"));
@@ -163,7 +163,7 @@ mod tests {
     #[test]
     fn production_rejects_development_defaults_and_placeholders() {
         let default_error = config_from(&[
-            ("EPAPER_ALBUM_PRODUCTION", "true"),
+            ("INKFRAME_PRODUCTION", "true"),
             ("SECRET_KEY", "local-secret-key"),
             ("ADMIN_USERNAME", "operator"),
             ("ADMIN_PASSWORD", "strong-password"),
@@ -174,7 +174,7 @@ mod tests {
             .contains("must not use the development default"));
 
         let placeholder_error = config_from(&[
-            ("EPAPER_ALBUM_PRODUCTION", "true"),
+            ("INKFRAME_PRODUCTION", "true"),
             ("SECRET_KEY", "change-me-device-secret"),
             ("ADMIN_USERNAME", "operator"),
             ("ADMIN_PASSWORD", "strong-password"),
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn production_uses_explicit_public_binding_and_credentials() {
         let config = config_from(&[
-            ("EPAPER_ALBUM_PRODUCTION", "true"),
+            ("INKFRAME_PRODUCTION", "true"),
             ("SECRET_KEY", "device-secret"),
             ("ADMIN_USERNAME", "operator"),
             ("ADMIN_PASSWORD", "strong-password"),

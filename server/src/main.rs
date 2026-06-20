@@ -1,4 +1,4 @@
-use epaper_album_server::{
+use inkframe_server::{
     config::AppConfig,
     db::{self, Store},
     routes,
@@ -14,7 +14,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "epaper_album_server=info,tower_http=info".into()),
+                .unwrap_or_else(|_| "inkframe_server=info,tower_http=info".into()),
         )
         .init();
 
@@ -45,10 +45,7 @@ async fn main() -> anyhow::Result<()> {
     routes::recover_and_enqueue_pending(&state).await?;
     let app = routes::router(state).layer(CorsLayer::permissive());
 
-    tracing::info!(
-        "Epaper Album Server listening on http://{}",
-        config.listen_addr
-    );
+    tracing::info!("Inkframe Server listening on http://{}", config.listen_addr);
     tracing::info!("Admin UI is served from ./web/dist when built");
 
     let listener = tokio::net::TcpListener::bind(config.listen_addr).await?;

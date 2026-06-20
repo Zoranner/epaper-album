@@ -1,4 +1,4 @@
-# Epaper Album Server
+# Inkframe Server
 
 服务端是独立 Rust 后端和 Vue 管理台工程，目录边界在 `server/`。服务端通过 `../crates/protocol` 引用共享协议 crate，不纳入设备端 Cargo workspace。
 

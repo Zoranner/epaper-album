@@ -1,7 +1,7 @@
 services:
-  epaper-album-server:
-    image: epaper-album-server:latest
-    container_name: epaper-album-server
+  inkframe-server:
+    image: inkframe-server:latest
+    container_name: inkframe-server
     restart: always
     ports:
       - 3000:3000

@@ -1,4 +1,4 @@
-use epaper_album_server::db::{self, Store};
+use inkframe_server::db::{self, Store};
 use sqlx::sqlite::SqlitePoolOptions;
 
 use super::common::*;
