@@ -28,9 +28,9 @@ const SELF_TEST_CONTENT_X: usize = SELF_TEST_PANEL_X + 28;
 const SELF_TEST_CONTENT_Y: usize = SELF_TEST_PANEL_Y + 24;
 const SELF_TEST_COLUMN_WIDTH: usize = 332;
 const SELF_TEST_COLUMN_GAP: usize = 34;
-const SELF_TEST_TITLE_STEP_Y: usize = 30;
-const SELF_TEST_LINE_STEP_Y: usize = 22;
-const SELF_TEST_SECTION_GAP_Y: usize = 10;
+const SELF_TEST_TITLE_STEP_Y: usize = 24;
+const SELF_TEST_LINE_STEP_Y: usize = 18;
+const SELF_TEST_SECTION_GAP_Y: usize = 6;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EpdProbe {
@@ -263,14 +263,14 @@ fn draw_self_test_frame(frame: &mut [u8], report: &HardwareSelfTestReport) {
         glyph_gap: 3,
     };
     let section_style = TextStyle {
-        glyph_width: 9,
-        glyph_height: 14,
+        glyph_width: 8,
+        glyph_height: 13,
         glyph_gap: 2,
         ..header_style
     };
     let body_style = TextStyle {
-        glyph_width: 8,
-        glyph_height: 12,
+        glyph_width: 7,
+        glyph_height: 11,
         glyph_gap: 2,
         ..header_style
     };
@@ -499,6 +499,9 @@ pub fn print_hardware_self_test_report(report: &HardwareSelfTestReport) {
 impl From<&HardwareSelfTestReport> for SelfTestPageModel {
     fn from(report: &HardwareSelfTestReport) -> Self {
         Self {
+            product: "Inkframe".to_string(),
+            firmware: env!("CARGO_PKG_VERSION").to_string(),
+            author: package_authors(),
             wake: report.wake.label().to_string(),
             wake_marker: report.wake_marker.label().to_string(),
             pmic: pmic_page_value(&report.pmic),
@@ -608,6 +611,15 @@ fn charge_state_label(value: ChargeState) -> &'static str {
         ChargeState::Discharging => "DISCHARGING",
         ChargeState::Charging => "CHARGING",
         ChargeState::Full => "FULL",
+    }
+}
+
+fn package_authors() -> String {
+    let authors = env!("CARGO_PKG_AUTHORS").replace(':', ", ");
+    if authors.trim().is_empty() {
+        "-".to_string()
+    } else {
+        authors
     }
 }
 

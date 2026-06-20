@@ -20,6 +20,9 @@ const VALUE_MAX_CHARS: usize = 26;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SelfTestPageModel {
+    pub product: String,
+    pub firmware: String,
+    pub author: String,
     pub wake: String,
     pub wake_marker: String,
     pub pmic: String,
@@ -53,6 +56,14 @@ pub fn self_test_bar_color_for_x(x: usize) -> Color {
 pub fn self_test_page_columns(model: &SelfTestPageModel) -> [Vec<SelfTestPageSection>; 2] {
     [
         vec![
+            SelfTestPageSection {
+                title: "IDENTITY",
+                lines: vec![
+                    line("PRODUCT", &model.product),
+                    line("FIRMWARE", &model.firmware),
+                    line("AUTHOR", &model.author),
+                ],
+            },
             SelfTestPageSection {
                 title: "SYSTEM",
                 lines: vec![
@@ -148,6 +159,9 @@ mod tests {
     #[test]
     fn page_sections_keep_only_actionable_self_test_fields() {
         let model = SelfTestPageModel {
+            product: "Inkframe".to_string(),
+            firmware: "0.1.0".to_string(),
+            author: "Zoranner".to_string(),
             wake: "external".to_string(),
             wake_marker: "timer".to_string(),
             pmic: "0X4A AXP2101".to_string(),
@@ -174,7 +188,13 @@ mod tests {
             .flat_map(|column| column.iter().flat_map(|section| section.lines.iter()))
             .collect::<Vec<_>>();
 
-        assert_eq!(titles, ["SYSTEM", "POWER", "DISPLAY", "STORAGE", "NETWORK"]);
+        assert_eq!(
+            titles,
+            ["IDENTITY", "SYSTEM", "POWER", "DISPLAY", "STORAGE", "NETWORK"]
+        );
+        assert!(lines.iter().any(|line| *line == "PRODUCT: Inkframe"));
+        assert!(lines.iter().any(|line| *line == "FIRMWARE: 0.1.0"));
+        assert!(lines.iter().any(|line| *line == "AUTHOR: Zoranner"));
         assert!(lines.iter().any(|line| *line == "SSID: Office-WiFi"));
         assert!(lines.iter().any(|line| *line == "BATTERY: 83% CHARGING"));
         assert!(lines.iter().any(|line| *line == "EXIT: KEY CLICK"));

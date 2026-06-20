@@ -1,6 +1,7 @@
 [package]
 name = "inkframe-device"
 version = "0.1.0"
+authors = ["Zoranner"]
 edition = "2021"
 license = "MIT"
 publish = false
