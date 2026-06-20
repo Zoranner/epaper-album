@@ -171,7 +171,7 @@ fn placeholder_font_renders_underscore_as_baseline_not_unknown_box() {
 
 #[test]
 fn placeholder_font_renders_error_detail_punctuation_without_unknown_boxes() {
-    for character in ['(', ')', '='] {
+    for character in ['(', ')', '%', '='] {
         assert_ne!(glyph_pattern(character), glyph_pattern('?'));
     }
 }
