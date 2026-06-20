@@ -6,6 +6,7 @@ pub mod graphics;
 #[cfg(target_os = "espidf")]
 pub mod hardware_selftest {
     pub use crate::selftest::hardware::*;
+    pub use crate::selftest::report::*;
 }
 pub mod model;
 pub mod platform;

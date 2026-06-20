@@ -1,4 +1,8 @@
+#[cfg(target_os = "espidf")]
+use crate::power::ChargeState;
 use crate::screen::{Color, SCREEN_WIDTH};
+#[cfg(target_os = "espidf")]
+use crate::selftest::hardware::{HardwareSelfTestReport, PmicSelfTestProbe};
 
 pub const SELF_TEST_BAR_COUNT: usize = 12;
 pub const SELF_TEST_PANEL_X: usize = 52;
@@ -157,6 +161,125 @@ pub fn fit_page_value(value: &str, max_chars: usize) -> String {
         .take(max_chars.saturating_sub(1))
         .chain(['~'])
         .collect()
+}
+
+#[cfg(target_os = "espidf")]
+impl From<&HardwareSelfTestReport> for SelfTestPageModel {
+    fn from(report: &HardwareSelfTestReport) -> Self {
+        Self {
+            firmware: env!("CARGO_PKG_VERSION").to_string(),
+            author: package_authors(),
+            wake: report.wake.label().to_string(),
+            wake_marker: report.wake_marker.label().to_string(),
+            pmic: pmic_page_value(&report.pmic),
+            power: power_page_value(&report.pmic),
+            battery: battery_page_value(&report.pmic),
+            low_battery: low_battery_page_value(&report.pmic),
+            storage: report.base.storage.label().to_string(),
+            config: report.base.config.label().to_string(),
+            cloud: empty_as_dash(&report.base_url),
+            ssid: empty_as_dash(&report.ssid),
+            wifi: report.wifi.label().to_string(),
+            ip: empty_as_dash(&report.ip),
+            http: report.http.label().to_string(),
+            epd: report.epd.label().to_string(),
+        }
+    }
+}
+
+#[cfg(target_os = "espidf")]
+fn pmic_page_value(pmic: &PmicSelfTestProbe) -> String {
+    match pmic {
+        PmicSelfTestProbe::Ready(summary) => {
+            format!(
+                "0X{:02X} {}",
+                summary.chip_id,
+                if summary.is_axp2101 {
+                    "AXP2101"
+                } else {
+                    "UNKNOWN"
+                }
+            )
+        }
+        PmicSelfTestProbe::InitError => "init-error".to_string(),
+    }
+}
+
+#[cfg(target_os = "espidf")]
+fn power_page_value(pmic: &PmicSelfTestProbe) -> String {
+    match pmic {
+        PmicSelfTestProbe::Ready(summary) => format!(
+            "VBUS={} BAT={}",
+            yes_no(summary.vbus_good),
+            yes_no(summary.battery_connected)
+        ),
+        PmicSelfTestProbe::InitError => "-".to_string(),
+    }
+}
+
+#[cfg(target_os = "espidf")]
+fn battery_page_value(pmic: &PmicSelfTestProbe) -> String {
+    match pmic {
+        PmicSelfTestProbe::Ready(summary) => format!(
+            "{} {}",
+            summary
+                .percent
+                .map(|percent| format!("{percent}%"))
+                .unwrap_or_else(|| "-".to_string()),
+            charge_state_label(summary.charge_state)
+        ),
+        PmicSelfTestProbe::InitError => "-".to_string(),
+    }
+}
+
+#[cfg(target_os = "espidf")]
+fn low_battery_page_value(pmic: &PmicSelfTestProbe) -> String {
+    match pmic {
+        PmicSelfTestProbe::Ready(summary) => format!(
+            "RAW={} EFFECTIVE={}",
+            yes_no(summary.low_battery),
+            yes_no(summary.effective_low_battery)
+        ),
+        PmicSelfTestProbe::InitError => "-".to_string(),
+    }
+}
+
+#[cfg(target_os = "espidf")]
+fn yes_no(value: bool) -> &'static str {
+    if value {
+        "YES"
+    } else {
+        "NO"
+    }
+}
+
+#[cfg(target_os = "espidf")]
+fn empty_as_dash(value: &str) -> String {
+    if value.trim().is_empty() {
+        "-".to_string()
+    } else {
+        value.trim().to_string()
+    }
+}
+
+#[cfg(target_os = "espidf")]
+fn charge_state_label(value: ChargeState) -> &'static str {
+    match value {
+        ChargeState::Unknown => "UNKNOWN",
+        ChargeState::Discharging => "DISCHARGING",
+        ChargeState::Charging => "CHARGING",
+        ChargeState::Full => "FULL",
+    }
+}
+
+#[cfg(target_os = "espidf")]
+fn package_authors() -> String {
+    let authors = env!("CARGO_PKG_AUTHORS").replace(':', ", ");
+    if authors.trim().is_empty() {
+        "-".to_string()
+    } else {
+        authors
+    }
 }
 
 #[cfg(test)]

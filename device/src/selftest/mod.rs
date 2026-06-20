@@ -1,6 +1,12 @@
 #[cfg(target_os = "espidf")]
+pub mod display;
+#[cfg(target_os = "espidf")]
 pub mod hardware;
 pub mod page;
+#[cfg(target_os = "espidf")]
+pub mod report;
+#[cfg(target_os = "espidf")]
+pub mod wake_marker;
 
 use crate::config::Config;
 #[cfg(not(target_os = "espidf"))]
