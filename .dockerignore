@@ -1,6 +1,5 @@
 .git/
-device/.embuild/
-device/target/
+device/
 server/target/
 server/data/
 server/.env
