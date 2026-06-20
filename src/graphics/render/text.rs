@@ -1,5 +1,5 @@
-use crate::display::{Color, ScreenBuffer, SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::epd::set_logical_packed_frame_pixel;
+use crate::screen::{Color, ScreenBuffer, SCREEN_HEIGHT, SCREEN_WIDTH};
 
 pub(crate) const PLACEHOLDER_GLYPH_WIDTH: usize = 5;
 pub(crate) const PLACEHOLDER_GLYPH_HEIGHT: usize = 7;

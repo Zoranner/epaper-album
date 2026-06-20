@@ -1,11 +1,11 @@
 use crate::bmp::BmpImage;
 use crate::device_runtime::{DeviceDisplay, DisplayRefreshRequest, ErrorRefreshRequest};
-use crate::display::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::epd::{run_epd_packed_frame, EpdBus, EpdError};
 use crate::render::{
     render_builtin_error_page_packed_frame, render_epd_packed_frame_from_bmps,
     BuiltinErrorPageInput, PackedFrameRenderInput, RenderError, SpriteBmps, SpritePlacement,
 };
+use crate::screen::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::storage::{image_bmp_path, read_binary_file, sprite_bmp_path, StorageBinaryRead};
 use std::fmt;
 
@@ -232,11 +232,11 @@ where
 mod tests {
     use super::*;
     use crate::bmp::bmp_row_stride;
-    use crate::display::Color;
     use crate::epd::{
         epd_color_code, EpdError, EPD_FRAME_BYTES, EPD_HEIGHT, EPD_ROW_BYTES, EPD_WIDTH,
     };
     use crate::model::{LocalDate, Plan};
+    use crate::screen::Color;
     use crate::state::RefreshReason;
     use std::collections::BTreeMap;
 

@@ -1,4 +1,4 @@
-use crate::display::{Color, SCREEN_HEIGHT, SCREEN_WIDTH};
+use crate::screen::{Color, SCREEN_HEIGHT, SCREEN_WIDTH};
 use std::fmt;
 
 pub const EPD_WIDTH: usize = SCREEN_WIDTH;

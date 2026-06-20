@@ -1,7 +1,7 @@
 use super::{OverlaySlot, RenderError, RenderResource};
 use crate::bmp::BmpImage;
-use crate::display::{Color, SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::epd::{pack_epd_pixels, set_logical_packed_frame_pixel, EPD_FRAME_BYTES};
+use crate::screen::{Color, SCREEN_HEIGHT, SCREEN_WIDTH};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SpriteBmps<'a> {

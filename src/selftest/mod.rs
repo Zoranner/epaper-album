@@ -3,9 +3,9 @@ pub mod hardware;
 
 use crate::config::Config;
 #[cfg(not(target_os = "espidf"))]
-use crate::display::{DisplayRefreshMode, EpaperDisplay, MockDisplay};
-#[cfg(not(target_os = "espidf"))]
 use crate::render::{render_photo_page, RenderInput};
+#[cfg(not(target_os = "espidf"))]
+use crate::screen::{DisplayRefreshMode, EpaperDisplay, MockDisplay};
 use crate::storage::{read_text_file, StorageRead};
 use std::fmt::Arguments;
 use std::path::Path;

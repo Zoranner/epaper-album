@@ -1,7 +1,7 @@
 use super::text::{
     draw_text, OverlaySlot, TextStyle, GLYPH_GAP, PLACEHOLDER_GLYPH_HEIGHT, PLACEHOLDER_GLYPH_WIDTH,
 };
-use crate::display::{Color, ScreenBuffer, SCREEN_HEIGHT, SCREEN_WIDTH};
+use crate::screen::{Color, ScreenBuffer, SCREEN_HEIGHT, SCREEN_WIDTH};
 
 #[derive(Clone, Copy, Debug)]
 pub struct RenderImage<'a> {

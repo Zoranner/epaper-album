@@ -1,5 +1,5 @@
-use crate::display::Color;
 use crate::epd::{pack_epd_pixels, EPD_HEIGHT, EPD_ROW_BYTES, EPD_WIDTH};
+use crate::screen::Color;
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

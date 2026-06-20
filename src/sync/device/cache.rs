@@ -8,8 +8,8 @@ pub(super) fn cached_image_is_renderable(store: &impl ResourceStore, sha256: &st
 
     BmpImage::parse(&bytes)
         .map(|image| {
-            image.width() == crate::display::SCREEN_WIDTH
-                && image.height() == crate::display::SCREEN_HEIGHT
+            image.width() == crate::screen::SCREEN_WIDTH
+                && image.height() == crate::screen::SCREEN_HEIGHT
         })
         .unwrap_or(false)
 }

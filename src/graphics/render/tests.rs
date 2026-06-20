@@ -1,7 +1,7 @@
 use super::*;
 use crate::bmp::bmp_row_stride;
-use crate::display::Color;
 use crate::epd::{epd_color_code, EPD_FRAME_BYTES, EPD_HEIGHT, EPD_ROW_BYTES, EPD_WIDTH};
+use crate::screen::Color;
 
 #[test]
 fn overlays_sprites_at_formal_slots() {

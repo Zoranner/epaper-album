@@ -35,8 +35,8 @@ pub mod cloud {
     pub use crate::sync::cloud::*;
 }
 
-pub mod device_display {
-    pub use crate::graphics::device_display::*;
+pub mod device_output {
+    pub use crate::graphics::output::*;
 }
 
 pub mod device_espidf {
@@ -56,8 +56,8 @@ pub mod diagnostics {
     pub use crate::domain::diagnostics::*;
 }
 
-pub mod display {
-    pub use crate::graphics::display::*;
+pub mod screen {
+    pub use crate::graphics::screen::*;
 }
 
 pub mod epd {

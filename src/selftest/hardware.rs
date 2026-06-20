@@ -1,5 +1,4 @@
 use crate::config::{Config, CONFIG_PATH};
-use crate::display::{Color, SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::epd::{
     espidf::EspEpdBus, pack_epd_pixels, run_epd_packed_frame, set_logical_packed_frame_pixel,
     EPD_FRAME_BYTES,
@@ -7,6 +6,7 @@ use crate::epd::{
 use crate::pmic::espidf::{chip_id_is_axp2101, init_axp2101_for_photo_painter};
 use crate::power::espidf::WakeProbe;
 use crate::render::{glyph_pattern, TextStyle};
+use crate::screen::{Color, SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::selftest::{ConfigProbe, RenderProbe, SelfTestReport, StorageProbe};
 use crate::storage::{with_mounted_sdcard_parts, StorageRead};
 use crate::wifi::espidf::{probe_test_network, HttpProbe, WifiProbe};

@@ -2,8 +2,8 @@ use super::text::{
     draw_centered_text_in_area, draw_centered_wrapped_text_in_area, fill_packed_frame_rect,
     TextStyle,
 };
-use crate::display::{Color, SCREEN_WIDTH};
 use crate::epd::{pack_epd_pixels, EPD_FRAME_BYTES};
+use crate::screen::{Color, SCREEN_WIDTH};
 
 const ERROR_TITLE_BOX_X: usize = 56;
 const ERROR_TITLE_BOX_Y: usize = 42;

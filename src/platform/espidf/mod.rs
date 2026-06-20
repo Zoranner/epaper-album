@@ -2,7 +2,7 @@ use crate::device_runtime::{DeviceCycleOutcome, DeviceCycleResult};
 use crate::power::NextRunPlan;
 
 mod diagnostics;
-mod display;
+mod error_page;
 mod runner;
 mod schedule;
 mod storage;

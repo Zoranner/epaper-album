@@ -1,11 +1,11 @@
 use super::diagnostics::MountedDiagnosticLog;
-use super::display::refresh_storage_error_page;
+use super::error_page::refresh_storage_error_page;
 use super::schedule::{build_next_run_plan, current_epoch_seconds, today};
 use super::storage::{read_config_mounted, read_optional_json_mounted, write_cycle_files};
 use super::sync::EspDeviceCloudSync;
 use super::{EspDeviceRunOutcome, EspDeviceRunReport};
 use crate::app::RunTrigger;
-use crate::device_display::{MountedSdCardDisplayResourceReader, PackedFrameDisplay};
+use crate::device_output::{MountedSdCardDisplayResourceReader, PackedFrameDisplay};
 use crate::device_runtime::{decide_sync, run_device_cycle, DeviceCycleInput, SyncAction};
 use crate::epd::espidf::EspEpdBus;
 use crate::pmic::espidf::{init_axp2101_for_photo_painter, status_summary};
