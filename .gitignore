@@ -1,4 +1,5 @@
 .refs/
-.embuild/
+device/.embuild/
+device/target/
 target/
 data/

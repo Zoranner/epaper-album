@@ -659,7 +659,7 @@ ORDER BY date ASC;
 
 ## 工程构建与部署
 
-服务端是独立 Cargo 工程，所有后端、管理台和部署文件都收敛在 `server/` 目录中。服务端通过 path dependency 引用 `../crates/protocol` 共享协议 crate，不纳入设备端根 Cargo workspace：
+服务端是独立 Cargo 工程，所有后端、管理台和部署文件都收敛在 `server/` 目录中。服务端通过 path dependency 引用 `../crates/protocol` 共享协议 crate，不纳入设备端工程：
 
 ```text
 server/

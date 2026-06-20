@@ -24,7 +24,7 @@ cd server
 cargo build --release
 ```
 
-容器镜像从 `server/` 发起构建，构建上下文为仓库根目录，用于同时复制 `server/` 和 `crates/protocol/`。
+容器镜像通过 `server/docker-build.sh` 发起构建，构建上下文为仓库根目录，用于同时复制 `server/` 和 `crates/protocol/`。
 
 ```bash
 cd server

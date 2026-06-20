@@ -34,15 +34,17 @@ jobs:
           ldproxy: true
 
       - name: Install espflash
+        working-directory: device
         run: cargo +esp install espflash --locked
 
       - name: Build release firmware
+        working-directory: device
         run: cargo +esp build --release --target "${FIRMWARE_TARGET}"
 
       - name: Create release image
+        working-directory: device
         run: |
-          mkdir -p dist/firmware
-          cp "target/${FIRMWARE_TARGET}/release/${FIRMWARE_NAME}" "dist/firmware/${FIRMWARE_NAME}-${GITHUB_REF_NAME}.elf"
+          mkdir -p ../dist/firmware
           cargo +esp espflash save-image \
             --release \
             --target "${FIRMWARE_TARGET}" \
@@ -50,10 +52,11 @@ jobs:
             --merge \
             --flash-size 16mb \
             --flash-mode qio \
-            "dist/firmware/${FIRMWARE_NAME}-${GITHUB_REF_NAME}-esp32s3-merged.bin"
-          cp "target/${FIRMWARE_TARGET}/release/bootloader.bin" "dist/firmware/${FIRMWARE_NAME}-${GITHUB_REF_NAME}-bootloader.bin"
-          cp "target/${FIRMWARE_TARGET}/release/partition-table.bin" "dist/firmware/${FIRMWARE_NAME}-${GITHUB_REF_NAME}-partition-table.bin"
-          sha256sum dist/firmware/* > "dist/firmware/${FIRMWARE_NAME}-${GITHUB_REF_NAME}-sha256.txt"
+            "../dist/firmware/${FIRMWARE_NAME}-${GITHUB_REF_NAME}-esp32s3-merged.bin"
+          cp "target/${FIRMWARE_TARGET}/release/bootloader.bin" "../dist/firmware/${FIRMWARE_NAME}-${GITHUB_REF_NAME}-bootloader.bin"
+          cp "target/${FIRMWARE_TARGET}/release/partition-table.bin" "../dist/firmware/${FIRMWARE_NAME}-${GITHUB_REF_NAME}-partition-table.bin"
+          cp "target/${FIRMWARE_TARGET}/release/${FIRMWARE_NAME}" "../dist/firmware/${FIRMWARE_NAME}-${GITHUB_REF_NAME}.elf"
+          sha256sum ../dist/firmware/* > "../dist/firmware/${FIRMWARE_NAME}-${GITHUB_REF_NAME}-sha256.txt"
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4

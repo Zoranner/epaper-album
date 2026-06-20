@@ -445,14 +445,14 @@ pub enum DisplayCause {
 
 | 模块 | 职责 |
 | --- | --- |
-| `src/power/mod.rs` | 供电分类、有效低电判断、北京时间下一个整点计算 |
-| `src/domain/state.rs` | `PersistentDeviceState` 和 `PersistentSyncState` |
-| `src/storage` | `plan.json`、`state.json`、`sync.json` 读写 |
-| `src/app/cycle.rs` | `RunContext`、`decide_sync`、`decide_display` 和业务周期编排 |
-| `src/platform/espidf.rs` | 采集硬件事实、挂载存储、调用业务周期、安排下一次运行 |
-| `src/main.rs` | 入口分流、运行报告日志、最终进入等待重启或 deep sleep |
-| `src/selftest` | 硬件自检流程、自检页、自检退出 |
-| `src/platform/button.rs` | KEY 长按、KEY 单击、自检请求标记 |
+| `device/src/power/mod.rs` | 供电分类、有效低电判断、北京时间下一个整点计算 |
+| `device/src/domain/state.rs` | `PersistentDeviceState` 和 `PersistentSyncState` |
+| `device/src/storage` | `plan.json`、`state.json`、`sync.json` 读写 |
+| `device/src/app/cycle.rs` | `RunContext`、`decide_sync`、`decide_display` 和业务周期编排 |
+| `device/src/platform/espidf.rs` | 采集硬件事实、挂载存储、调用业务周期、安排下一次运行 |
+| `device/src/main.rs` | 入口分流、运行报告日志、最终进入等待重启或 deep sleep |
+| `device/src/selftest` | 硬件自检流程、自检页、自检退出 |
+| `device/src/platform/button.rs` | KEY 长按、KEY 单击、自检请求标记 |
 
 ## 测试清单
 
