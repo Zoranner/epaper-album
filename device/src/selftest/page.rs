@@ -1,6 +1,24 @@
 use crate::screen::{Color, SCREEN_WIDTH};
 
 pub const SELF_TEST_BAR_COUNT: usize = 12;
+pub const SELF_TEST_PANEL_X: usize = 52;
+pub const SELF_TEST_PANEL_Y: usize = 42;
+pub const SELF_TEST_PANEL_WIDTH: usize = SCREEN_WIDTH - SELF_TEST_PANEL_X * 2;
+pub const SELF_TEST_PANEL_HEIGHT: usize = 396;
+pub const SELF_TEST_PANEL_BORDER: usize = 4;
+pub const SELF_TEST_PANEL_INSET_X: usize = 42;
+pub const SELF_TEST_COLUMN_GAP: usize = 36;
+pub const SELF_TEST_COLUMN_WIDTH: usize =
+    (SELF_TEST_PANEL_WIDTH - SELF_TEST_PANEL_INSET_X * 2 - SELF_TEST_COLUMN_GAP) / 2;
+pub const SELF_TEST_LEFT_COLUMN_X: usize = SELF_TEST_PANEL_X + SELF_TEST_PANEL_INSET_X;
+pub const SELF_TEST_RIGHT_COLUMN_X: usize =
+    SELF_TEST_LEFT_COLUMN_X + SELF_TEST_COLUMN_WIDTH + SELF_TEST_COLUMN_GAP;
+pub const SELF_TEST_TITLE_Y: usize = 90;
+pub const SELF_TEST_SUBTITLE_Y: usize = 122;
+pub const SELF_TEST_BODY_Y: usize = 161;
+pub const SELF_TEST_TITLE_STEP_Y: usize = 24;
+pub const SELF_TEST_LINE_STEP_Y: usize = 18;
+pub const SELF_TEST_SECTION_GAP_Y: usize = 6;
 pub const SELF_TEST_BAR_COLORS: [Color; SELF_TEST_BAR_COUNT] = [
     Color::Green,
     Color::Blue,
@@ -17,10 +35,11 @@ pub const SELF_TEST_BAR_COLORS: [Color; SELF_TEST_BAR_COUNT] = [
 ];
 
 const VALUE_MAX_CHARS: usize = 26;
+const SUBTITLE_FIRMWARE_MAX_CHARS: usize = 12;
+const SUBTITLE_AUTHOR_MAX_CHARS: usize = 18;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SelfTestPageModel {
-    pub product: String,
     pub firmware: String,
     pub author: String,
     pub wake: String,
@@ -56,14 +75,6 @@ pub fn self_test_bar_color_for_x(x: usize) -> Color {
 pub fn self_test_page_columns(model: &SelfTestPageModel) -> [Vec<SelfTestPageSection>; 2] {
     [
         vec![
-            SelfTestPageSection {
-                title: "IDENTITY",
-                lines: vec![
-                    line("PRODUCT", &model.product),
-                    line("FIRMWARE", &model.firmware),
-                    line("AUTHOR", &model.author),
-                ],
-            },
             SelfTestPageSection {
                 title: "SYSTEM",
                 lines: vec![
@@ -106,6 +117,14 @@ pub fn self_test_page_columns(model: &SelfTestPageModel) -> [Vec<SelfTestPageSec
             },
         ],
     ]
+}
+
+pub fn self_test_page_subtitle(model: &SelfTestPageModel) -> String {
+    format!(
+        "FW {}  AUTHOR {}",
+        fit_page_value(&model.firmware, SUBTITLE_FIRMWARE_MAX_CHARS),
+        fit_page_value(&model.author, SUBTITLE_AUTHOR_MAX_CHARS)
+    )
 }
 
 fn line(label: &str, value: &str) -> String {
@@ -159,7 +178,6 @@ mod tests {
     #[test]
     fn page_sections_keep_only_actionable_self_test_fields() {
         let model = SelfTestPageModel {
-            product: "Inkframe".to_string(),
             firmware: "0.1.0".to_string(),
             author: "Zoranner".to_string(),
             wake: "external".to_string(),
@@ -188,17 +206,54 @@ mod tests {
             .flat_map(|column| column.iter().flat_map(|section| section.lines.iter()))
             .collect::<Vec<_>>();
 
-        assert_eq!(
-            titles,
-            ["IDENTITY", "SYSTEM", "POWER", "DISPLAY", "STORAGE", "NETWORK"]
-        );
-        assert!(lines.iter().any(|line| *line == "PRODUCT: Inkframe"));
-        assert!(lines.iter().any(|line| *line == "FIRMWARE: 0.1.0"));
-        assert!(lines.iter().any(|line| *line == "AUTHOR: Zoranner"));
+        assert_eq!(titles, ["SYSTEM", "POWER", "DISPLAY", "STORAGE", "NETWORK"]);
         assert!(lines.iter().any(|line| *line == "SSID: Office-WiFi"));
         assert!(lines.iter().any(|line| *line == "BATTERY: 83% CHARGING"));
         assert!(lines.iter().any(|line| *line == "EXIT: KEY CLICK"));
         assert!(!lines.iter().any(|line| line.contains("secret")));
+    }
+
+    #[test]
+    fn page_subtitle_carries_firmware_identity_under_title() {
+        let model = SelfTestPageModel {
+            firmware: "0.1.0".to_string(),
+            author: "Zoranner".to_string(),
+            wake: "external".to_string(),
+            wake_marker: "timer".to_string(),
+            pmic: "0X4A AXP2101".to_string(),
+            power: "VBUS=YES BAT=YES".to_string(),
+            battery: "83% CHARGING".to_string(),
+            low_battery: "RAW=NO EFFECTIVE=NO".to_string(),
+            storage: "available".to_string(),
+            config: "valid".to_string(),
+            cloud: "https://device.example/api".to_string(),
+            ssid: "Office-WiFi".to_string(),
+            wifi: "connected".to_string(),
+            ip: "192.168.1.50".to_string(),
+            http: "fetched".to_string(),
+            epd: "refreshed".to_string(),
+        };
+
+        assert_eq!(self_test_page_subtitle(&model), "FW 0.1.0  AUTHOR Zoranner");
+    }
+
+    #[test]
+    fn page_layout_keeps_columns_centered_inside_panel() {
+        const CONTENT_HEIGHT: usize = 299;
+        let top_margin = SELF_TEST_TITLE_Y - SELF_TEST_PANEL_Y;
+        let bottom_margin =
+            SELF_TEST_PANEL_Y + SELF_TEST_PANEL_HEIGHT - (SELF_TEST_TITLE_Y + CONTENT_HEIGHT);
+
+        assert_eq!(SELF_TEST_PANEL_WIDTH, 696);
+        assert_eq!(SELF_TEST_PANEL_HEIGHT, 396);
+        assert_eq!(SELF_TEST_COLUMN_WIDTH, 288);
+        assert_eq!(SELF_TEST_LEFT_COLUMN_X, 94);
+        assert_eq!(SELF_TEST_RIGHT_COLUMN_X, 418);
+        assert_eq!(
+            SELF_TEST_RIGHT_COLUMN_X + SELF_TEST_COLUMN_WIDTH,
+            SELF_TEST_PANEL_X + SELF_TEST_PANEL_WIDTH - SELF_TEST_PANEL_INSET_X
+        );
+        assert!(top_margin.abs_diff(bottom_margin) <= 1);
     }
 
     #[test]

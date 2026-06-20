@@ -11,7 +11,11 @@ use crate::power::ChargeState;
 use crate::render::{glyph_pattern, TextStyle};
 use crate::screen::{Color, SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::selftest::page::{
-    self_test_bar_color_for_x, self_test_page_columns, SelfTestPageModel, SelfTestPageSection,
+    self_test_bar_color_for_x, self_test_page_columns, self_test_page_subtitle, SelfTestPageModel,
+    SelfTestPageSection, SELF_TEST_BODY_Y, SELF_TEST_LEFT_COLUMN_X, SELF_TEST_LINE_STEP_Y,
+    SELF_TEST_PANEL_BORDER, SELF_TEST_PANEL_HEIGHT, SELF_TEST_PANEL_WIDTH, SELF_TEST_PANEL_X,
+    SELF_TEST_PANEL_Y, SELF_TEST_RIGHT_COLUMN_X, SELF_TEST_SECTION_GAP_Y, SELF_TEST_SUBTITLE_Y,
+    SELF_TEST_TITLE_STEP_Y, SELF_TEST_TITLE_Y,
 };
 use crate::selftest::{ConfigProbe, RenderProbe, SelfTestReport, StorageProbe};
 use crate::storage::{with_mounted_sdcard_parts, StorageRead};
@@ -19,19 +23,6 @@ use crate::wifi::espidf::{probe_test_network, HttpProbe, WifiProbe};
 use std::path::Path;
 
 const WAKE_TEST_MARKER_PATH: &str = "/sdcard/wake-test.txt";
-const SELF_TEST_PANEL_X: usize = 52;
-const SELF_TEST_PANEL_Y: usize = 42;
-const SELF_TEST_PANEL_WIDTH: usize = SCREEN_WIDTH - SELF_TEST_PANEL_X * 2;
-const SELF_TEST_PANEL_HEIGHT: usize = SCREEN_HEIGHT - SELF_TEST_PANEL_Y * 2;
-const SELF_TEST_PANEL_BORDER: usize = 4;
-const SELF_TEST_CONTENT_X: usize = SELF_TEST_PANEL_X + 28;
-const SELF_TEST_CONTENT_Y: usize = SELF_TEST_PANEL_Y + 24;
-const SELF_TEST_COLUMN_WIDTH: usize = 332;
-const SELF_TEST_COLUMN_GAP: usize = 34;
-const SELF_TEST_TITLE_STEP_Y: usize = 24;
-const SELF_TEST_LINE_STEP_Y: usize = 18;
-const SELF_TEST_SECTION_GAP_Y: usize = 6;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EpdProbe {
     Refreshed,
@@ -274,20 +265,39 @@ fn draw_self_test_frame(frame: &mut [u8], report: &HardwareSelfTestReport) {
         glyph_gap: 2,
         ..header_style
     };
+    let subtitle_style = TextStyle {
+        glyph_width: 7,
+        glyph_height: 11,
+        glyph_gap: 2,
+        ..header_style
+    };
+    let model = SelfTestPageModel::from(report);
 
-    draw_text_on_frame(
+    draw_centered_text_on_frame(
         frame,
-        SELF_TEST_CONTENT_X,
-        SELF_TEST_CONTENT_Y,
-        "EPAPER ALBUM SELF TEST",
+        SELF_TEST_PANEL_X,
+        SELF_TEST_PANEL_WIDTH,
+        SELF_TEST_TITLE_Y,
+        "INKFRAME SELF TEST",
         &header_style,
     );
+    draw_centered_text_on_frame(
+        frame,
+        SELF_TEST_PANEL_X,
+        SELF_TEST_PANEL_WIDTH,
+        SELF_TEST_SUBTITLE_Y,
+        &self_test_page_subtitle(&model),
+        &subtitle_style,
+    );
 
-    let columns = self_test_page_columns(&SelfTestPageModel::from(report));
+    let columns = self_test_page_columns(&model);
     for (column_index, sections) in columns.iter().enumerate() {
-        let x =
-            SELF_TEST_CONTENT_X + column_index * (SELF_TEST_COLUMN_WIDTH + SELF_TEST_COLUMN_GAP);
-        let mut y = SELF_TEST_CONTENT_Y + 46;
+        let x = if column_index == 0 {
+            SELF_TEST_LEFT_COLUMN_X
+        } else {
+            SELF_TEST_RIGHT_COLUMN_X
+        };
+        let mut y = SELF_TEST_BODY_Y;
         for section in sections {
             y = draw_self_test_section(frame, x, y, section, &section_style, &body_style);
         }
@@ -364,6 +374,34 @@ fn draw_text_on_frame(frame: &mut [u8], x: usize, y: usize, text: &str, style: &
             .saturating_add(style.glyph_width)
             .saturating_add(style.glyph_gap);
     }
+}
+
+fn draw_centered_text_on_frame(
+    frame: &mut [u8],
+    area_x: usize,
+    area_width: usize,
+    y: usize,
+    text: &str,
+    style: &TextStyle,
+) {
+    let text_width = text_pixel_width(text, style);
+    let x = area_x + area_width.saturating_sub(text_width) / 2;
+    draw_text_on_frame(frame, x, y, text, style);
+}
+
+fn text_pixel_width(text: &str, style: &TextStyle) -> usize {
+    let glyph_count = text.chars().count();
+    if glyph_count == 0 {
+        return 0;
+    }
+
+    glyph_count
+        .saturating_mul(style.glyph_width)
+        .saturating_add(
+            glyph_count
+                .saturating_sub(1)
+                .saturating_mul(style.glyph_gap),
+        )
 }
 
 fn draw_glyph_on_frame(
@@ -499,7 +537,6 @@ pub fn print_hardware_self_test_report(report: &HardwareSelfTestReport) {
 impl From<&HardwareSelfTestReport> for SelfTestPageModel {
     fn from(report: &HardwareSelfTestReport) -> Self {
         Self {
-            product: "Inkframe".to_string(),
             firmware: env!("CARGO_PKG_VERSION").to_string(),
             author: package_authors(),
             wake: report.wake.label().to_string(),
