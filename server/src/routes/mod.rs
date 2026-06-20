@@ -15,7 +15,7 @@ use tower_http::services::ServeDir;
 use crate::{
     error::AppError,
     files::{display_image_path, display_image_temp_path, find_original_image_path},
-    graphics::display::render_display_bmp,
+    graphics::images::render_panel_bmp,
     state::{AppState, ProcessingQueue, RuntimeState},
 };
 
@@ -136,7 +136,7 @@ async fn process_one_image(state: &AppState, sha256: &str) -> anyhow::Result<()>
         let display_path = display_image_path(&state.data_dir, sha256);
         let temp_path = display_image_temp_path(&state.data_dir, sha256);
         let bytes = tokio::fs::read(original_path).await?;
-        let bmp = tokio::task::spawn_blocking(move || render_display_bmp(&bytes)).await??;
+        let bmp = tokio::task::spawn_blocking(move || render_panel_bmp(&bytes)).await??;
         tokio::fs::write(&temp_path, bmp).await?;
         if display_path.exists() {
             tokio::fs::remove_file(&display_path).await?;

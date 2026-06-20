@@ -14,7 +14,7 @@ use crate::{
     auth::{require_admin, require_any_permission},
     error::AppError,
     files::{display_image_path, original_image_path, remove_file_if_exists, remove_image_files},
-    graphics::display::detect_uploaded_image_format,
+    graphics::images::detect_uploaded_image_format,
     models::{null_data, ApiResponse, ImagePayload},
     state::RuntimeState,
 };

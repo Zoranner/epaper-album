@@ -24,7 +24,7 @@ impl UploadedImageFormat {
     }
 }
 
-pub(crate) fn render_display_bmp(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+pub(crate) fn render_panel_bmp(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     let image = image::load_from_memory(bytes)?;
     let fitted = fit_to_display(image);
     let paletted = quantize_six_color(fitted);
@@ -132,7 +132,7 @@ mod tests {
     use std::io::Cursor;
 
     #[test]
-    fn render_display_bmp_outputs_device_compatible_bmp() {
+    fn render_panel_bmp_outputs_device_compatible_bmp() {
         let mut input = image::RgbImage::new(32, 32);
         for (x, y, pixel) in input.enumerate_pixels_mut() {
             *pixel = image::Rgb([(x * 8) as u8, (y * 8) as u8, 128]);
@@ -143,7 +143,7 @@ mod tests {
             .write_to(&mut encoded_input, image::ImageFormat::Png)
             .expect("encode input png");
 
-        let bmp = render_display_bmp(&encoded_input.into_inner()).expect("render display bmp");
+        let bmp = render_panel_bmp(&encoded_input.into_inner()).expect("render panel bmp");
 
         assert_eq!(&bmp[0..2], b"BM");
         assert_eq!(u32::from_le_bytes(bmp[14..18].try_into().unwrap()), 40);

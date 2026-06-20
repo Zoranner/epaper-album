@@ -1,3 +1,3 @@
 pub(crate) mod bmp;
-pub(crate) mod display;
+pub(crate) mod images;
 pub(crate) mod sprites;
