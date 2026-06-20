@@ -62,9 +62,9 @@ examples/sdcard/config.toml
 
 ## 硬件自检
 
-设备启动时长按 KEY 按键约 2 秒，会进入硬件自检流程。KEY 使用 GPIO4，内部上拉，低电平按下。自检会读取 TF 卡、解析 `/sdcard/config.toml`、按配置测试 Wi-Fi 和 HTTP，并刷新墨水屏。
+设备在外部供电并显示相册页或错误页时，长按 KEY 按键约 5 秒，会写入自检请求标记并重启进入硬件自检流程。KEY 使用 GPIO4，内部上拉，低电平按下。自检页显示后单击 KEY，会清除自检请求标记并重启回正常业务周期。
 
-自检屏幕保留六色色条作为底图，中间区域覆盖白底黑字的点阵报告面板，显示 `WAKE`、`STORAGE`、`CONFIG`、`WIFI`、`HTTP`、`WAKE MARKER` 和 `EPD` 状态。串口监视器同步输出同一组状态日志。
+自检会读取 TF 卡、解析 `/sdcard/config.toml`、初始化 PMIC、按配置测试 Wi-Fi 和 HTTP，并刷新墨水屏。自检屏幕使用十二条纵向交错色条作为底图，中间区域覆盖白底黑字的点阵报告面板，按 `SYSTEM`、`POWER`、`STORAGE`、`NETWORK` 和 `DISPLAY` 分区显示唤醒来源、自检标记、PMIC 芯片、供电状态、电池电量、低电量判断、TF 卡、配置、云端地址、SSID、Wi-Fi、IP、HTTP 和 EPD 状态。串口监视器同步输出更完整的状态日志。
 
 ## 验证
 

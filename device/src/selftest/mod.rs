@@ -1,5 +1,6 @@
 #[cfg(target_os = "espidf")]
 pub mod hardware;
+pub mod page;
 
 use crate::config::Config;
 #[cfg(not(target_os = "espidf"))]

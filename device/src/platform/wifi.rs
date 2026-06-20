@@ -90,38 +90,47 @@ pub mod espidf {
         }
     }
 
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub struct NetworkProbe {
         pub wifi: WifiProbe,
         pub http: HttpProbe,
+        pub ip: String,
     }
 
     pub fn probe_test_network(modem: Modem<'static>, config: Option<&Config>) -> NetworkProbe {
         let Some(config) = config else {
-            return network_probe(WifiProbe::Skipped, HttpProbe::Skipped);
+            return network_probe(WifiProbe::Skipped, HttpProbe::Skipped, String::new());
         };
 
         let wifi_ssid = config.wifi_ssid.trim();
         let wifi_password = config.wifi_password.trim();
         if wifi_ssid.is_empty() || wifi_password.is_empty() {
-            return network_probe(WifiProbe::Skipped, HttpProbe::Skipped);
+            return network_probe(WifiProbe::Skipped, HttpProbe::Skipped, String::new());
         }
 
         let connected = match connect_wifi(modem, config) {
             Ok(connected) => connected,
-            Err(error) => return network_probe(wifi_probe_from_error(error), HttpProbe::Skipped),
+            Err(error) => {
+                return network_probe(
+                    wifi_probe_from_error(error),
+                    HttpProbe::Skipped,
+                    String::new(),
+                )
+            }
         };
 
-        let wifi_probe = match connected.ip_info() {
+        let (wifi_probe, ip) = match connected.ip_info() {
             Ok(ip_info) => {
                 log::info!(target: "inkframe_device", "wifi ip: {:?}", ip_info);
-                WifiProbe::Connected
+                (WifiProbe::Connected, ip_info.ip.to_string())
             }
-            Err(_) => return network_probe(WifiProbe::NetifError, HttpProbe::Skipped),
+            Err(_) => {
+                return network_probe(WifiProbe::NetifError, HttpProbe::Skipped, String::new())
+            }
         };
         let http_probe = probe_test_http();
 
-        network_probe(wifi_probe, http_probe)
+        network_probe(wifi_probe, http_probe, ip)
     }
 
     pub fn connect_wifi(
@@ -283,7 +292,7 @@ pub mod espidf {
         }
     }
 
-    const fn network_probe(wifi: WifiProbe, http: HttpProbe) -> NetworkProbe {
-        NetworkProbe { wifi, http }
+    const fn network_probe(wifi: WifiProbe, http: HttpProbe, ip: String) -> NetworkProbe {
+        NetworkProbe { wifi, http, ip }
     }
 }

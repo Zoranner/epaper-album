@@ -3,29 +3,34 @@ use crate::epd::{
     espidf::EspEpdBus, pack_epd_pixels, run_epd_packed_frame, set_logical_packed_frame_pixel,
     EPD_FRAME_BYTES,
 };
-use crate::pmic::espidf::{chip_id_is_axp2101, init_axp2101_for_photo_painter};
+use crate::pmic::espidf::{
+    chip_id_is_axp2101, init_axp2101_for_photo_painter, status_summary, PmicProbe,
+};
 use crate::power::espidf::WakeProbe;
+use crate::power::ChargeState;
 use crate::render::{glyph_pattern, TextStyle};
 use crate::screen::{Color, SCREEN_HEIGHT, SCREEN_WIDTH};
+use crate::selftest::page::{
+    self_test_bar_color_for_x, self_test_page_columns, SelfTestPageModel, SelfTestPageSection,
+};
 use crate::selftest::{ConfigProbe, RenderProbe, SelfTestReport, StorageProbe};
 use crate::storage::{with_mounted_sdcard_parts, StorageRead};
 use crate::wifi::espidf::{probe_test_network, HttpProbe, WifiProbe};
 use std::path::Path;
 
 const WAKE_TEST_MARKER_PATH: &str = "/sdcard/wake-test.txt";
-const SELF_TEST_PANEL_X: usize = 80;
-const SELF_TEST_PANEL_Y: usize = 76;
+const SELF_TEST_PANEL_X: usize = 52;
+const SELF_TEST_PANEL_Y: usize = 42;
 const SELF_TEST_PANEL_WIDTH: usize = SCREEN_WIDTH - SELF_TEST_PANEL_X * 2;
 const SELF_TEST_PANEL_HEIGHT: usize = SCREEN_HEIGHT - SELF_TEST_PANEL_Y * 2;
 const SELF_TEST_PANEL_BORDER: usize = 4;
-const SELF_TEST_BARS: [Color; 6] = [
-    Color::Green,
-    Color::Blue,
-    Color::Red,
-    Color::Yellow,
-    Color::Black,
-    Color::White,
-];
+const SELF_TEST_CONTENT_X: usize = SELF_TEST_PANEL_X + 28;
+const SELF_TEST_CONTENT_Y: usize = SELF_TEST_PANEL_Y + 24;
+const SELF_TEST_COLUMN_WIDTH: usize = 332;
+const SELF_TEST_COLUMN_GAP: usize = 34;
+const SELF_TEST_TITLE_STEP_Y: usize = 30;
+const SELF_TEST_LINE_STEP_Y: usize = 22;
+const SELF_TEST_SECTION_GAP_Y: usize = 10;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EpdProbe {
@@ -46,7 +51,7 @@ impl EpdProbe {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HardwareSelfTestReport {
     pub base: SelfTestReport,
     pub epd: EpdProbe,
@@ -54,6 +59,39 @@ pub struct HardwareSelfTestReport {
     pub http: HttpProbe,
     pub wake_marker: WakeMarkerProbe,
     pub wake: WakeProbe,
+    pub pmic: PmicSelfTestProbe,
+    pub ssid: String,
+    pub base_url: String,
+    pub ip: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PmicSelfTestProbe {
+    Ready(PmicSelfTestSummary),
+    InitError,
+}
+
+impl PmicSelfTestProbe {
+    pub const fn label(&self) -> &'static str {
+        match self {
+            Self::Ready(_) => "ready",
+            Self::InitError => "init-error",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PmicSelfTestSummary {
+    pub chip_id: u8,
+    pub is_axp2101: bool,
+    pub battery_connected: bool,
+    pub vbus_good: bool,
+    pub charge_state: ChargeState,
+    pub percent: Option<u8>,
+    pub low_battery: bool,
+    pub effective_low_battery: bool,
+    pub dc_onoff: u8,
+    pub ldo_onoff0: u8,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,29 +133,39 @@ pub fn run_espidf_hardware_self_test(wake: WakeProbe) -> HardwareSelfTestReport 
                 http: HttpProbe::Skipped,
                 wake_marker: WakeMarkerProbe::ReadError,
                 wake,
+                pmic: PmicSelfTestProbe::InitError,
+                ssid: String::new(),
+                base_url: String::new(),
+                ip: String::new(),
             };
         }
     };
 
     let pins = peripherals.pins;
-    match init_axp2101_for_photo_painter(peripherals.i2c0, pins.gpio47, pins.gpio48) {
+    let pmic = match init_axp2101_for_photo_painter(peripherals.i2c0, pins.gpio47, pins.gpio48) {
         Ok(probe) => {
+            let summary = pmic_summary(probe);
             log::info!(
                 target: "inkframe_device",
-                "pmic: chip=0x{:02x} axp2101={} dc=0x{:02x} ldo=0x{:02x} battery={:?} percent={:?} low={}",
-                probe.chip_id,
-                chip_id_is_axp2101(probe),
-                probe.dc_onoff,
-                probe.ldo_onoff0,
-                probe.battery.charge_state,
-                probe.battery.percent,
-                probe.battery.low_battery
+                "pmic: chip=0x{:02x} axp2101={} vbus={} battery-present={} dc=0x{:02x} ldo=0x{:02x} battery={:?} percent={:?} low={} effective-low={}",
+                summary.chip_id,
+                summary.is_axp2101,
+                summary.vbus_good,
+                summary.battery_connected,
+                summary.dc_onoff,
+                summary.ldo_onoff0,
+                summary.charge_state,
+                summary.percent,
+                summary.low_battery,
+                summary.effective_low_battery
             );
+            PmicSelfTestProbe::Ready(summary)
         }
         Err(_) => {
             log::warn!(target: "inkframe_device", "pmic: init-error");
+            PmicSelfTestProbe::InitError
         }
-    }
+    };
 
     let (config_read, wake_marker) = match with_mounted_sdcard_parts(
         peripherals.sdmmc1,
@@ -139,6 +187,16 @@ pub fn run_espidf_hardware_self_test(wake: WakeProbe) -> HardwareSelfTestReport 
 
     let storage = probe_storage(&config_read);
     let config = probe_config(config_read);
+    let ssid = config
+        .value
+        .as_ref()
+        .map(|config| config.wifi_ssid.trim().to_string())
+        .unwrap_or_default();
+    let base_url = config
+        .value
+        .as_ref()
+        .map(|config| config.base_url.trim().to_string())
+        .unwrap_or_default();
     let network = probe_test_network(peripherals.modem, config.value.as_ref());
     let mut report = HardwareSelfTestReport {
         base: SelfTestReport {
@@ -154,6 +212,10 @@ pub fn run_espidf_hardware_self_test(wake: WakeProbe) -> HardwareSelfTestReport 
         http: network.http,
         wake_marker,
         wake,
+        pmic,
+        ssid,
+        base_url,
+        ip: network.ip,
     };
 
     report.epd = match EspEpdBus::new(
@@ -198,44 +260,65 @@ fn draw_self_test_frame(frame: &mut [u8], report: &HardwareSelfTestReport) {
         margin_y: 0,
         glyph_width: 16,
         glyph_height: 24,
-        glyph_gap: 4,
+        glyph_gap: 3,
+    };
+    let section_style = TextStyle {
+        glyph_width: 9,
+        glyph_height: 14,
+        glyph_gap: 2,
+        ..header_style
     };
     let body_style = TextStyle {
-        glyph_width: 11,
-        glyph_height: 17,
-        glyph_gap: 3,
+        glyph_width: 8,
+        glyph_height: 12,
+        glyph_gap: 2,
         ..header_style
     };
 
-    let content_x = SELF_TEST_PANEL_X + 42;
-    let mut y = SELF_TEST_PANEL_Y + 34;
-    draw_text_on_frame(frame, content_x, y, "EPAPER ALBUM SELF TEST", &header_style);
+    draw_text_on_frame(
+        frame,
+        SELF_TEST_CONTENT_X,
+        SELF_TEST_CONTENT_Y,
+        "EPAPER ALBUM SELF TEST",
+        &header_style,
+    );
 
-    y += 58;
-    let lines = [
-        format!("WAKE: {}", report.wake.label()),
-        format!("STORAGE: {}", report.base.storage.label()),
-        format!("CONFIG: {}", report.base.config.label()),
-        format!("WIFI: {}", report.wifi.label()),
-        format!("HTTP: {}", report.http.label()),
-        format!("WAKE MARKER: {}", report.wake_marker.label()),
-        format!("EPD: {}", report.epd.label()),
-    ];
-
-    for line in lines {
-        draw_text_on_frame(frame, content_x, y, &line, &body_style);
-        y += 34;
+    let columns = self_test_page_columns(&SelfTestPageModel::from(report));
+    for (column_index, sections) in columns.iter().enumerate() {
+        let x =
+            SELF_TEST_CONTENT_X + column_index * (SELF_TEST_COLUMN_WIDTH + SELF_TEST_COLUMN_GAP);
+        let mut y = SELF_TEST_CONTENT_Y + 46;
+        for section in sections {
+            y = draw_self_test_section(frame, x, y, section, &section_style, &body_style);
+        }
     }
 }
 
 fn draw_color_bars(frame: &mut [u8]) {
-    let band_height = SCREEN_HEIGHT / SELF_TEST_BARS.len();
     for y in 0..SCREEN_HEIGHT {
-        let color = SELF_TEST_BARS[(y / band_height).min(SELF_TEST_BARS.len() - 1)];
         for x in 0..SCREEN_WIDTH {
-            set_logical_packed_frame_pixel(frame, x, y, color);
+            set_logical_packed_frame_pixel(frame, x, y, self_test_bar_color_for_x(x));
         }
     }
+}
+
+fn draw_self_test_section(
+    frame: &mut [u8],
+    x: usize,
+    mut y: usize,
+    section: &SelfTestPageSection,
+    section_style: &TextStyle,
+    body_style: &TextStyle,
+) -> usize {
+    draw_text_on_frame(frame, x, y, section.title, section_style);
+    y += SELF_TEST_TITLE_STEP_Y;
+
+    for line in &section.lines {
+        draw_text_on_frame(frame, x, y, line, body_style);
+        y += SELF_TEST_LINE_STEP_Y;
+    }
+
+    y + SELF_TEST_SECTION_GAP_Y
 }
 
 fn draw_panel(frame: &mut [u8]) {
@@ -359,8 +442,26 @@ fn epd_error_probe(error: crate::epd::EpdError) -> EpdProbe {
 pub fn print_hardware_self_test_report(report: &HardwareSelfTestReport) {
     log::info!(target: "inkframe_device", "Inkframe self-test");
     log::info!(target: "inkframe_device", "wake: {}", report.wake.label());
+    log::info!(target: "inkframe_device", "pmic: {}", report.pmic.label());
+    if let PmicSelfTestProbe::Ready(summary) = &report.pmic {
+        log::info!(
+            target: "inkframe_device",
+            "power: chip=0x{:02x} axp2101={} vbus={} battery-present={} battery={:?} percent={:?} low={} effective-low={} dc=0x{:02x} ldo=0x{:02x}",
+            summary.chip_id,
+            summary.is_axp2101,
+            summary.vbus_good,
+            summary.battery_connected,
+            summary.charge_state,
+            summary.percent,
+            summary.low_battery,
+            summary.effective_low_battery,
+            summary.dc_onoff,
+            summary.ldo_onoff0
+        );
+    }
     log::info!(target: "inkframe_device", "storage: {}", report.base.storage.label());
     log::info!(target: "inkframe_device", "config: {}", report.base.config.label());
+    log::info!(target: "inkframe_device", "base url: {}", report.base_url);
     log::info!(
         target: "inkframe_device",
         "epd: {}",
@@ -371,6 +472,8 @@ pub fn print_hardware_self_test_report(report: &HardwareSelfTestReport) {
         "wifi: {}",
         report.wifi.label()
     );
+    log::info!(target: "inkframe_device", "wifi ssid: {}", report.ssid);
+    log::info!(target: "inkframe_device", "wifi ip: {}", report.ip);
     log::info!(
         target: "inkframe_device",
         "http: {}",
@@ -391,6 +494,121 @@ pub fn print_hardware_self_test_report(report: &HardwareSelfTestReport) {
         "render sleep: {}",
         report.base.render.slept
     );
+}
+
+impl From<&HardwareSelfTestReport> for SelfTestPageModel {
+    fn from(report: &HardwareSelfTestReport) -> Self {
+        Self {
+            wake: report.wake.label().to_string(),
+            wake_marker: report.wake_marker.label().to_string(),
+            pmic: pmic_page_value(&report.pmic),
+            power: power_page_value(&report.pmic),
+            battery: battery_page_value(&report.pmic),
+            low_battery: low_battery_page_value(&report.pmic),
+            storage: report.base.storage.label().to_string(),
+            config: report.base.config.label().to_string(),
+            cloud: empty_as_dash(&report.base_url),
+            ssid: empty_as_dash(&report.ssid),
+            wifi: report.wifi.label().to_string(),
+            ip: empty_as_dash(&report.ip),
+            http: report.http.label().to_string(),
+            epd: report.epd.label().to_string(),
+        }
+    }
+}
+
+fn pmic_summary(probe: PmicProbe) -> PmicSelfTestSummary {
+    let status = status_summary(probe.status1, probe.status2);
+    PmicSelfTestSummary {
+        chip_id: probe.chip_id,
+        is_axp2101: chip_id_is_axp2101(probe),
+        battery_connected: status.battery_connected,
+        vbus_good: status.vbus_good,
+        charge_state: probe.battery.charge_state,
+        percent: probe.battery.percent,
+        low_battery: probe.battery.low_battery,
+        effective_low_battery: probe.battery.effective_low_battery(),
+        dc_onoff: probe.dc_onoff,
+        ldo_onoff0: probe.ldo_onoff0,
+    }
+}
+
+fn pmic_page_value(pmic: &PmicSelfTestProbe) -> String {
+    match pmic {
+        PmicSelfTestProbe::Ready(summary) => {
+            format!(
+                "0X{:02X} {}",
+                summary.chip_id,
+                if summary.is_axp2101 {
+                    "AXP2101"
+                } else {
+                    "UNKNOWN"
+                }
+            )
+        }
+        PmicSelfTestProbe::InitError => "init-error".to_string(),
+    }
+}
+
+fn power_page_value(pmic: &PmicSelfTestProbe) -> String {
+    match pmic {
+        PmicSelfTestProbe::Ready(summary) => format!(
+            "VBUS={} BAT={}",
+            yes_no(summary.vbus_good),
+            yes_no(summary.battery_connected)
+        ),
+        PmicSelfTestProbe::InitError => "-".to_string(),
+    }
+}
+
+fn battery_page_value(pmic: &PmicSelfTestProbe) -> String {
+    match pmic {
+        PmicSelfTestProbe::Ready(summary) => format!(
+            "{} {}",
+            summary
+                .percent
+                .map(|percent| format!("{percent}%"))
+                .unwrap_or_else(|| "-".to_string()),
+            charge_state_label(summary.charge_state)
+        ),
+        PmicSelfTestProbe::InitError => "-".to_string(),
+    }
+}
+
+fn low_battery_page_value(pmic: &PmicSelfTestProbe) -> String {
+    match pmic {
+        PmicSelfTestProbe::Ready(summary) => format!(
+            "RAW={} EFFECTIVE={}",
+            yes_no(summary.low_battery),
+            yes_no(summary.effective_low_battery)
+        ),
+        PmicSelfTestProbe::InitError => "-".to_string(),
+    }
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value {
+        "YES"
+    } else {
+        "NO"
+    }
+}
+
+fn empty_as_dash(value: &str) -> String {
+    if value.trim().is_empty() {
+        "-".to_string()
+    } else {
+        value.trim().to_string()
+    }
+}
+
+fn charge_state_label(value: ChargeState) -> &'static str {
+    match value {
+        ChargeState::Unknown => "UNKNOWN",
+        ChargeState::Discharging => "DISCHARGING",
+        ChargeState::Charging => "CHARGING",
+        ChargeState::Full => "FULL",
+    }
 }
 
 fn probe_storage(config_read: &StorageRead) -> StorageProbe {
