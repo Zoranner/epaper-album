@@ -14,7 +14,7 @@ RUN test -f src/App.vue \
     && test -f src/components/overlay/Dialog.vue \
     && test -f src/components/overlay/DialogActions.vue \
     && find src -maxdepth 3 -type f | sort
-RUN bun run build
+RUN bun run vite build
 
 # Stage 2: prepare Rust dependency recipe.
 FROM rust:1-slim AS chef
