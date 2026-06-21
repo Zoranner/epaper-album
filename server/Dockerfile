@@ -33,6 +33,7 @@ FROM chef AS backend-builder
 RUN apt-get update && apt-get install -y \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
+COPY crates/protocol/ /app/crates/protocol/
 COPY --from=planner /app/server/recipe.json /app/server/recipe.json
 WORKDIR /app/server
 RUN SKIP_FRONTEND_BUILD=1 cargo chef cook --release --recipe-path recipe.json
