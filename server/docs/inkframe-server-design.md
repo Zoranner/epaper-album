@@ -12,17 +12,16 @@
 
 | 变量 | 默认值 | 用途 |
 | --- | --- | --- |
-| `INKFRAME_PRODUCTION` | `false` | 生产模式开关，容器运行时设为 `true` |
+| `PRODUCTION` | `false` | 生产模式开关，容器运行时设为 `true` |
 | `LISTEN_HOST` | 开发为 `127.0.0.1`，生产为 `0.0.0.0` | HTTP 服务监听地址 |
 | `LISTEN_PORT` | `3000` | HTTP 服务监听端口 |
-| `DATABASE_URL` | `sqlite:data/inkframe.db?mode=rwc` | SQLite 数据库连接地址 |
 | `SECRET_KEY` | 开发为 `local-secret-key`，生产必填 | 设备和用户权限请求接口时使用的密钥 |
 | `ADMIN_USERNAME` | 开发为 `admin`，生产必填 | 管理员账号 |
 | `ADMIN_PASSWORD` | 开发为 `admin`，生产必填 | 管理员密码 |
 
-`SECRET_KEY` 用于设备同步计划和下载显示图片。管理员账号密码用于管理台登录和管理接口权限。服务端启动时创建 `data/`、`data/images/original/`、`data/images/display/` 和 `data/sprites/` 目录，初始化 SQLite 表结构，并挂载 API 路由和管理台静态文件。
+`SECRET_KEY` 用于设备同步计划和下载显示图片。管理员账号密码用于管理台登录和管理接口权限。服务端启动时创建 `data/`、`data/images/original/`、`data/images/display/` 和 `data/sprites/` 目录，默认使用 `data/inkframe.db` 作为 SQLite 数据库，初始化表结构，并挂载 API 路由和管理台静态文件。
 
-`server/.env.example` 提供本地和容器部署的环境变量示例。实际部署时复制为 `server/.env` 并调整密钥和管理员密码；生产模式拒绝缺失值、开发默认值和 `change-me` 占位值。`server/.env` 不纳入版本管理。
+`server/.env.example` 提供本地和容器部署的环境变量示例。实际部署时复制为 `server/.env` 并调整 `SECRET_KEY`、`ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。生产模式拒绝缺失值、开发默认值和 `change-me` 占位值。`server/.env` 不纳入版本管理。
 
 sprite 生成接口读取 `server/assets/fonts.toml` 和 `server/assets/fonts/` 下的字体资源，并用字体 rasterize 方式生成小尺寸黑白 BMP。`fonts.toml` 配置字体 fallback 顺序、字号和 padding；仓库只提供 `server/assets/fonts.example.toml`，部署或本地运行前复制为 `fonts.toml` 并把字体文件放入固定目录。真实配置和字体文件不纳入版本管理。
 
@@ -573,7 +572,7 @@ Authorization: Bearer <admin-token>
 
 ## 数据库设计
 
-当前数据库使用 SQLite，由 `server/src/db.rs` 在启动时自动创建表结构。数据库默认路径为 `server/data/inkframe.db`。
+当前数据库使用 SQLite，由 `server/src/db.rs` 在启动时自动创建表结构。服务端工作目录下的默认数据库路径为 `data/inkframe.db`。
 
 ### `plans`
 
@@ -690,7 +689,7 @@ Docker 镜像采用多阶段构建：
 - Rust release 阶段设置 `SKIP_FRONTEND_BUILD=1` 编译后端二进制。
 - runtime 阶段只拷贝 `inkframe-server` 二进制和 `web/dist`，运行目录为 `/app`。
 
-Docker 构建命令从 `server/` 发起，构建上下文使用仓库根目录，Dockerfile 只复制 `server/` 与 `crates/protocol/`。容器运行时使用 `/app/data` 作为持久数据目录，保存 SQLite 数据库、原图、显示 BMP 和 sprite 缓存。`server/docker/docker-compose.yml` 提供基础部署配置，服务名和镜像名均为 `inkframe-server`，部署时通过 `server/.env` 设置 `SECRET_KEY`、`ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。
+Docker 构建命令从 `server/` 发起，构建上下文使用仓库根目录，Dockerfile 只复制 `server/` 与 `crates/protocol/`。容器运行时使用 `/app/data` 作为持久数据目录，保存默认 SQLite 数据库 `inkframe.db`、原图、显示 BMP 和 sprite 缓存。镜像运行时默认使用 root 用户，不要求宿主机数据目录额外做非 root UID/GID 权限适配。`server/docker/docker-compose.yml` 提供基础部署配置，服务名和容器名为 `inkframe`，默认镜像为 `ghcr.io/zoranner/inkframe-server:latest`，默认把宿主机 `3521` 映射到容器 `3000`，并把 `server/data` 挂载到 `/app/data`。部署时通过 `server/.env` 设置 `SECRET_KEY`、`ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。
 
 ## 建议验证
 

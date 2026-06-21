@@ -876,6 +876,7 @@ dependencies = [
  "anyhow",
  "axum",
  "chrono",
+ "dotenvy",
  "fontdue",
  "hex",
  "http-body-util",

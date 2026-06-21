@@ -1,11 +1,14 @@
 services:
-  inkframe-server:
-    image: inkframe-server:latest
-    container_name: inkframe-server
+  inkframe:
+    image: ghcr.io/zoranner/inkframe-server:latest
+    container_name: inkframe
     restart: always
+    env_file: ../.env
     ports:
-      - 3000:3000
-    env_file:
-      - ../.env
+      - 3521:3000
     volumes:
-      - ./data:/app/data
+      - ../data:/app/data
+networks:
+  default:
+    external: true
+    name: inkframe

@@ -44,17 +44,12 @@ RUN SKIP_FRONTEND_BUILD=1 cargo build --release
 
 # Stage 4: runtime image.
 FROM debian:bookworm-slim AS runtime
-RUN useradd --system --no-create-home --uid 1000 epaper
 WORKDIR /app
 COPY --from=backend-builder /app/server/target/release/inkframe-server .
 COPY --from=web-builder /app/web/dist ./web/dist
 COPY server/assets/ ./assets/
-RUN mkdir -p /app/data/images/original /app/data/images/display /app/data/sprites && chown -R epaper:epaper /app/data
+RUN mkdir -p /app/data/images/original /app/data/images/display /app/data/sprites
 VOLUME ["/app/data"]
 EXPOSE 3000
-ENV INKFRAME_PRODUCTION=true
-ENV LISTEN_HOST=0.0.0.0
-ENV LISTEN_PORT=3000
-ENV DATABASE_URL=sqlite:data/inkframe.db?mode=rwc
-USER epaper
+ENV PRODUCTION=true
 CMD ["./inkframe-server"]

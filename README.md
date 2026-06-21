@@ -109,7 +109,7 @@ cd server
 ./docker-build.sh 0.1.0
 ```
 
-`server/docker/docker-compose.yml` 提供基础部署配置，默认暴露 `3000` 端口，并通过环境变量配置设备密钥和管理员账号密码。正式部署时应调整：
+`server/docker/docker-compose.yml` 提供基础部署配置，默认暴露宿主机 `3521` 端口，并通过环境变量配置设备密钥和管理员账号密码。正式部署时应调整：
 
 ```bash
 cd server
@@ -118,13 +118,9 @@ cp .env.example .env
 
 然后编辑 `server/.env` 中的 `SECRET_KEY`、`ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。服务端生产模式会拒绝缺失值、开发默认值和 `change-me` 占位值。`server/.env` 只用于本地或部署环境，不纳入版本管理。
 
-sprite 生成接口需要配置 `TEXT_FONT_PATH`，指向服务端可读取的 TTF、OTF 或 TTC 字体文件。容器部署时先把字体文件挂载到容器内，再在 `server/.env` 中写入对应路径：
+数据库默认使用容器内 `/app/data/inkframe.db`，Compose 部署时对应服务端目录下的 `data/inkframe.db`。容器运行时默认使用 root 用户，不要求宿主机数据目录额外做非 root UID/GID 权限适配。
 
-```env
-TEXT_FONT_PATH=/app/fonts/NotoSansCJK-Regular.ttc
-```
-
-该配置只影响 sprite 生成接口；未配置字体文件时，照片计划、图片上传、图片处理和设备同步等服务端功能仍可运行。
+sprite 生成接口读取服务端字体配置和字体文件。该配置只影响 sprite 生成接口；未配置字体文件时，照片计划、图片上传、图片处理和设备同步等服务端功能仍可运行。
 
 ## 标签发布
 
@@ -146,4 +142,4 @@ Release 页面中的合并烧录镜像文件名形如：
 inkframe-device-v0.1.0-esp32s3-merged.bin
 ```
 
-服务端镜像运行时仍需按部署环境提供 `SECRET_KEY`、`ADMIN_USERNAME`、`ADMIN_PASSWORD`、`DATABASE_URL` 和字体路径等配置。
+服务端镜像运行时仍需按部署环境提供 `SECRET_KEY`、`ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。
