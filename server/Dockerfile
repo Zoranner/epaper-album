@@ -3,9 +3,17 @@ FROM oven/bun:1 AS web-builder
 WORKDIR /app/web
 COPY server/web/package.json server/web/bun.lock ./
 RUN bun install --frozen-lockfile
-COPY server/web/index.html server/web/tsconfig.json server/web/vite.config.ts ./
+COPY server/web/index.html server/web/tsconfig.json server/web/tsconfig.node.json server/web/vite.config.ts ./
 COPY server/web/src/ ./src/
-RUN test -f src/App.vue && test -f src/components/input/Input.vue && test -f src/components/overlay/Dialog.vue
+RUN test -f src/App.vue \
+    && test -f src/components/input/Input.vue \
+    && test -f src/components/input/NumberInput.vue \
+    && test -f src/components/input/Select.vue \
+    && test -f src/components/layout/ModuleToolbar.vue \
+    && test -f src/components/navigation/ActionMenu.vue \
+    && test -f src/components/overlay/Dialog.vue \
+    && test -f src/components/overlay/DialogActions.vue \
+    && find src -maxdepth 3 -type f | sort
 RUN bun run build
 
 # Stage 2: prepare Rust dependency recipe.
