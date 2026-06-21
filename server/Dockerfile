@@ -3,7 +3,8 @@ FROM oven/bun:1 AS web-builder
 WORKDIR /app/web
 COPY server/web/package.json server/web/bun.lock ./
 RUN bun install --frozen-lockfile
-COPY server/web/ .
+COPY server/web/index.html server/web/tsconfig.json server/web/vite.config.ts ./
+COPY server/web/src/ ./src/
 RUN bun run build
 
 # Stage 2: prepare Rust dependency recipe.
