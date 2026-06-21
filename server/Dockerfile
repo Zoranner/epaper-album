@@ -5,6 +5,7 @@ COPY server/web/package.json server/web/bun.lock ./
 RUN bun install --frozen-lockfile
 COPY server/web/index.html server/web/tsconfig.json server/web/vite.config.ts ./
 COPY server/web/src/ ./src/
+RUN test -f src/App.vue && test -f src/components/input/Input.vue && test -f src/components/overlay/Dialog.vue
 RUN bun run build
 
 # Stage 2: prepare Rust dependency recipe.
