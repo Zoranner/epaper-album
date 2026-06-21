@@ -35,7 +35,7 @@ jobs:
 
       - name: Install espflash
         working-directory: device
-        run: cargo +esp install espflash --locked
+        run: cargo install espflash --locked
 
       - name: Build release firmware
         working-directory: device
@@ -45,13 +45,12 @@ jobs:
         working-directory: device
         run: |
           mkdir -p ../dist/firmware
-          cargo +esp espflash save-image \
-            --release \
-            --target "${FIRMWARE_TARGET}" \
+          espflash save-image \
             --chip "${FIRMWARE_CHIP}" \
             --merge \
             --flash-size 16mb \
             --flash-mode qio \
+            "target/${FIRMWARE_TARGET}/release/${FIRMWARE_NAME}" \
             "../dist/firmware/${FIRMWARE_NAME}-${GITHUB_REF_NAME}-esp32s3-merged.bin"
           cp "target/${FIRMWARE_TARGET}/release/bootloader.bin" "../dist/firmware/${FIRMWARE_NAME}-${GITHUB_REF_NAME}-bootloader.bin"
           cp "target/${FIRMWARE_TARGET}/release/partition-table.bin" "../dist/firmware/${FIRMWARE_NAME}-${GITHUB_REF_NAME}-partition-table.bin"
