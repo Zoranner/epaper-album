@@ -56,9 +56,7 @@ pub fn self_test_key_clicked() -> bool {
         return false;
     }
 
-    let was_pressed = self_test_key_pressed();
-    esp_idf_hal::delay::FreeRtos::delay_ms(120);
-    was_pressed && !self_test_key_pressed()
+    self_test_key_pressed()
 }
 
 pub fn self_test_key_pressed_for(milliseconds: u32) -> bool {
