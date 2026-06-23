@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use fontdue::{
     layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle},
@@ -106,26 +106,38 @@ pub(crate) async fn ensure_sprite_cached(
     let font_assets = load_sprite_font_assets(&font_config.parsed).await?;
     let mut font_bytes = Vec::with_capacity(font_assets.len());
     for asset in font_assets {
-        font_bytes.push(
-            tokio::fs::read(asset.path)
-                .await
-                .map_err(|error| AppError::Internal(error.into()))?,
-        );
+        let bytes = tokio::fs::read(&asset.path).await.map_err(|error| {
+            sprite_font_service_error(format!(
+                "读取字体文件 {} 失败：{error}",
+                asset.path.display()
+            ))
+        })?;
+        font_bytes.push(bytes);
     }
     let style = font_config.parsed.style;
-    let bmp = tokio::task::spawn_blocking(move || render_sprite_bmp(&text, font_bytes, style))
-        .await
-        .map_err(|error| AppError::Internal(error.into()))??;
+    let render_result =
+        tokio::task::spawn_blocking(move || render_sprite_bmp(&text, font_bytes, style))
+            .await
+            .map_err(|error| AppError::Internal(error.into()))?;
+    let bmp = render_result.map_err(sprite_render_error)?;
 
     write_sprite_cache(&cache_path, &bmp).await?;
     Ok(())
 }
 
 pub(crate) async fn load_sprite_font_config() -> Result<LoadedSpriteFontConfig, AppError> {
-    let config = tokio::fs::read_to_string(SPRITE_FONT_CONFIG_PATH)
-        .await
-        .map_err(|error| AppError::Internal(error.into()))?;
-    let parsed = toml::from_str(&config).map_err(|error| AppError::Internal(error.into()))?;
+    load_sprite_font_config_from_path(Path::new(SPRITE_FONT_CONFIG_PATH)).await
+}
+
+async fn load_sprite_font_config_from_path(
+    path: &Path,
+) -> Result<LoadedSpriteFontConfig, AppError> {
+    let config = tokio::fs::read_to_string(path).await.map_err(|error| {
+        sprite_font_service_error(format!("读取字体配置 {} 失败：{error}", path.display()))
+    })?;
+    let parsed = toml::from_str(&config).map_err(|error| {
+        sprite_font_service_error(format!("解析字体配置 {} 失败：{error}", path.display()))
+    })?;
     Ok(LoadedSpriteFontConfig {
         raw: config,
         parsed,
@@ -138,14 +150,14 @@ pub(crate) fn validate_sprite_font_config(config: &SpriteFontConfig) -> Result<(
         .iter()
         .all(|file_name| file_name.trim().is_empty())
     {
-        return Err(AppError::Internal(anyhow::anyhow!(
-            "sprite font config has no font files"
-        )));
+        return Err(sprite_font_service_error(
+            "字体配置 assets/fonts.toml 未声明可用字体文件",
+        ));
     }
     if config.style.font_size <= 0.0 {
-        return Err(AppError::Internal(anyhow::anyhow!(
-            "sprite font size must be positive"
-        )));
+        return Err(sprite_font_service_error(
+            "字体配置 assets/fonts.toml 的 font_size 必须大于 0",
+        ));
     }
     Ok(())
 }
@@ -168,15 +180,15 @@ async fn load_sprite_font_assets(
             continue;
         }
         let path = PathBuf::from(SPRITE_FONT_DIR).join(file_name);
-        tokio::fs::metadata(&path)
-            .await
-            .map_err(|error| AppError::Internal(error.into()))?;
+        tokio::fs::metadata(&path).await.map_err(|error| {
+            sprite_font_service_error(format!("字体文件 {} 不可用：{error}", path.display()))
+        })?;
         assets.push(SpriteFontAsset { path });
     }
     if assets.is_empty() {
-        return Err(AppError::Internal(anyhow::anyhow!(
-            "sprite font config has no font files"
-        )));
+        return Err(sprite_font_service_error(
+            "字体配置 assets/fonts.toml 未声明可用字体文件",
+        ));
     }
     Ok(assets)
 }
@@ -190,7 +202,7 @@ fn render_sprite_bmp(
         .into_iter()
         .map(|bytes| {
             Font::from_bytes(bytes, FontSettings::default())
-                .map_err(|error| anyhow::anyhow!("{error}"))
+                .map_err(|error| sprite_font_anyhow(format!("字体文件解析失败：{error}")))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
@@ -238,6 +250,23 @@ fn render_sprite_bmp(
     }
 
     encode_rgb_bmp(&DynamicImage::ImageRgba8(image).to_rgb8())
+}
+
+fn sprite_font_service_error(message: impl Into<String>) -> AppError {
+    AppError::ServiceUnavailable(format!("精灵图字体资源不可用：{}", message.into()))
+}
+
+fn sprite_font_anyhow(message: String) -> anyhow::Error {
+    anyhow::anyhow!("精灵图字体资源不可用：{message}")
+}
+
+fn sprite_render_error(error: anyhow::Error) -> AppError {
+    let message = error.to_string();
+    if message.starts_with("精灵图字体资源不可用") {
+        AppError::ServiceUnavailable(message)
+    } else {
+        AppError::Internal(error)
+    }
 }
 
 fn draw_glyph_stroke(
@@ -352,6 +381,8 @@ async fn write_sprite_cache(path: &std::path::Path, bytes: &[u8]) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{http::StatusCode, response::IntoResponse};
+    use http_body_util::BodyExt;
 
     #[test]
     fn sprite_style_accepts_panel_color_names_only() {
@@ -391,5 +422,30 @@ border_width = 1
         );
 
         assert!(invalid.is_err());
+    }
+
+    #[tokio::test]
+    async fn missing_sprite_font_config_returns_service_unavailable() {
+        let missing_path = std::env::temp_dir()
+            .join(format!("inkframe-missing-fonts-{}", std::process::id()))
+            .join("fonts.toml");
+
+        let error = load_sprite_font_config_from_path(&missing_path)
+            .await
+            .expect_err("missing font config should fail");
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect error body")
+            .to_bytes();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).expect("json error response");
+        assert_eq!(value["code"], 503);
+        let message = value["message"].as_str().expect("error message");
+        assert!(message.contains("字体配置"));
+        assert!(message.contains("fonts.toml"));
     }
 }

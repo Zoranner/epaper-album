@@ -689,7 +689,7 @@ Docker 镜像采用多阶段构建：
 - Rust release 阶段设置 `SKIP_FRONTEND_BUILD=1` 编译后端二进制。
 - runtime 阶段只拷贝 `inkframe-server` 二进制和 `web/dist`，运行目录为 `/app`。
 
-Docker 构建命令从 `server/` 发起，构建上下文使用仓库根目录，Dockerfile 只复制 `server/` 与 `crates/protocol/`。容器运行时使用 `/app/data` 作为持久数据目录，保存默认 SQLite 数据库 `inkframe.db`、原图、显示 BMP 和 sprite 缓存。镜像运行时默认使用 root 用户，不要求宿主机数据目录额外做非 root UID/GID 权限适配。`server/docker/docker-compose.yml` 提供基础部署配置，服务名和容器名为 `inkframe`，默认镜像为 `ghcr.io/zoranner/inkframe-server:latest`，默认把宿主机 `3521` 映射到容器 `3000`，并把 `server/data` 挂载到 `/app/data`。部署时通过 `server/.env` 设置 `SECRET_KEY`、`ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。
+Docker 构建命令从 `server/` 发起，构建上下文使用仓库根目录，Dockerfile 只复制 `server/` 与 `crates/protocol/`。容器运行时使用 `/app/data` 作为持久数据目录，保存默认 SQLite 数据库 `inkframe.db`、原图、显示 BMP 和 sprite 缓存。镜像运行时默认使用 root 用户，不要求宿主机数据目录额外做非 root UID/GID 权限适配。`server/docker/docker-compose.yml` 提供基础部署配置，服务名和容器名为 `inkframe`，默认镜像为 `ghcr.io/zoranner/inkframe-server:latest`，默认把宿主机 `3521` 映射到容器 `3521`，把 `server/data` 挂载到 `/app/data`，并把 `server/assets` 只读挂载到 `/app/assets`。部署时通过 `server/.env` 设置 `SECRET_KEY`、`ADMIN_USERNAME` 和 `ADMIN_PASSWORD`；sprite 生成依赖 `server/assets/fonts.toml` 和 `server/assets/fonts/` 下的字体文件。
 
 ## 建议验证
 

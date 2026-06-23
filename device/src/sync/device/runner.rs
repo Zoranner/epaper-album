@@ -76,9 +76,7 @@ where
                     "caption",
                     &plan.caption,
                 )
-                .map_err(|error| {
-                    DeviceSyncError::resource(format!("sprite caption {}", plan.caption), error)
-                })?;
+                .map_err(|error| DeviceSyncError::resource("sprite caption", error))?;
                 sprites.caption = Some(result.sha256);
             }
         }

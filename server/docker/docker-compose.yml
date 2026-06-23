@@ -5,9 +5,10 @@ services:
     restart: always
     env_file: ../.env
     ports:
-      - 3521:3000
+      - 3521:3521
     volumes:
       - ../data:/app/data
+      - ../assets:/app/assets:ro
 networks:
   default:
     external: true

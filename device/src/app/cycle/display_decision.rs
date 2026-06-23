@@ -129,16 +129,82 @@ pub fn decide_display(
 }
 
 fn sync_error_report_decision(date: LocalDate, sync_error: &SyncErrorReport) -> DisplayDecision {
+    let page = sync_error_page_fields(sync_error);
     DisplayDecision {
         action: DisplayAction::Refresh(DisplayTarget::Page {
             date,
-            title: "SYNC ERROR".to_string(),
-            message: sync_error.message.to_ascii_uppercase(),
-            hint: "CHECK WIFI BASE URL AND SERVER".to_string(),
-            detail: sync_error.detail.clone(),
+            title: page.title,
+            message: page.message,
+            hint: page.hint,
+            detail: page.detail,
         }),
         cause: DisplayCause::Sync,
     }
+}
+
+struct SyncErrorPageFields {
+    title: String,
+    message: String,
+    hint: String,
+    detail: String,
+}
+
+fn sync_error_page_fields(sync_error: &SyncErrorReport) -> SyncErrorPageFields {
+    let stage = sync_error
+        .stage
+        .as_deref()
+        .unwrap_or(sync_error.category.as_str());
+    let detail = sync_error.detail.as_str();
+
+    let title = if sync_error.category == "resource" {
+        "RESOURCE ERROR"
+    } else {
+        "SYNC ERROR"
+    };
+    let message = format!("STAGE: {}", stage.to_ascii_uppercase());
+    let hint = http_status_hint(detail).unwrap_or_else(|| {
+        if stage == "sprite caption" || stage == "sprite date" {
+            "CHECK SERVER SPRITE/FONTS".to_string()
+        } else {
+            "CHECK WIFI BASE URL AND SERVER".to_string()
+        }
+    });
+    let detail = if stage == "sprite caption" || stage == "sprite date" {
+        "CHECK SERVER SPRITE/FONTS".to_string()
+    } else {
+        sync_error.detail.clone()
+    };
+
+    SyncErrorPageFields {
+        title: ascii_safe(title),
+        message: ascii_safe(&message),
+        hint: ascii_safe(&hint),
+        detail: ascii_safe(&detail),
+    }
+}
+
+fn http_status_hint(detail: &str) -> Option<String> {
+    let status = detail.strip_prefix("cloud: http-status-")?;
+    if status.len() == 3 && status.bytes().all(|byte| byte.is_ascii_digit()) {
+        Some(format!("HTTP {status} FROM SERVER"))
+    } else {
+        None
+    }
+}
+
+fn ascii_safe(value: &str) -> String {
+    value
+        .chars()
+        .map(
+            |character| {
+                if character.is_ascii() {
+                    character
+                } else {
+                    '?'
+                }
+            },
+        )
+        .collect()
 }
 
 fn photo_target_from_plan(date: LocalDate, plan: &Plan) -> DisplayTarget {
@@ -277,5 +343,40 @@ mod tests {
         let decision = decide_display(&context, |image| image == "a", None);
 
         assert_eq!(decision.action, DisplayAction::Keep);
+    }
+
+    #[test]
+    fn sync_resource_error_page_uses_ascii_diagnostic_fields() {
+        let caption = "\u{53ef}\u{53ef}\u{7231}\u{7231}\u{5c0f}\u{4e1b}\u{4e1b}";
+        let context = context(Some(vec![plan("2026-06-08", caption, "a")]));
+        let report = SyncErrorReport::new(
+            "resource.cloud.http-status",
+            "resource",
+            Some("sprite caption".to_string()),
+            "sprite caption sync failed",
+            "cloud: http-status-500",
+        );
+
+        let decision = decide_display(&context, |image| image == "a", Some(&report));
+
+        match decision.action {
+            DisplayAction::Refresh(DisplayTarget::Page {
+                title,
+                message,
+                hint,
+                detail,
+                ..
+            }) => {
+                assert_eq!(title, "RESOURCE ERROR");
+                assert_eq!(message, "STAGE: SPRITE CAPTION");
+                assert_eq!(hint, "HTTP 500 FROM SERVER");
+                assert_eq!(detail, "CHECK SERVER SPRITE/FONTS");
+                assert!(title.is_ascii());
+                assert!(message.is_ascii());
+                assert!(hint.is_ascii());
+                assert!(detail.is_ascii());
+            }
+            other => panic!("unexpected decision: {other:?}"),
+        }
     }
 }

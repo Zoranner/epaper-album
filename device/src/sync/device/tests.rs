@@ -1,5 +1,5 @@
 use super::*;
-use crate::cloud::{plans_url, CloudSyncError, HttpClient};
+use crate::cloud::{plans_url, sprite_url, CloudSyncError, HttpClient};
 use crate::device_runtime::DeviceCloudSync;
 use crate::model::Plan;
 use crate::resource_sync::ResourceSyncError;
@@ -9,12 +9,18 @@ use std::collections::BTreeMap;
 #[derive(Default)]
 struct MockHttpClient {
     responses: BTreeMap<String, Vec<u8>>,
+    errors: BTreeMap<String, CloudSyncError>,
     requests: Vec<String>,
 }
 
 impl MockHttpClient {
     fn with_response(mut self, url: &str, body: &[u8]) -> Self {
         self.responses.insert(url.to_string(), body.to_vec());
+        self
+    }
+
+    fn with_error(mut self, url: &str, error: CloudSyncError) -> Self {
+        self.errors.insert(url.to_string(), error);
         self
     }
 }
@@ -27,6 +33,9 @@ impl HttpClient for MockHttpClient {
         _max_bytes: usize,
     ) -> Result<Vec<u8>, CloudSyncError> {
         self.requests.push(url.to_string());
+        if let Some(error) = self.errors.get(url) {
+            return Err(error.clone());
+        }
         self.responses
             .get(url)
             .cloned()
@@ -378,6 +387,48 @@ fn sync_error_includes_failed_stage() {
 
     assert!(error.contains("sprite date 2026-06-08"), "{error}");
     assert!(error.contains("cloud: http-status-404"), "{error}");
+}
+
+#[test]
+fn caption_sprite_http_status_report_omits_non_ascii_caption() {
+    let caption = "\u{53ef}\u{53ef}\u{7231}\u{7231}\u{5c0f}\u{4e1b}\u{4e1b}";
+    let body = format!(
+        r#"{{
+        "code": 0,
+        "message": "ok",
+        "data": [
+            {{
+                "date": "2026-06-08",
+                "caption": "{caption}",
+                "image": "a"
+            }}
+        ]
+    }}"#
+    )
+    .into_bytes();
+    let client = MockHttpClient::default()
+        .with_response(&plans_url("https://example.com", 3).unwrap(), &body)
+        .with_error(
+            &sprite_url("https://example.com", "caption", caption).unwrap(),
+            CloudSyncError::HttpStatus(500),
+        );
+    let store = MockStore {
+        cached_images: vec!["a".to_string()],
+        ..MockStore::default()
+    };
+    let mut sync = CloudResourceSync::new(client, store);
+
+    let error = sync.sync_resources(request()).unwrap_err();
+    let report = error.report();
+
+    assert_eq!(report.code, "resource.cloud.http-status");
+    assert_eq!(report.category, "resource");
+    assert_eq!(report.stage.as_deref(), Some("sprite caption"));
+    assert_eq!(report.message, "sprite caption sync failed");
+    assert_eq!(report.detail, "cloud: http-status-500");
+    assert!(report.stage.unwrap().is_ascii());
+    assert!(report.message.is_ascii());
+    assert!(report.detail.is_ascii());
 }
 
 #[test]
