@@ -7,7 +7,7 @@ pub fn print_hardware_self_test_report(report: &HardwareSelfTestReport) {
     if let PmicSelfTestProbe::Ready(summary) = &report.pmic {
         log::info!(
             target: "inkframe_device",
-            "power: chip=0x{:02x} axp2101={} vbus={} battery-present={} battery={:?} percent={:?} low={} effective-low={} dc=0x{:02x} ldo=0x{:02x}",
+            "power: chip=0x{:02x} axp2101={} vbus={} battery-present={} battery={:?} percent={:?} low={} effective-low={} dc=0x{:02x} ldo=0x{:02x} irq-enable2=0x{:02x}->0x{:02x} irq-status-before=0x{:02x}/0x{:02x}/0x{:02x}",
             summary.chip_id,
             summary.is_axp2101,
             summary.vbus_good,
@@ -17,7 +17,12 @@ pub fn print_hardware_self_test_report(report: &HardwareSelfTestReport) {
             summary.low_battery,
             summary.effective_low_battery,
             summary.dc_onoff,
-            summary.ldo_onoff0
+            summary.ldo_onoff0,
+            summary.irq_enable2_before,
+            summary.irq_enable2_after,
+            summary.irq_status1_before_clear,
+            summary.irq_status2_before_clear,
+            summary.irq_status3_before_clear
         );
     }
     log::info!(target: "inkframe_device", "storage: {}", report.base.storage.label());

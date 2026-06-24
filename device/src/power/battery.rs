@@ -13,6 +13,7 @@ pub struct BatteryStatus {
     pub millivolts: u16,
     pub percent: Option<u8>,
     pub charge_state: ChargeState,
+    pub external_powered: bool,
     pub low_battery: bool,
 }
 
@@ -23,10 +24,27 @@ impl BatteryStatus {
         charge_state: ChargeState,
         low_battery: bool,
     ) -> Self {
+        Self::with_external_power(
+            millivolts,
+            percent,
+            charge_state,
+            matches!(charge_state, ChargeState::Charging | ChargeState::Full),
+            low_battery,
+        )
+    }
+
+    pub const fn with_external_power(
+        millivolts: u16,
+        percent: Option<u8>,
+        charge_state: ChargeState,
+        external_powered: bool,
+        low_battery: bool,
+    ) -> Self {
         Self {
             millivolts,
             percent,
             charge_state,
+            external_powered,
             low_battery,
         }
     }
@@ -36,12 +54,13 @@ impl BatteryStatus {
             millivolts: 0,
             percent: None,
             charge_state: ChargeState::Unknown,
+            external_powered: false,
             low_battery: false,
         }
     }
 
     pub const fn externally_powered(&self) -> bool {
-        matches!(self.charge_state, ChargeState::Charging | ChargeState::Full)
+        self.external_powered
     }
 
     pub const fn effective_low_battery(&self) -> bool {
@@ -70,9 +89,10 @@ impl From<&BatteryStatus> for PowerProfile {
             return Self::LowBattery;
         }
 
-        match status.charge_state {
-            ChargeState::Charging | ChargeState::Full => Self::External,
-            ChargeState::Unknown | ChargeState::Discharging => Self::Battery,
+        if status.externally_powered() {
+            Self::External
+        } else {
+            Self::Battery
         }
     }
 }
@@ -162,6 +182,15 @@ mod tests {
             )),
             PowerProfile::External
         );
+    }
+
+    #[test]
+    fn full_battery_without_external_input_stays_in_battery_profile() {
+        let battery =
+            BatteryStatus::with_external_power(0, Some(100), ChargeState::Full, false, false);
+
+        assert!(!battery.externally_powered());
+        assert_eq!(PowerProfile::from(&battery), PowerProfile::Battery);
     }
 
     #[test]

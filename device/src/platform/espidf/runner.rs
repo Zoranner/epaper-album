@@ -8,7 +8,8 @@ use crate::app::RunTrigger;
 use crate::device_output::{MountedSdCardDisplayResourceReader, PackedFrameDisplay};
 use crate::device_runtime::{decide_sync, run_device_cycle, DeviceCycleInput, SyncAction};
 use crate::epd::espidf::EspEpdBus;
-use crate::pmic::espidf::{init_axp2101_for_photo_painter, status_summary};
+use crate::pmic::espidf::{PmicController, PmicSleepProbe};
+use crate::pmic::status_summary;
 use crate::power::{BatteryStatus, PowerProfile};
 use crate::state::{PersistentDeviceState, PersistentSyncState};
 use crate::storage::{with_mounted_sdcard_parts, PLAN_PATH, STATE_PATH, SYNC_PATH};
@@ -21,34 +22,42 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
                 outcome: EspDeviceRunOutcome::PeripheralInitError,
                 cycle: None,
                 next_run_plan: None,
+                sleep_probe: None,
             };
         }
     };
 
     let pins = peripherals.pins;
-    let pmic_probe = match init_axp2101_for_photo_painter(
-        peripherals.i2c0,
-        pins.gpio47,
-        pins.gpio48,
-    ) {
-        Ok(probe) => {
-            let pmic_status = status_summary(probe.status1, probe.status2);
-            log::info!(
-                target: "inkframe_device",
-                "pmic: chip=0x{:02x} status1=0x{:02x} status2=0x{:02x} vbus={} battery-present={} current-dir={} charge-step={} battery={:?} percent={:?} low={}",
-                probe.chip_id,
-                probe.status1,
-                probe.status2,
-                pmic_status.vbus_good,
-                pmic_status.battery_connected,
-                pmic_status.battery_current_direction,
-                pmic_status.charge_step,
-                probe.battery.charge_state,
-                probe.battery.percent,
-                probe.battery.low_battery
-            );
-            Some(probe)
-        }
+    let mut pmic = match PmicController::new(peripherals.i2c0, pins.gpio47, pins.gpio48) {
+        Ok(mut pmic) => match pmic.init_for_photo_painter() {
+            Ok(probe) => {
+                let pmic_status = status_summary(probe.status1, probe.status2);
+                log::info!(
+                    target: "inkframe_device",
+                    "pmic: chip=0x{:02x} status1=0x{:02x} status2=0x{:02x} vbus={} battery-present={} current-dir={} charge-step={} battery={:?} percent={:?} low={} irq-enable2=0x{:02x}->0x{:02x} irq-status-before=0x{:02x}/0x{:02x}/0x{:02x}",
+                    probe.chip_id,
+                    probe.status1,
+                    probe.status2,
+                    pmic_status.vbus_good,
+                    pmic_status.battery_connected,
+                    pmic_status.battery_current_direction,
+                    pmic_status.charge_step,
+                    probe.battery.charge_state,
+                    probe.battery.percent,
+                    probe.battery.low_battery,
+                    probe.irq.enable2_before,
+                    probe.irq.enable2_after,
+                    probe.irq.status1_before_clear,
+                    probe.irq.status2_before_clear,
+                    probe.irq.status3_before_clear
+                );
+                Some((pmic, probe))
+            }
+            Err(error) => {
+                log::warn!(target: "inkframe_device", "pmic: init-error: {error:?}");
+                None
+            }
+        },
         Err(error) => {
             log::warn!(target: "inkframe_device", "pmic: init-error: {error:?}");
             None
@@ -72,6 +81,7 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
                 outcome: EspDeviceRunOutcome::EpdInitError,
                 cycle: None,
                 next_run_plan: None,
+                sleep_probe: None,
             };
         }
     };
@@ -102,8 +112,9 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
                 loaded_persistent_state.unwrap_or_else(PersistentDeviceState::default);
             let sync_state =
                 read_optional_json_mounted(SYNC_PATH).unwrap_or_else(PersistentSyncState::default);
-            let battery = pmic_probe
-                .map(|probe| probe.battery)
+            let battery = pmic
+                .as_ref()
+                .map(|(_, probe)| probe.battery)
                 .unwrap_or_else(BatteryStatus::unknown);
             let mut sync = EspDeviceCloudSync::new(peripherals.modem);
             let pre_sync_decision = decide_sync(config.as_ref(), &battery, &sync_state, date);
@@ -151,6 +162,7 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
                         .with_data("profile", format!("{power_profile:?}"))
                         .with_data("interval", power_profile.run_interval_seconds())
                         .with_data("battery", format!("{:?}", battery.charge_state))
+                        .with_data("external", battery.externally_powered())
                         .with_data("low", battery.low_battery)
                         .with_data(
                             "percent",
@@ -184,20 +196,24 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
             }
             let next_run_plan = build_next_run_plan(&cycle, now_epoch_seconds);
             diagnostics.record_cycle(now_epoch_seconds, &cycle, &next_run_plan);
-            Ok(Ok((cycle, next_run_plan)))
+            let sleep_probe =
+                prepare_battery_sleep(&cycle, pmic.as_mut(), now_epoch_seconds, &mut diagnostics);
+            Ok(Ok((cycle, next_run_plan, sleep_probe)))
         },
     );
 
     match result {
-        Ok(Ok(Ok((cycle, next_run_plan)))) => EspDeviceRunReport {
+        Ok(Ok(Ok((cycle, next_run_plan, sleep_probe)))) => EspDeviceRunReport {
             outcome: EspDeviceRunOutcome::Completed(cycle.outcome.clone()),
             cycle: Some(cycle),
             next_run_plan: Some(next_run_plan),
+            sleep_probe,
         },
         Ok(Ok(Err(outcome))) => EspDeviceRunReport {
             outcome,
             cycle: None,
             next_run_plan: None,
+            sleep_probe: None,
         },
         Ok(Err(_)) | Err(_) => {
             refresh_storage_error_page(&mut display, now_epoch_seconds);
@@ -205,7 +221,68 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
                 outcome: EspDeviceRunOutcome::StorageMountError,
                 cycle: None,
                 next_run_plan: None,
+                sleep_probe: None,
             }
         }
     }
+}
+
+fn prepare_battery_sleep(
+    cycle: &crate::device_runtime::DeviceCycleResult,
+    pmic: Option<&mut (PmicController, crate::pmic::espidf::PmicProbe)>,
+    now_epoch_seconds: u64,
+    diagnostics: &mut MountedDiagnosticLog,
+) -> Option<PmicSleepProbe> {
+    if cycle.battery.externally_powered() {
+        return None;
+    }
+
+    let Some((controller, _probe)) = pmic else {
+        log::warn!(target: "inkframe_device", "pmic sleep: skipped because pmic init failed");
+        return None;
+    };
+
+    let sleep_probe = match controller.prepare_for_deep_sleep() {
+        Ok(probe) => probe,
+        Err(error) => {
+            log::warn!(target: "inkframe_device", "pmic sleep: prepare failed: {error:?}");
+            return None;
+        }
+    };
+    log::info!(
+        target: "inkframe_device",
+        "pmic sleep: irq-enable2=0x{:02x}->0x{:02x} irq-status-before=0x{:02x}/0x{:02x}/0x{:02x} dc=0x{:02x} ldo=0x{:02x}",
+        sleep_probe.irq.enable2_before,
+        sleep_probe.irq.enable2_after,
+        sleep_probe.irq.status1_before_clear,
+        sleep_probe.irq.status2_before_clear,
+        sleep_probe.irq.status3_before_clear,
+        sleep_probe.dc_onoff,
+        sleep_probe.ldo_onoff0
+    );
+    diagnostics.info(
+        now_epoch_seconds,
+        "pmic_sleep",
+        "pmic prepared for sleep",
+        |event| {
+            event
+                .with_data("irq_enable2_before", sleep_probe.irq.enable2_before)
+                .with_data("irq_enable2_after", sleep_probe.irq.enable2_after)
+                .with_data(
+                    "irq_status1_before_clear",
+                    sleep_probe.irq.status1_before_clear,
+                )
+                .with_data(
+                    "irq_status2_before_clear",
+                    sleep_probe.irq.status2_before_clear,
+                )
+                .with_data(
+                    "irq_status3_before_clear",
+                    sleep_probe.irq.status3_before_clear,
+                )
+                .with_data("dc_onoff", sleep_probe.dc_onoff)
+                .with_data("ldo_onoff0", sleep_probe.ldo_onoff0)
+        },
+    );
+    Some(sleep_probe)
 }

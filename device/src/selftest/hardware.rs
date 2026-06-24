@@ -1,8 +1,7 @@
 use crate::config::{Config, CONFIG_PATH};
 use crate::epd::espidf::EspEpdBus;
-use crate::pmic::espidf::{
-    chip_id_is_axp2101, init_axp2101_for_photo_painter, status_summary, PmicProbe,
-};
+use crate::pmic::espidf::{chip_id_is_axp2101, init_axp2101_for_photo_painter, PmicProbe};
+use crate::pmic::status_summary;
 use crate::power::espidf::WakeProbe;
 use crate::power::ChargeState;
 use crate::selftest::display::refresh_epd_from_self_test_report;
@@ -70,6 +69,11 @@ pub struct PmicSelfTestSummary {
     pub percent: Option<u8>,
     pub low_battery: bool,
     pub effective_low_battery: bool,
+    pub irq_enable2_before: u8,
+    pub irq_enable2_after: u8,
+    pub irq_status1_before_clear: u8,
+    pub irq_status2_before_clear: u8,
+    pub irq_status3_before_clear: u8,
     pub dc_onoff: u8,
     pub ldo_onoff0: u8,
 }
@@ -106,7 +110,7 @@ pub fn run_espidf_hardware_self_test(wake: WakeProbe) -> HardwareSelfTestReport 
             let summary = pmic_summary(probe);
             log::info!(
                 target: "inkframe_device",
-                "pmic: chip=0x{:02x} axp2101={} vbus={} battery-present={} dc=0x{:02x} ldo=0x{:02x} battery={:?} percent={:?} low={} effective-low={}",
+                "pmic: chip=0x{:02x} axp2101={} vbus={} battery-present={} dc=0x{:02x} ldo=0x{:02x} battery={:?} percent={:?} low={} effective-low={} irq-enable2=0x{:02x}->0x{:02x} irq-status-before=0x{:02x}/0x{:02x}/0x{:02x}",
                 summary.chip_id,
                 summary.is_axp2101,
                 summary.vbus_good,
@@ -116,7 +120,12 @@ pub fn run_espidf_hardware_self_test(wake: WakeProbe) -> HardwareSelfTestReport 
                 summary.charge_state,
                 summary.percent,
                 summary.low_battery,
-                summary.effective_low_battery
+                summary.effective_low_battery,
+                summary.irq_enable2_before,
+                summary.irq_enable2_after,
+                summary.irq_status1_before_clear,
+                summary.irq_status2_before_clear,
+                summary.irq_status3_before_clear
             );
             PmicSelfTestProbe::Ready(summary)
         }
@@ -221,6 +230,11 @@ fn pmic_summary(probe: PmicProbe) -> PmicSelfTestSummary {
         percent: probe.battery.percent,
         low_battery: probe.battery.low_battery,
         effective_low_battery: probe.battery.effective_low_battery(),
+        irq_enable2_before: probe.irq.enable2_before,
+        irq_enable2_after: probe.irq.enable2_after,
+        irq_status1_before_clear: probe.irq.status1_before_clear,
+        irq_status2_before_clear: probe.irq.status2_before_clear,
+        irq_status3_before_clear: probe.irq.status3_before_clear,
         dc_onoff: probe.dc_onoff,
         ldo_onoff0: probe.ldo_onoff0,
     }
