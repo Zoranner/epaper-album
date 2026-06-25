@@ -1,0 +1,60 @@
+import { Button, ComboBox, LineEdit, TextEdit } from "std-widgets.slint";
+
+export component App inherits Window {
+    callback refresh_ports();
+    callback choose_image();
+    callback flash();
+
+    in property <[string]> ports;
+    in-out property <string> selected_port;
+    in-out property <string> image_path;
+    in property <string> log;
+    in property <bool> busy;
+
+    width: 900px;
+    height: 620px;
+    title: "Inkframe Flasher";
+
+    VerticalLayout {
+        spacing: 12px;
+        padding: 16px;
+
+        HorizontalLayout {
+            spacing: 8px;
+            ComboBox {
+                model: ports;
+                current-value <=> selected_port;
+                enabled: !busy;
+                width: 300px;
+            }
+            Button {
+                text: "刷新串口";
+                enabled: !busy;
+                clicked => { refresh_ports(); }
+            }
+            Button {
+                text: "选择固件";
+                enabled: !busy;
+                clicked => { choose_image(); }
+            }
+            Button {
+                text: "开始烧录";
+                enabled: !busy;
+                clicked => { flash(); }
+            }
+        }
+
+        LineEdit {
+            text <=> image_path;
+            read-only: true;
+            placeholder-text: "请选择 *-esp32s3-merged.bin";
+        }
+
+        TextEdit {
+            text: log;
+            read-only: true;
+            wrap: word-wrap;
+            vertical-stretch: 1;
+        }
+    }
+}
