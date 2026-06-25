@@ -151,8 +151,18 @@ fn run_device() {
                     target: "inkframe_device",
                     "next run: battery power detected; entering deep sleep"
                 );
+                let Some(wake_policy) = report.sleep_wake_policy else {
+                    log::warn!(target: "inkframe_device", "next run: deep sleep skipped because wake policy is missing");
+                    return;
+                };
+                log::info!(
+                    target: "inkframe_device",
+                    "next run: deep sleep wake policy: {}",
+                    wake_policy.label()
+                );
                 if let Err(error) = inkframe_device::power::espidf::enter_deep_sleep_until(
                     next_run_plan.next_run_epoch_seconds,
+                    wake_policy,
                 ) {
                     log::warn!(target: "inkframe_device", "next run: deep sleep error: {error:?}");
                 }

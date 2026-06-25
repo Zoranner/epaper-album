@@ -10,7 +10,7 @@ use crate::device_runtime::{decide_sync, run_device_cycle, DeviceCycleInput, Syn
 use crate::epd::espidf::EspEpdBus;
 use crate::pmic::espidf::{PmicController, PmicSleepProbe};
 use crate::pmic::status_summary;
-use crate::power::{BatteryStatus, PowerProfile};
+use crate::power::{battery_deep_sleep_wake_policy, BatteryStatus, PowerProfile};
 use crate::state::{PersistentDeviceState, PersistentSyncState};
 use crate::storage::{with_mounted_sdcard_parts, PLAN_PATH, STATE_PATH, SYNC_PATH};
 
@@ -22,6 +22,7 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
                 outcome: EspDeviceRunOutcome::PeripheralInitError,
                 cycle: None,
                 next_run_plan: None,
+                sleep_wake_policy: None,
                 sleep_probe: None,
             };
         }
@@ -34,7 +35,7 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
                 let pmic_status = status_summary(probe.status1, probe.status2);
                 log::info!(
                     target: "inkframe_device",
-                    "pmic: chip=0x{:02x} status1=0x{:02x} status2=0x{:02x} vbus={} battery-present={} current-dir={} charge-step={} battery={:?} percent={:?} low={} irq-enable2=0x{:02x}->0x{:02x} irq-status-before=0x{:02x}/0x{:02x}/0x{:02x}",
+                    "pmic: chip=0x{:02x} status1=0x{:02x} status2=0x{:02x} vbus={} battery-present={} current-dir={} charge-step={} battery={:?} percent={:?} low={} irq-enable=0x{:02x}/0x{:02x}/0x{:02x}->0x{:02x}/0x{:02x}/0x{:02x} irq-status-before=0x{:02x}/0x{:02x}/0x{:02x} sleep-wakeup=0x{:02x}->0x{:02x}",
                     probe.chip_id,
                     probe.status1,
                     probe.status2,
@@ -45,11 +46,17 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
                     probe.battery.charge_state,
                     probe.battery.percent,
                     probe.battery.low_battery,
+                    probe.irq.enable1_before,
                     probe.irq.enable2_before,
+                    probe.irq.enable3_before,
+                    probe.irq.enable1_after,
                     probe.irq.enable2_after,
+                    probe.irq.enable3_after,
                     probe.irq.status1_before_clear,
                     probe.irq.status2_before_clear,
-                    probe.irq.status3_before_clear
+                    probe.irq.status3_before_clear,
+                    probe.irq.sleep_wakeup_ctrl_before,
+                    probe.irq.sleep_wakeup_ctrl_after
                 );
                 Some((pmic, probe))
             }
@@ -81,6 +88,7 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
                 outcome: EspDeviceRunOutcome::EpdInitError,
                 cycle: None,
                 next_run_plan: None,
+                sleep_wake_policy: None,
                 sleep_probe: None,
             };
         }
@@ -196,23 +204,27 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
             }
             let next_run_plan = build_next_run_plan(&cycle, now_epoch_seconds);
             diagnostics.record_cycle(now_epoch_seconds, &cycle, &next_run_plan);
+            let sleep_wake_policy =
+                battery_deep_sleep_wake_policy(cycle.battery.externally_powered());
             let sleep_probe =
                 prepare_battery_sleep(&cycle, pmic.as_mut(), now_epoch_seconds, &mut diagnostics);
-            Ok(Ok((cycle, next_run_plan, sleep_probe)))
+            Ok(Ok((cycle, next_run_plan, sleep_wake_policy, sleep_probe)))
         },
     );
 
     match result {
-        Ok(Ok(Ok((cycle, next_run_plan, sleep_probe)))) => EspDeviceRunReport {
+        Ok(Ok(Ok((cycle, next_run_plan, sleep_wake_policy, sleep_probe)))) => EspDeviceRunReport {
             outcome: EspDeviceRunOutcome::Completed(cycle.outcome.clone()),
             cycle: Some(cycle),
             next_run_plan: Some(next_run_plan),
+            sleep_wake_policy,
             sleep_probe,
         },
         Ok(Ok(Err(outcome))) => EspDeviceRunReport {
             outcome,
             cycle: None,
             next_run_plan: None,
+            sleep_wake_policy: None,
             sleep_probe: None,
         },
         Ok(Err(_)) | Err(_) => {
@@ -221,6 +233,7 @@ pub fn run_espidf_device_cycle(trigger: RunTrigger) -> EspDeviceRunReport {
                 outcome: EspDeviceRunOutcome::StorageMountError,
                 cycle: None,
                 next_run_plan: None,
+                sleep_wake_policy: None,
                 sleep_probe: None,
             }
         }
@@ -233,16 +246,17 @@ fn prepare_battery_sleep(
     now_epoch_seconds: u64,
     diagnostics: &mut MountedDiagnosticLog,
 ) -> Option<PmicSleepProbe> {
-    if cycle.battery.externally_powered() {
+    let Some(wake_policy) = battery_deep_sleep_wake_policy(cycle.battery.externally_powered())
+    else {
         return None;
-    }
+    };
 
     let Some((controller, _probe)) = pmic else {
         log::warn!(target: "inkframe_device", "pmic sleep: skipped because pmic init failed");
         return None;
     };
 
-    let sleep_probe = match controller.prepare_for_deep_sleep() {
+    let sleep_probe = match controller.prepare_for_deep_sleep(wake_policy) {
         Ok(probe) => probe,
         Err(error) => {
             log::warn!(target: "inkframe_device", "pmic sleep: prepare failed: {error:?}");
@@ -251,12 +265,19 @@ fn prepare_battery_sleep(
     };
     log::info!(
         target: "inkframe_device",
-        "pmic sleep: irq-enable2=0x{:02x}->0x{:02x} irq-status-before=0x{:02x}/0x{:02x}/0x{:02x} dc=0x{:02x} ldo=0x{:02x}",
+        "pmic sleep: policy={} irq-enable=0x{:02x}/0x{:02x}/0x{:02x}->0x{:02x}/0x{:02x}/0x{:02x} irq-status-before=0x{:02x}/0x{:02x}/0x{:02x} sleep-wakeup=0x{:02x}->0x{:02x} dc=0x{:02x} ldo=0x{:02x}",
+        sleep_probe.wake_policy.label(),
+        sleep_probe.irq.enable1_before,
         sleep_probe.irq.enable2_before,
+        sleep_probe.irq.enable3_before,
+        sleep_probe.irq.enable1_after,
         sleep_probe.irq.enable2_after,
+        sleep_probe.irq.enable3_after,
         sleep_probe.irq.status1_before_clear,
         sleep_probe.irq.status2_before_clear,
         sleep_probe.irq.status3_before_clear,
+        sleep_probe.irq.sleep_wakeup_ctrl_before,
+        sleep_probe.irq.sleep_wakeup_ctrl_after,
         sleep_probe.dc_onoff,
         sleep_probe.ldo_onoff0
     );
@@ -266,8 +287,13 @@ fn prepare_battery_sleep(
         "pmic prepared for sleep",
         |event| {
             event
+                .with_data("wake_policy", sleep_probe.wake_policy.label())
+                .with_data("irq_enable1_before", sleep_probe.irq.enable1_before)
                 .with_data("irq_enable2_before", sleep_probe.irq.enable2_before)
+                .with_data("irq_enable3_before", sleep_probe.irq.enable3_before)
+                .with_data("irq_enable1_after", sleep_probe.irq.enable1_after)
                 .with_data("irq_enable2_after", sleep_probe.irq.enable2_after)
+                .with_data("irq_enable3_after", sleep_probe.irq.enable3_after)
                 .with_data(
                     "irq_status1_before_clear",
                     sleep_probe.irq.status1_before_clear,
@@ -279,6 +305,14 @@ fn prepare_battery_sleep(
                 .with_data(
                     "irq_status3_before_clear",
                     sleep_probe.irq.status3_before_clear,
+                )
+                .with_data(
+                    "sleep_wakeup_ctrl_before",
+                    sleep_probe.irq.sleep_wakeup_ctrl_before,
+                )
+                .with_data(
+                    "sleep_wakeup_ctrl_after",
+                    sleep_probe.irq.sleep_wakeup_ctrl_after,
                 )
                 .with_data("dc_onoff", sleep_probe.dc_onoff)
                 .with_data("ldo_onoff0", sleep_probe.ldo_onoff0)

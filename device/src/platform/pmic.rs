@@ -2,20 +2,23 @@
 const AXP2101_WAKEUP_IRQ_PIN_TO_LOW: u8 = 1 << 4;
 #[cfg(any(target_os = "espidf", test))]
 const AXP2101_VBUS_INSERT_IRQ_ENABLE: u8 = 1 << 7;
-#[cfg(any(target_os = "espidf", test))]
-const AXP2101_VBUS_REMOVE_IRQ_ENABLE: u8 = 1 << 6;
-#[cfg(any(target_os = "espidf", test))]
-const AXP2101_VBUS_CHANGE_IRQ_ENABLE: u8 =
-    AXP2101_VBUS_INSERT_IRQ_ENABLE | AXP2101_VBUS_REMOVE_IRQ_ENABLE;
 
 #[cfg(any(target_os = "espidf", test))]
-const fn vbus_change_irq_bits(_: u8) -> u8 {
-    AXP2101_VBUS_CHANGE_IRQ_ENABLE
+const fn no_irq_bits(_: u8) -> u8 {
+    0
 }
 
 #[cfg(any(target_os = "espidf", test))]
-const fn enable_irq_pin_wakeup_bits(value: u8) -> u8 {
-    value | AXP2101_WAKEUP_IRQ_PIN_TO_LOW
+const fn irq_enable2_bits_for_policy(policy: crate::power::DeepSleepWakePolicy) -> u8 {
+    match policy {
+        crate::power::DeepSleepWakePolicy::TimerOnly => 0,
+        crate::power::DeepSleepWakePolicy::TimerAndPmicIrq => AXP2101_VBUS_INSERT_IRQ_ENABLE,
+    }
+}
+
+#[cfg(any(target_os = "espidf", test))]
+const fn disable_irq_pin_wakeup_bits(value: u8) -> u8 {
+    value & !AXP2101_WAKEUP_IRQ_PIN_TO_LOW
 }
 
 #[cfg(any(target_os = "espidf", test))]
@@ -74,8 +77,12 @@ fn charge_state_from_summary(summary: PmicStatusSummary) -> crate::power::Charge
 
 #[cfg(target_os = "espidf")]
 pub mod espidf {
-    use super::{enable_irq_pin_wakeup_bits, vbus_change_irq_bits};
+    use super::{
+        disable_irq_pin_wakeup_bits, irq_enable2_bits_for_policy, no_irq_bits,
+        AXP2101_WAKEUP_IRQ_PIN_TO_LOW,
+    };
     use crate::power::BatteryStatus;
+    use crate::power::DeepSleepWakePolicy;
     use esp_idf_hal::i2c::{I2cConfig, I2cDriver};
     use esp_idf_hal::units::FromValueType;
     use esp_idf_sys::TickType_t;
@@ -86,7 +93,9 @@ pub mod espidf {
     const REG_STATUS2: u8 = 0x01;
     const REG_CHIP_ID: u8 = 0x03;
     const REG_SLEEP_WAKEUP_CTRL: u8 = 0x26;
+    const REG_IRQ_ENABLE1: u8 = 0x40;
     const REG_IRQ_ENABLE2: u8 = 0x41;
+    const REG_IRQ_ENABLE3: u8 = 0x42;
     const REG_IRQ_STATUS1: u8 = 0x48;
     const REG_IRQ_STATUS2: u8 = 0x49;
     const REG_IRQ_STATUS3: u8 = 0x4A;
@@ -115,11 +124,17 @@ pub mod espidf {
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct PmicIrqSnapshot {
+        pub enable1_before: u8,
         pub enable2_before: u8,
+        pub enable3_before: u8,
         pub status1_before_clear: u8,
         pub status2_before_clear: u8,
         pub status3_before_clear: u8,
+        pub enable1_after: u8,
         pub enable2_after: u8,
+        pub enable3_after: u8,
+        pub sleep_wakeup_ctrl_before: u8,
+        pub sleep_wakeup_ctrl_after: u8,
     }
 
     pub struct PmicController {
@@ -154,7 +169,7 @@ pub mod espidf {
             write_register(&mut self.i2c, REG_LDO_ONOFF0, ldo_onoff0)?;
 
             let (battery, status1, status2) = read_battery_status(&mut self.i2c)?;
-            let irq = configure_deep_sleep_wakeup_irq(&mut self.i2c)?;
+            let irq = configure_pmic_irq_state(&mut self.i2c, DeepSleepWakePolicy::TimerOnly)?;
 
             Ok(PmicProbe {
                 chip_id,
@@ -167,9 +182,13 @@ pub mod espidf {
             })
         }
 
-        pub fn prepare_for_deep_sleep(&mut self) -> Result<PmicSleepProbe, esp_idf_sys::EspError> {
-            let irq = configure_deep_sleep_wakeup_irq(&mut self.i2c)?;
+        pub fn prepare_for_deep_sleep(
+            &mut self,
+            wake_policy: DeepSleepWakePolicy,
+        ) -> Result<PmicSleepProbe, esp_idf_sys::EspError> {
+            let irq = configure_pmic_irq_state(&mut self.i2c, wake_policy)?;
             Ok(PmicSleepProbe {
+                wake_policy,
                 irq,
                 dc_onoff: read_register(&mut self.i2c, REG_DC_ONOFF)?,
                 ldo_onoff0: read_register(&mut self.i2c, REG_LDO_ONOFF0)?,
@@ -196,35 +215,58 @@ pub mod espidf {
         scl: esp_idf_hal::gpio::Gpio48<'static>,
     ) -> Result<PmicSleepProbe, esp_idf_sys::EspError> {
         let mut controller = PmicController::new(i2c0, sda, scl)?;
-        controller.prepare_for_deep_sleep()
+        controller.prepare_for_deep_sleep(DeepSleepWakePolicy::TimerOnly)
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct PmicSleepProbe {
+        pub wake_policy: DeepSleepWakePolicy,
         pub irq: PmicIrqSnapshot,
         pub dc_onoff: u8,
         pub ldo_onoff0: u8,
     }
 
-    fn configure_deep_sleep_wakeup_irq(
+    fn configure_pmic_irq_state(
         i2c: &mut I2cDriver<'_>,
+        wake_policy: DeepSleepWakePolicy,
     ) -> Result<PmicIrqSnapshot, esp_idf_sys::EspError> {
+        let enable1_before = read_register(i2c, REG_IRQ_ENABLE1)?;
         let enable2_before = read_register(i2c, REG_IRQ_ENABLE2)?;
+        let enable3_before = read_register(i2c, REG_IRQ_ENABLE3)?;
         let status1_before_clear = read_register(i2c, REG_IRQ_STATUS1)?;
         let status2_before_clear = read_register(i2c, REG_IRQ_STATUS2)?;
         let status3_before_clear = read_register(i2c, REG_IRQ_STATUS3)?;
+        let sleep_wakeup_ctrl_before = read_register(i2c, REG_SLEEP_WAKEUP_CTRL)?;
 
         clear_irq_status(i2c)?;
 
-        update_register(i2c, REG_IRQ_ENABLE2, vbus_change_irq_bits)?;
-        update_register(i2c, REG_SLEEP_WAKEUP_CTRL, enable_irq_pin_wakeup_bits)?;
+        write_register(i2c, REG_IRQ_ENABLE1, no_irq_bits(enable1_before))?;
+        write_register(
+            i2c,
+            REG_IRQ_ENABLE2,
+            irq_enable2_bits_for_policy(wake_policy),
+        )?;
+        write_register(i2c, REG_IRQ_ENABLE3, no_irq_bits(enable3_before))?;
+        if wake_policy.uses_pmic_irq() {
+            update_register(i2c, REG_SLEEP_WAKEUP_CTRL, |value| {
+                value | AXP2101_WAKEUP_IRQ_PIN_TO_LOW
+            })?;
+        } else {
+            update_register(i2c, REG_SLEEP_WAKEUP_CTRL, disable_irq_pin_wakeup_bits)?;
+        }
 
         Ok(PmicIrqSnapshot {
+            enable1_before,
             enable2_before,
+            enable3_before,
             status1_before_clear,
             status2_before_clear,
             status3_before_clear,
+            enable1_after: read_register(i2c, REG_IRQ_ENABLE1)?,
             enable2_after: read_register(i2c, REG_IRQ_ENABLE2)?,
+            enable3_after: read_register(i2c, REG_IRQ_ENABLE3)?,
+            sleep_wakeup_ctrl_before,
+            sleep_wakeup_ctrl_after: read_register(i2c, REG_SLEEP_WAKEUP_CTRL)?,
         })
     }
 
@@ -294,18 +336,25 @@ mod tests {
     use crate::power::ChargeState;
 
     #[test]
-    fn enables_only_vbus_insert_and_remove_irqs() {
-        assert_eq!(vbus_change_irq_bits(0x01), 0xC0);
+    fn battery_sleep_masks_pmic_irqs() {
+        assert_eq!(no_irq_bits(0xFF), 0x00);
+        assert_eq!(
+            irq_enable2_bits_for_policy(crate::power::DeepSleepWakePolicy::TimerOnly),
+            0x00
+        );
     }
 
     #[test]
-    fn vbus_irq_configuration_does_not_keep_unrelated_irq_bits() {
-        assert_eq!(vbus_change_irq_bits(0x3F), AXP2101_VBUS_CHANGE_IRQ_ENABLE);
+    fn disables_irq_pin_low_wakeup_without_clearing_existing_wakeup_bits() {
+        assert_eq!(disable_irq_pin_wakeup_bits(0x14), 0x04);
     }
 
     #[test]
-    fn enables_irq_pin_low_wakeup_without_clearing_existing_wakeup_bits() {
-        assert_eq!(enable_irq_pin_wakeup_bits(0x04), 0x14);
+    fn pmic_irq_policy_can_only_wake_on_vbus_insert_when_enabled() {
+        assert_eq!(
+            irq_enable2_bits_for_policy(crate::power::DeepSleepWakePolicy::TimerAndPmicIrq),
+            AXP2101_VBUS_INSERT_IRQ_ENABLE
+        );
     }
 
     #[test]

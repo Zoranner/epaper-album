@@ -1,6 +1,7 @@
 use core::time::Duration;
 
 pub use super::WakeProbe;
+use crate::power::DeepSleepWakePolicy;
 use esp_idf_hal::gpio::PinId;
 use esp_idf_hal::reset::WakeupReason;
 use esp_idf_hal::sleep::{DeepSleep, RtcWakeLevel, RtcWakeupPins};
@@ -103,7 +104,10 @@ pub fn restart_now() -> ! {
     unsafe { esp_restart() }
 }
 
-pub fn enter_deep_sleep_until(next_run_epoch_seconds: u64) -> Result<(), esp_idf_sys::EspError> {
+pub fn enter_deep_sleep_until(
+    next_run_epoch_seconds: u64,
+    wake_policy: DeepSleepWakePolicy,
+) -> Result<(), esp_idf_sys::EspError> {
     let seconds = seconds_until(next_run_epoch_seconds);
     if seconds == 0 {
         // SAFETY: Restart is used instead of returning when the requested wake time is due.
@@ -111,7 +115,9 @@ pub fn enter_deep_sleep_until(next_run_epoch_seconds: u64) -> Result<(), esp_idf
     }
 
     let sleep = DeepSleep::new()?.wakeup_on_timer(Duration::from_secs(seconds))?;
-    configure_pmic_irq_deep_sleep_wakeup()?;
+    if wake_policy.uses_pmic_irq() {
+        configure_pmic_irq_deep_sleep_wakeup()?;
+    }
     sleep.enter()
 }
 

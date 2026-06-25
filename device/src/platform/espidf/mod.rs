@@ -1,6 +1,6 @@
 use crate::device_runtime::{DeviceCycleOutcome, DeviceCycleResult};
 use crate::pmic::espidf::PmicSleepProbe;
-use crate::power::NextRunPlan;
+use crate::power::{DeepSleepWakePolicy, NextRunPlan};
 
 mod diagnostics;
 mod error_page;
@@ -16,6 +16,7 @@ pub struct EspDeviceRunReport {
     pub outcome: EspDeviceRunOutcome,
     pub cycle: Option<DeviceCycleResult>,
     pub next_run_plan: Option<NextRunPlan>,
+    pub sleep_wake_policy: Option<DeepSleepWakePolicy>,
     pub sleep_probe: Option<PmicSleepProbe>,
 }
 

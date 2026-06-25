@@ -69,11 +69,17 @@ pub struct PmicSelfTestSummary {
     pub percent: Option<u8>,
     pub low_battery: bool,
     pub effective_low_battery: bool,
+    pub irq_enable1_before: u8,
     pub irq_enable2_before: u8,
+    pub irq_enable3_before: u8,
+    pub irq_enable1_after: u8,
     pub irq_enable2_after: u8,
+    pub irq_enable3_after: u8,
     pub irq_status1_before_clear: u8,
     pub irq_status2_before_clear: u8,
     pub irq_status3_before_clear: u8,
+    pub sleep_wakeup_ctrl_before: u8,
+    pub sleep_wakeup_ctrl_after: u8,
     pub dc_onoff: u8,
     pub ldo_onoff0: u8,
 }
@@ -110,7 +116,7 @@ pub fn run_espidf_hardware_self_test(wake: WakeProbe) -> HardwareSelfTestReport 
             let summary = pmic_summary(probe);
             log::info!(
                 target: "inkframe_device",
-                "pmic: chip=0x{:02x} axp2101={} vbus={} battery-present={} dc=0x{:02x} ldo=0x{:02x} battery={:?} percent={:?} low={} effective-low={} irq-enable2=0x{:02x}->0x{:02x} irq-status-before=0x{:02x}/0x{:02x}/0x{:02x}",
+                "pmic: chip=0x{:02x} axp2101={} vbus={} battery-present={} dc=0x{:02x} ldo=0x{:02x} battery={:?} percent={:?} low={} effective-low={} irq-enable=0x{:02x}/0x{:02x}/0x{:02x}->0x{:02x}/0x{:02x}/0x{:02x} irq-status-before=0x{:02x}/0x{:02x}/0x{:02x} sleep-wakeup=0x{:02x}->0x{:02x}",
                 summary.chip_id,
                 summary.is_axp2101,
                 summary.vbus_good,
@@ -121,11 +127,17 @@ pub fn run_espidf_hardware_self_test(wake: WakeProbe) -> HardwareSelfTestReport 
                 summary.percent,
                 summary.low_battery,
                 summary.effective_low_battery,
+                summary.irq_enable1_before,
                 summary.irq_enable2_before,
+                summary.irq_enable3_before,
+                summary.irq_enable1_after,
                 summary.irq_enable2_after,
+                summary.irq_enable3_after,
                 summary.irq_status1_before_clear,
                 summary.irq_status2_before_clear,
-                summary.irq_status3_before_clear
+                summary.irq_status3_before_clear,
+                summary.sleep_wakeup_ctrl_before,
+                summary.sleep_wakeup_ctrl_after
             );
             PmicSelfTestProbe::Ready(summary)
         }
@@ -230,11 +242,17 @@ fn pmic_summary(probe: PmicProbe) -> PmicSelfTestSummary {
         percent: probe.battery.percent,
         low_battery: probe.battery.low_battery,
         effective_low_battery: probe.battery.effective_low_battery(),
+        irq_enable1_before: probe.irq.enable1_before,
         irq_enable2_before: probe.irq.enable2_before,
+        irq_enable3_before: probe.irq.enable3_before,
+        irq_enable1_after: probe.irq.enable1_after,
         irq_enable2_after: probe.irq.enable2_after,
+        irq_enable3_after: probe.irq.enable3_after,
         irq_status1_before_clear: probe.irq.status1_before_clear,
         irq_status2_before_clear: probe.irq.status2_before_clear,
         irq_status3_before_clear: probe.irq.status3_before_clear,
+        sleep_wakeup_ctrl_before: probe.irq.sleep_wakeup_ctrl_before,
+        sleep_wakeup_ctrl_after: probe.irq.sleep_wakeup_ctrl_after,
         dc_onoff: probe.dc_onoff,
         ldo_onoff0: probe.ldo_onoff0,
     }

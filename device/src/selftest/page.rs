@@ -236,11 +236,11 @@ fn battery_page_value(pmic: &PmicSelfTestProbe) -> String {
 fn low_battery_page_value(pmic: &PmicSelfTestProbe) -> String {
     match pmic {
         PmicSelfTestProbe::Ready(summary) => format!(
-            "RAW={} EFFECTIVE={} IRQ={:02X}->{:02X}",
+            "RAW={} EFFECTIVE={} WK={:02X}->{:02X}",
             yes_no(summary.low_battery),
             yes_no(summary.effective_low_battery),
-            summary.irq_enable2_before,
-            summary.irq_enable2_after
+            summary.sleep_wakeup_ctrl_before,
+            summary.sleep_wakeup_ctrl_after
         ),
         PmicSelfTestProbe::InitError => "-".to_string(),
     }
